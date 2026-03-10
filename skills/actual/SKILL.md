@@ -277,3 +277,10 @@ Load these only when you need deeper detail on a specific topic:
 | `references/error-catalog.md` | Troubleshooting a specific error with full diagnosis steps |
 | `references/config-reference.md` | Looking up config keys, validation rules, dotpath syntax |
 | `references/output-formats.md` | Output format questions, managed section behavior, merge logic |
+
+## Additional Resources
+
+For anything not covered by this skill or its reference files, fetch the full CLI documentation:
+
+- **Full docs (Markdown)**: https://cli.actual.ai/docs.md — complete command reference, all flags, runners, output formats, config keys, and troubleshooting
+- **LLM summary**: https://cli.actual.ai/llms.txt — concise machine-readable overview

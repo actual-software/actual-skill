@@ -49,6 +49,12 @@ ln -s ~/.local/share/actual-skill/skills/actual ~/.claude/skills/actual
 ln -s ~/.local/share/actual-skill/skills/actual ~/.agents/skills/actual
 ```
 
+## Documentation
+
+- [Getting Started & Full Command Reference](https://cli.actual.ai/docs) — human-readable docs
+- [docs.md](https://cli.actual.ai/docs.md) — full docs in Markdown (machine-readable)
+- [llms.txt](https://cli.actual.ai/llms.txt) — concise LLM-friendly summary
+
 ## Requirements
 
 - The [actual CLI](https://cli.actual.ai) installed
