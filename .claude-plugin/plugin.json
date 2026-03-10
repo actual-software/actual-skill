@@ -1,0 +1,12 @@
+{
+  "name": "actual-cli",
+  "description": "Feature-complete companion for the actual CLI — runs and troubleshoots sync, status, auth, config, runners, and models across all 5 runners and 3 output formats",
+  "version": "1.0.0",
+  "author": {
+    "name": "actual-software"
+  },
+  "homepage": "https://cli.actual.ai",
+  "repository": "https://github.com/actual-software/actual-skill",
+  "license": "Apache-2.0",
+  "keywords": ["actual", "cli", "adr", "claude-md", "agents-md", "cursor-rules"]
+}

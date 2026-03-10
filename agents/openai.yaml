@@ -1,0 +1,7 @@
+interface:
+  display_name: "actual CLI"
+  short_description: "Run and troubleshoot the actual CLI"
+  brand_color: "#2563EB"
+
+policy:
+  allow_implicit_invocation: true

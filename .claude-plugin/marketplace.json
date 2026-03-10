@@ -1,0 +1,17 @@
+{
+  "name": "actual-cli-skills",
+  "owner": {
+    "name": "actual-software",
+    "email": "poile@actual.ai"
+  },
+  "metadata": {
+    "description": "Skills for the actual CLI (ADR-powered CLAUDE.md/AGENTS.md generator)"
+  },
+  "plugins": [
+    {
+      "name": "actual-cli",
+      "description": "Feature-complete companion for the actual CLI",
+      "source": "./"
+    }
+  ]
+}
