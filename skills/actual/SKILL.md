@@ -3,13 +3,15 @@ name: actual
 description: >-
   Feature-complete companion for the actual CLI, an ADR-powered
   CLAUDE.md/AGENTS.md generator. Runs and troubleshoots actual adr-bot,
-  status, auth, config, runners, and models. Covers all 5 runners
-  (claude-cli, anthropic-api, openai-api, codex-cli, cursor-cli),
-  all model patterns, all 3 output formats (claude-md, agents-md,
-  cursor-rules), and all error types. Use when working with the
-  actual CLI, running actual adr-bot, configuring runners or models,
+  status, auth, config, runners, and models, plus the Actual AI platform
+  surface: login, logout, whoami, and advisor (org-scoped architecture
+  Q&A). Covers all 5 runners (claude-cli, anthropic-api, openai-api,
+  codex-cli, cursor-cli), all model patterns, all 3 output formats
+  (claude-md, agents-md, cursor-rules), and all error types. Use when
+  working with the actual CLI, running actual adr-bot, signing in to
+  Actual AI, asking the advisor, configuring runners or models,
   troubleshooting errors, or managing output files.
-argument-hint: "[question or command] e.g. 'run sync', 'set up anthropic-api', 'fix ClaudeNotFound'"
+argument-hint: "[question or command] e.g. 'run sync', 'log in', 'ask the advisor', 'fix ClaudeNotFound'"
 ---
 
 # actual CLI Companion
@@ -47,12 +49,74 @@ After install, verify: `actual --version`
 |---------|---------|-----------|
 | `actual adr-bot` | Analyze repo, fetch ADRs, tailor, write output | `--dry-run [--full]`, `--force`, `--no-tailor`, `--project PATH`, `--model`, `--runner`, `--verbose`, `--reset-rejections`, `--max-budget-usd`, `--no-tui`, `--output-format`, `--show-errors` |
 | `actual status` | Check output file state | `--verbose` |
-| `actual auth` | Check authentication status | (none) |
+| `actual auth` | Check the runner (coding-agent) auth status | (none) |
 | `actual config show` | Display current config | (none) |
 | `actual config set <key> <value>` | Set a config value | (none) |
 | `actual config path` | Print config file path | (none) |
 | `actual runners` | List available runners | (none) |
 | `actual models` | List known models by runner | (none) |
+| `actual login` | Sign in to Actual AI (browser OAuth) | `--org <id>`, `--api-url <url>`, `--no-browser` |
+| `actual logout` | Sign out of Actual AI and clear local credentials | (none) |
+| `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
+| `actual advisor "<query>"` | Ask the Advisor an org-scoped architecture question | `--org <uuid>`, `--repo <uuid>`, `--api-url <url>` |
+
+## Platform Identity & Advisor
+
+These commands talk to the **Actual AI platform** (your account/org) and are **separate from `actual auth`** — `actual auth` only checks the local coding-agent/runner (claude/codex/cursor) that `adr-bot` drives. `login`/`logout`/`whoami` manage your Actual AI platform identity; `advisor` asks org-scoped architecture questions against it. (The runner/model sections below pertain to `adr-bot`, not to these.)
+
+**Endpoint config** — the platform URL is supplied per command; there is no production default baked in yet.
+- `login` reads `--api-url <url>` or the `ACTUAL_AUTH_URL` env var.
+- `advisor` reads `--api-url <url>` or the `ACTUAL_API_URL` env var.
+- OAuth `client_id`/scopes default to `actual-cli` and `openid profile offline_access adr:query adr:review` (override via `ACTUAL_OAUTH_CLIENT_ID` / `ACTUAL_OAUTH_SCOPES`).
+
+### login — interactive; hand off to the human
+
+`actual login` runs a browser OAuth flow (auth-code + PKCE + a `127.0.0.1` loopback). **It needs a human at a browser, so an agent cannot complete it inside a non-interactive shell.** Drive it like this:
+
+1. First check whether the user is already signed in with `actual whoami` (no network; non-zero exit / "Not signed in" when logged out). If signed in, skip login.
+2. If not signed in, **ask the human to run login**, or run it for them and surface the URL:
+   ```bash
+   actual login --no-browser       # prints the authorize URL instead of opening a browser
+   actual login --org <org-id>     # multi-org accounts: pre-select an org (single-org auto-selects)
+   ```
+   With `--no-browser`, give the printed URL to the user to open; the CLI waits on the loopback redirect to finish the sign-in.
+3. A multi-org user who omits `--org` picks the org on the consent page; if the redirect times out, re-run with `--org <id>`.
+
+Do **not** attempt to script the browser/consent step — treat login as a human handoff, then resume automation once `whoami` succeeds.
+
+### whoami — safe, non-interactive
+
+```bash
+actual whoami
+```
+
+Prints the cached identity — Organization, Account, Member, Scopes — with **no network call**. Use it as the pre-flight gate before `advisor`: exit code `2` ("Not signed in to Actual AI") means run `login` first.
+
+### logout
+
+```bash
+actual logout
+```
+
+Best-effort server-side token revoke, then always clears local credentials. Safe and non-interactive.
+
+### advisor — non-interactive, async query
+
+`actual advisor "<question>"` asks an org-scoped architecture question. It is **agent-friendly** (no TTY required): it starts an async job, polls to completion, and prints a plain-text summary followed by the related ADRs. Progress ("advisor thinking…") goes to stderr; the answer goes to stdout.
+
+```bash
+actual advisor "How should I handle database access in a new service?"
+
+# point at a local/staging endpoint — one export steers it; --api-url overrides
+ACTUAL_API_URL=https://your-advisor-endpoint actual advisor "…"
+
+# scope to an org / a connected repo (both UUIDs)
+actual advisor "…" --org <org-uuid> --repo <repo-uuid>
+```
+
+Requires a valid signed-in session — `NotLoggedIn` (exit `2`) means run `login` first. The advisor transparently refreshes an expired token before the call. Output is human-readable text today (no `--json` flag yet).
+
+> For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
 
 ## Runner Decision Tree
 
@@ -204,6 +268,7 @@ Use inline commands instead when checking a single thing (e.g., just `actual aut
 | CodexNotAuthenticated | 2 | No auth for codex | Set `OPENAI_API_KEY` or run `codex login` |
 | CursorNotFound | 2 | `agent` binary not in PATH | Install Cursor CLI |
 | ApiKeyMissing | 2 | Required env var not set | Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` |
+| NotLoggedIn | 2 | Not signed in to the Actual AI platform | Run `actual login` |
 | CodexCliModelRequiresApiKey | 2 | ChatGPT OAuth with explicit model | Set `OPENAI_API_KEY` (OAuth only supports default model) |
 | CreditBalanceTooLow | 3 | Insufficient API credits | Add credits to account |
 | ApiError | 3 | API request failed | Check API URL, network, credentials |
@@ -225,7 +290,7 @@ Use inline commands instead when checking a single thing (e.g., just `actual aut
 | Code | Category | Errors |
 |------|----------|--------|
 | 1 | General / runtime | RunnerFailed, RunnerOutputParse, ConfigError, RunnerTimeout, AnalysisEmpty, TailoringValidationError, InternalError, TerminalIOError |
-| 2 | Auth / setup | ClaudeNotFound, ClaudeNotAuthenticated, CodexNotFound, CodexNotAuthenticated, CursorNotFound, ApiKeyMissing, CodexCliModelRequiresApiKey |
+| 2 | Auth / setup | ClaudeNotFound, ClaudeNotAuthenticated, CodexNotFound, CodexNotAuthenticated, CursorNotFound, ApiKeyMissing, CodexCliModelRequiresApiKey, NotLoggedIn |
 | 3 | Billing / API | CreditBalanceTooLow, ApiError, ApiResponseError |
 | 4 | User cancelled | UserCancelled |
 | 5 | I/O | IoError |
@@ -277,6 +342,7 @@ Load these only when you need deeper detail on a specific topic:
 | `references/error-catalog.md` | Troubleshooting a specific error with full diagnosis steps |
 | `references/config-reference.md` | Looking up config keys, validation rules, dotpath syntax |
 | `references/output-formats.md` | Output format questions, managed section behavior, merge logic |
+| `references/platform-advisor.md` | Login/OAuth flow, scopes, multi-org selection, advisor poll model, org/repo scoping |
 
 ## Additional Resources
 
