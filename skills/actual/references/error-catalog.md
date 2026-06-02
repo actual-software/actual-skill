@@ -25,6 +25,7 @@ Complete catalog of all error types in the actual CLI. Load this when troublesho
  | ApiKeyMissing | 2 | Auth/Setup | Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` |
 | CodexCliModelRequiresApiKey | 2 | Auth/Setup | Set `OPENAI_API_KEY` (ChatGPT OAuth only supports default model) |
 | NoRunnerAvailable | 2 | Auth/Setup | Install a runner or set an API key — none of the candidates for the given model were usable |
+| NotLoggedIn | 2 | Auth/Setup | Run `actual login` (Actual AI platform sign-in; distinct from runner auth) |
 | CreditBalanceTooLow | 3 | Billing/API | Add credits to your account |
 | ApiError | 3 | Billing/API | Check API URL, network, credentials |
 | ApiResponseError | 3 | Billing/API | Check API status page, retry later |
@@ -226,6 +227,27 @@ export OPENAI_API_KEY="sk-..."
 actual adr-bot --runner anthropic-api
 ```
 
+### NotLoggedIn
+
+**Cause**: No valid Actual AI platform session — you have not run `actual login`, the stored credentials were cleared, or a token refresh failed. Raised by `actual whoami` and `actual advisor`. **Distinct from the runner-auth errors above** (`ClaudeNotAuthenticated` / `CodexNotAuthenticated` / `CursorNotAuthenticated`), which concern the coding-agent that `adr-bot` drives — not the platform.
+
+**Display**: "Not signed in to Actual AI"
+
+**Hint**: `actual login`
+
+**Diagnosis**:
+```bash
+actual whoami   # no network; non-zero exit / "Not signed in" when logged out
+```
+
+**Fix**:
+```bash
+actual login                 # browser OAuth; hand off to a human in non-interactive shells
+actual login --org <org-id>  # multi-org accounts: pre-select an org
+```
+
+A token that has merely expired is refreshed transparently by `advisor`; `NotLoggedIn` means there is no usable session at all. See `platform-advisor.md` for the full OAuth flow and the non-interactive playbook.
+
 ## Exit Code 3: Billing and API Errors
 
 ### CreditBalanceTooLow
@@ -271,6 +293,16 @@ curl -I <api_url>   # test connectivity
 **Display**: "Actual AI API is being updated and will be available shortly"
 
 **Fix**: Wait a few minutes and re-run. This is a transient condition during API deployments.
+
+### Advisor & Platform API Errors
+
+The `login` and `advisor` commands surface the generic `ApiError` / `ApiResponseError` (exit 3) above, but with platform-specific causes worth calling out:
+
+- **`HTTP 404` from `advisor` ("failed to parse error response")** — the command is pointed at the wrong base URL (e.g. the built-in prod default instead of your intended local/staging endpoint), so the path does not exist and the response body is not the expected error shape. **Fix**: set `ACTUAL_API_URL` or pass `--api-url` (see `platform-advisor.md` → Endpoint Configuration).
+- **`HTTP 400` on `org_id` from `advisor`** — the advisor requires a UUID `org_id`; if the signed-in org id is not a UUID, the request is rejected. **Fix**: pass `--org <uuid>`.
+- **`HTTP 401`** — surfaced as `NotLoggedIn` (run `actual login`), not as `ApiError`.
+
+These paths are reachable only by the platform commands; `adr-bot`'s `ApiError` / `ApiResponseError` come from the runner/tailoring API instead.
 
 ## Exit Code 1: General Runtime Errors
 
