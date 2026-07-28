@@ -78,6 +78,8 @@ check_env_var "OPENAI_API_KEY"
 check_env_var "CURSOR_API_KEY"
 check_env_var "ACTUAL_CONFIG"
 check_env_var "ACTUAL_CONFIG_DIR"
+check_env_var "ACTUAL_AUTH_URL"
+check_env_var "ACTUAL_API_URL"
 
 # --- Section 5: Configuration ---
 

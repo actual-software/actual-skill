@@ -3,6 +3,13 @@
 A feature-complete AI companion for the [actual CLI](https://cli.actual.ai),
 an ADR-powered CLAUDE.md/AGENTS.md generator.
 
+This repository is the canonical source for the `actual` skill on every surface:
+Claude Code, Codex, skills.sh, and ClawHub. The
+[`actual-skill-openclaw`](https://github.com/actual-software/actual-skill-openclaw)
+variant is superseded by this one. Its ADR Pre-Check section and its namespaced
+OpenClaw frontmatter now live here, so there is no longer a reason to maintain a
+second copy.
+
 ## What it does
 
 - Runs and troubleshoots `actual adr-bot` with pre-flight → dry-run → execute → diagnose → retry
@@ -23,11 +30,29 @@ an ADR-powered CLAUDE.md/AGENTS.md generator.
 /plugin install actual-cli@actual-cli-skills
 ```
 
-### Codex (OpenAI)
+### Codex (OpenAI) — current skill install
 
 ```
 $skill-installer install the actual skill from actual-software/actual-skill
 ```
+
+### ChatGPT and Codex plugin
+
+This repository also contains a universal plugin manifest at
+`.codex-plugin/plugin.json`. During local testing, package the repository root
+as the `actual-cli` plugin and install it from a local marketplace. After public
+review and publication, install **Actual CLI** from the universal Plugins
+Directory shared by ChatGPT and Codex.
+
+### ClawHub
+
+```bash
+clawhub install actual
+```
+
+The registry keeps its own copy of the skill body, so a ClawHub install is only
+as current as the last `clawhub skill publish`. Pushing to this repository does
+not update it.
 
 ### OpenCode / Cursor / Manual
 

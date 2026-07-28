@@ -1,0 +1,43 @@
+{
+  "name": "actual-cli",
+  "version": "1.0.0",
+  "description": "Run and troubleshoot the Actual CLI for ADR-powered coding-agent guidance.",
+  "author": {
+    "name": "Actual AI",
+    "email": "support@actual.ai",
+    "url": "https://actual.ai"
+  },
+  "homepage": "https://actual.ai/cli/docs",
+  "repository": "https://github.com/actual-software/actual-skill",
+  "license": "Apache-2.0",
+  "keywords": [
+    "actual",
+    "architecture",
+    "adr",
+    "codex",
+    "coding-agents"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Actual CLI",
+    "shortDescription": "Add architecture guidance to coding agents.",
+    "longDescription": "Run, configure, and troubleshoot the Actual CLI to generate tailored ADR guidance for Codex, Claude Code, Cursor, and other coding agents.",
+    "developerName": "Actual AI",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://actual.ai/cli",
+    "privacyPolicyURL": "https://actual.ai/privacy",
+    "termsOfServiceURL": "https://actual.ai/terms",
+    "defaultPrompt": [
+      "Set up Actual CLI for this repository.",
+      "Preview the ADR guidance Actual would add here.",
+      "Diagnose why Actual CLI is failing."
+    ],
+    "brandColor": "#2563EB",
+    "composerIcon": "./assets/logo.png",
+    "logo": "./assets/logo.png"
+  }
+}
