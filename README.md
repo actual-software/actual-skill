@@ -23,11 +23,19 @@ an ADR-powered CLAUDE.md/AGENTS.md generator.
 /plugin install actual-cli@actual-cli-skills
 ```
 
-### Codex (OpenAI)
+### Codex (OpenAI) — current skill install
 
 ```
 $skill-installer install the actual skill from actual-software/actual-skill
 ```
+
+### ChatGPT and Codex plugin
+
+This repository also contains a universal plugin manifest at
+`.codex-plugin/plugin.json`. During local testing, package the repository root
+as the `actual-cli` plugin and install it from a local marketplace. After public
+review and publication, install **Actual CLI** from the universal Plugins
+Directory shared by ChatGPT and Codex.
 
 ### OpenCode / Cursor / Manual
 
