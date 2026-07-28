@@ -31,17 +31,18 @@ Two unrelated notions of "auth" exist in this CLI. Do not conflate them:
 
 ## Endpoint Configuration
 
-No production URL is baked in yet, so the platform endpoint is supplied per command.
+Production endpoints are built in; flags and environment variables override
+them for staging, local development, or other deployments.
 
 | Command | Source (in precedence order) |
 |---|---|
-| `login` | `--api-url <url>` → `ACTUAL_AUTH_URL` env var |
+| `login` | `--api-url <url>` → `ACTUAL_AUTH_URL` env var → `https://app.actual.ai` |
 | `advisor` | `--api-url <url>` → `ACTUAL_API_URL` env var → built-in api-service default |
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `ACTUAL_AUTH_URL` | (none) | Auth server base URL for `login` |
-| `ACTUAL_API_URL` | api-service default | Advisor API base URL for `advisor` |
+| `ACTUAL_AUTH_URL` | `https://app.actual.ai` | Auth server base URL for `login` |
+| `ACTUAL_API_URL` | `https://api-service.api.prod.actual.ai` | Advisor API base URL for `advisor` |
 | `ACTUAL_OAUTH_CLIENT_ID` | `actual-cli` | OAuth client id |
 | `ACTUAL_OAUTH_SCOPES` | `openid profile offline_access adr:query adr:review` | Requested scopes |
 
@@ -61,7 +62,7 @@ The CLI is a **public OAuth client** — it holds no client secret and uses PKCE
 | Flag | Purpose |
 |---|---|
 | `--org <id>` | Pre-select an organization for a multi-org account. Single-org accounts auto-select. |
-| `--api-url <url>` | Auth server URL (else `ACTUAL_AUTH_URL`). |
+| `--api-url <url>` | Auth server URL (else `ACTUAL_AUTH_URL`, then production). |
 | `--no-browser` | Print the authorize URL instead of launching a browser; still waits on the loopback. |
 
 ### Multi-org
@@ -110,7 +111,9 @@ Credentials carry an expiry and a refresh token. `advisor` calls a transparent r
 
 ## advisor
 
-`actual advisor "<question>"` asks an org-scoped architecture question. It is **non-interactive / agent-friendly** — no TTY required.
+`actual advisor "<question>"` asks an organization- or repository-scoped
+architecture question. It is **non-interactive / agent-friendly** — no TTY
+required.
 
 ### Flow
 
@@ -125,7 +128,8 @@ Progress (`advisor thinking…`) is written to **stderr**; the answer to **stdou
 | Flag | Purpose |
 |---|---|
 | `--org <uuid>` | Organization to scope to. Defaults to the signed-in org. Must be a UUID. |
-| `--repo <uuid>` | Scope to a connected repository (UUID). Omit for org-level scope. |
+| `--repo <repo>` | Released v0.2.0: connected-repository UUID. Newer builds may also accept names, `owner/name`, `none`, and `auto`. |
+| `--show-scope` | Newer builds only: print the remembered scope and exit without an API query; stored platform credentials are still required. |
 | `--api-url <url>` | Advisor API URL (else `ACTUAL_API_URL`, else the default). |
 
 ### Output shape
@@ -140,7 +144,35 @@ Point the advisor at a different server (local or staging) with `ACTUAL_API_URL`
 ACTUAL_API_URL=https://your-advisor-endpoint actual advisor "How should I handle DB access in a new service?"
 ```
 
-`--org` defaults to the signed-in org and is normally unnecessary — real organizations are UUIDs. Pass an explicit `--org <uuid>` only to override the scope, or if you reach an endpoint that rejects a non-UUID org id.
+`--org` defaults to the signed-in org and is normally unnecessary — real organizations are UUIDs. Pass an explicit `--org <uuid>` only to override the organization. Without `--repo`, it performs a one-shot organization-level query without changing the remembered repository scope.
+
+### Repository scope compatibility
+
+Check `actual advisor --help` before selecting a scope workflow.
+
+The released v0.2.0 CLI accepts a connected-repository UUID. Omitting `--repo`
+runs the question at organization scope:
+
+```bash
+actual advisor --repo 3f2a1c9e-0000-0000-0000-000000000000 "..."
+```
+
+Newer builds may add repository-name resolution, remembered per-working-tree
+scope, and `origin`-remote auto-detection:
+
+```bash
+actual advisor --repo actual-cli "How should this command report errors?"
+actual advisor --repo actual-software/actual-cli "..."
+actual advisor --show-scope
+actual advisor --repo none
+actual advisor --repo auto
+```
+
+For those newer builds, an explicit choice is remembered; without one, Advisor
+matches the working tree's `origin` to a connected repository and falls back to
+organization scope when no unique match exists. `none` pins organization scope,
+while `auto` clears the pin. A repository literally named `none` or `auto` must
+use `owner/name` or its UUID.
 
 ## Scopes
 
@@ -151,9 +183,9 @@ The login request asks for `openid profile offline_access adr:query adr:review` 
 The end-to-end recipe an agent should follow to ask the advisor:
 
 ```bash
-# 1. Endpoints (or pass --api-url on each command)
-export ACTUAL_AUTH_URL=...      # for login
-export ACTUAL_API_URL=...       # for advisor
+# 1. Optional endpoint overrides for staging/local deployments
+export ACTUAL_AUTH_URL=...
+export ACTUAL_API_URL=...
 
 # 2. Pre-flight: are we signed in? (no network)
 actual whoami || {

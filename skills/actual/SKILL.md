@@ -11,7 +11,6 @@ description: >-
   working with the actual CLI, running actual adr-bot, signing in to
   Actual AI, asking the advisor, configuring runners or models,
   troubleshooting errors, or managing output files.
-argument-hint: "[question or command] e.g. 'run sync', 'log in', 'ask the advisor', 'fix ClaudeNotFound'"
 ---
 
 # actual CLI Companion
@@ -42,6 +41,11 @@ npx @actualai/actual adr-bot [flags]
 
 After install, verify: `actual --version`
 
+Before using a documented subcommand or flag, verify it exists in the installed
+CLI with `actual --help` or `actual <subcommand> --help`. If it is missing,
+help the user update the CLI; do not run development-only flags against an older
+release.
+
 
 ## Commands
 
@@ -58,15 +62,16 @@ After install, verify: `actual --version`
 | `actual login` | Sign in to Actual AI (browser OAuth) | `--org <id>`, `--api-url <url>`, `--no-browser` |
 | `actual logout` | Sign out of Actual AI and clear local credentials | (none) |
 | `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
-| `actual advisor "<query>"` | Ask the Advisor an org-scoped architecture question | `--org <uuid>`, `--repo <uuid>`, `--api-url <url>` |
+| `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
+| `actual cache clear` | Clear local analysis and tailoring caches | (none) |
 
 ## Platform Identity & Advisor
 
-These commands talk to the **Actual AI platform** (your account/org) and are **separate from `actual auth`** — `actual auth` only checks the local coding-agent/runner (claude/codex/cursor) that `adr-bot` drives. `login`/`logout`/`whoami` manage your Actual AI platform identity; `advisor` asks org-scoped architecture questions against it. (The runner/model sections below pertain to `adr-bot`, not to these.)
+These commands talk to the **Actual AI platform** (your account/org) and are **separate from `actual auth`** — `actual auth` only checks the local coding-agent/runner (claude/codex/cursor) that `adr-bot` drives. `login`/`logout`/`whoami` manage your Actual AI platform identity; `advisor` asks organization- or repository-scoped architecture questions against it. (The runner/model sections below pertain to `adr-bot`, not to these.)
 
-**Endpoint config** — the platform URL is supplied per command; there is no production default baked in yet.
-- `login` reads `--api-url <url>` or the `ACTUAL_AUTH_URL` env var.
-- `advisor` reads `--api-url <url>` or the `ACTUAL_API_URL` env var.
+**Endpoint config** — production works without an override.
+- `login` reads `--api-url <url>`, then `ACTUAL_AUTH_URL`, then defaults to `https://app.actual.ai`.
+- `advisor` reads `--api-url <url>`, then `ACTUAL_API_URL`, then defaults to `https://api-service.api.prod.actual.ai`.
 - OAuth `client_id`/scopes default to `actual-cli` and `openid profile offline_access adr:query adr:review` (override via `ACTUAL_OAUTH_CLIENT_ID` / `ACTUAL_OAUTH_SCOPES`).
 
 ### login — interactive; hand off to the human
@@ -102,7 +107,7 @@ Best-effort server-side token revoke, then always clears local credentials. Safe
 
 ### advisor — non-interactive, async query
 
-`actual advisor "<question>"` asks an org-scoped architecture question. It is **agent-friendly** (no TTY required): it starts an async job, polls to completion, and prints a plain-text summary followed by the related ADRs. Progress ("advisor thinking…") goes to stderr; the answer goes to stdout.
+`actual advisor "<question>"` asks an architecture question. It is **agent-friendly** (no TTY required): it starts an async job, polls to completion, and prints a plain-text summary followed by the related ADRs. Progress ("advisor thinking…") goes to stderr; the answer goes to stdout.
 
 ```bash
 actual advisor "How should I handle database access in a new service?"
@@ -110,11 +115,27 @@ actual advisor "How should I handle database access in a new service?"
 # point at a local/staging endpoint — one export steers it; --api-url overrides
 ACTUAL_API_URL=https://your-advisor-endpoint actual advisor "…"
 
-# scope to an org / a connected repo (both UUIDs)
-actual advisor "…" --org <org-uuid> --repo <repo-uuid>
+# released v0.2.0: scope by connected-repository UUID
+actual advisor "…" --repo <repo-uuid>
+
+# newer builds only; verify these flags with `actual advisor --help`
+actual advisor "…" --repo actual-software/actual-cli
+actual advisor --show-scope
+actual advisor --repo none
+actual advisor --repo auto
 ```
 
 Requires a valid signed-in session — `NotLoggedIn` (exit `2`) means run `login` first. The advisor transparently refreshes an expired token before the call. Output is human-readable text today (no `--json` flag yet).
+
+Scope behavior is version-dependent:
+
+- Released v0.2.0 accepts only a connected-repository UUID; omitting `--repo`
+  uses organization scope.
+- Newer builds may accept a name or `owner/name`, remember a per-working-tree
+  scope, auto-detect from `origin`, and expose `--show-scope`, `--repo none`,
+  and `--repo auto`.
+
+Always inspect `actual advisor --help` before using the newer scope workflow.
 
 > For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
 
@@ -250,8 +271,12 @@ Apply the fix, then return to step 1 to verify.
 
 For comprehensive environment checks, run the bundled diagnostic script:
 
+Run the bundled `scripts/diagnose.sh` by its absolute path under the active
+`actual` skill directory. Do not assume a Claude-specific install location.
+For example, when the current directory is the skill directory:
+
 ```bash
-bash .claude/skills/actual/scripts/diagnose.sh
+bash scripts/diagnose.sh
 ```
 
 This checks all binaries, auth status, environment variables, config, and output files in one pass. It is read-only and never modifies anything.

@@ -446,5 +446,6 @@ When encountering any error, follow this pattern:
 
 For comprehensive environment checks, use the diagnostic script:
 ```bash
-bash .claude/skills/actual/scripts/diagnose.sh
+# Resolve the active actual skill directory, then:
+bash /absolute/path/to/actual/scripts/diagnose.sh
 ```
