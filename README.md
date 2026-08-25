@@ -62,6 +62,7 @@ ln -s ~/.local/share/actual-skill/skills/actual ~/.agents/skills/actual
 - [Getting started and full command reference](https://actual.ai/cli/docs) - human-readable docs
 - [docs.md](https://actual.ai/cli/docs.md) - full docs in Markdown (machine-readable)
 - [Developer resources](https://actual.ai/developers) - OpenAPI spec, npm package, auth, and service status
+- [llms.txt](https://actual.ai/cli/llms.txt) - concise LLM-friendly summary
 
 ## Requirements
 
