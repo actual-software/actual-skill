@@ -64,6 +64,7 @@ release.
 | `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
 | `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
+| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook` (newer builds only; verify with `actual plan-check --help`) |
 
 ## Platform Identity & Advisor
 
@@ -138,6 +139,57 @@ Scope behavior is version-dependent:
 Always inspect `actual advisor --help` before using the newer scope workflow.
 
 > For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
+
+## Plan-Stage Governance (Claude Code hooks)
+
+This plugin ships Claude Code hooks that check an implementation plan against the
+ADR rules committed in the repository **before** implementation begins. They are
+registered automatically on install — there is no manual setup.
+
+| Hook | Event | What it does |
+|------|-------|--------------|
+| `hooks/preflight.sh` | `SessionStart` | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough, once per session |
+| `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
+
+`PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
+user's plan-approval dialog, so a blocked plan is revised by the agent rather than
+shown to the human as an approvable artifact.
+
+### When the hooks do nothing
+
+Both hooks are silent no-ops — no output, exit 0 — unless the repository has at
+least one `*.md` file in `.actual/rules/`. Installing the plugin therefore has no
+effect on repositories that are not governed by Actual.
+
+The gate also never hard-fails. If the CLI is missing, too old, or crashes, the hook
+reports the problem and **makes no permission decision**, leaving the normal approval
+flow intact. Only an explicit verdict from `plan-check` can block a plan.
+
+### Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `ACTUAL_PLAN_GATE=off` | Disable both hooks entirely |
+| `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo) |
+
+### Requirements
+
+`actual plan-check` is only present in newer CLI builds. On an older CLI the hook
+emits an upgrade message instead of a flag error — check with:
+
+```bash
+actual plan-check --help
+```
+
+### Testing the hooks
+
+```bash
+bash hooks/tests/run.sh
+```
+
+Runs the full decision matrix (no-op, missing binary, old CLI, allow, deny, crash)
+against recorded hook payloads and a fake CLI. No network and no real `actual`
+install required.
 
 ## Runner Decision Tree
 

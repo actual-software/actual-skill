@@ -1,0 +1,30 @@
+{
+  "description": "Actual plan-stage ADR governance: checks implementation plans against the rules committed in .actual/rules/ before implementation begins.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/preflight.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/plan-gate.sh",
+            "timeout": 120,
+            "statusMessage": "Checking plan against architecture rules..."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "session_id": "test-session-startup",
+  "transcript_path": "__FIXTURE_DIR__/transcript-plan-file.jsonl",
+  "cwd": "__REPO_ROOT__",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

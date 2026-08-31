@@ -10,6 +10,8 @@ an ADR-powered CLAUDE.md/AGENTS.md generator.
 - Covers all 3 output formats (claude-md, agents-md, cursor-rules)
 - Includes error catalog, config reference, runner guide, and diagnostic script
 - Works as inline knowledge AND operational automation
+- Ships Claude Code hooks that check implementation plans against the ADRs
+  committed in `.actual/rules/` before implementation begins
 
 ## Install
 
@@ -56,6 +58,27 @@ ln -s ~/.local/share/actual-skill/skills/actual ~/.claude/skills/actual
 # For Codex (alternative to $skill-installer)
 ln -s ~/.local/share/actual-skill/skills/actual ~/.agents/skills/actual
 ```
+
+## Plan-stage governance (Claude Code)
+
+Installing the plugin registers two hooks, with no further setup:
+
+- **`SessionStart`** — checks that the `actual` CLI is installed and new enough,
+  and says how to fix it if not.
+- **`PreToolUse` on `ExitPlanMode`** — the plan/implementation boundary. The plan is
+  checked against the ADR rules committed in `.actual/rules/`, and a conflicting plan
+  is blocked before it reaches the approval dialog.
+
+Both hooks are **silent no-ops in any repository without `.actual/rules/`**, so
+installing the plugin does not affect unrelated work. They also never hard-fail: a
+missing, outdated, or crashing CLI produces a message and no permission decision.
+
+Set `ACTUAL_PLAN_GATE=off` to disable them, or `ACTUAL_RULES_DIR` to point them at a
+different rules directory. Run `bash hooks/tests/run.sh` to exercise the hooks
+locally — no network or CLI install needed.
+
+Hooks are a Claude Code feature; the Codex/universal manifest
+(`.codex-plugin/plugin.json`) has no equivalent, so it deliberately declares none.
 
 ## Documentation
 

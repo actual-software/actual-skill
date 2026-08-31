@@ -1,0 +1,1 @@
+{"type":"user","promptId":"b856b7bf-d38e-4f23-a6ae-700facdb9068","uuid":"33333333-3333-3333-3333-333333333333","sessionId":"test-session-inline","message":{"role":"user","content":"Add caching to the read-heavy endpoints."}}

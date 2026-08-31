@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Fake `actual` CLI for hook tests. Behaviour is driven by ACTUAL_TEST_MODE:
+#
+#   allow        plan-check exists, returns an "allow" verdict
+#   deny         plan-check exists, returns a "deny" verdict at exit 0
+#   deny-exit2   plan-check exists, blocks via exit 2 + stderr (fallback path)
+#   no-plan-check   an older CLI that does not know the subcommand
+#   crash        plan-check panics
+#   garbage      plan-check exits 0 but prints non-JSON
+#
+# It also records the envelope it received to $ACTUAL_TEST_CAPTURE, so tests can
+# assert that the hook passed stdin through untouched.
+
+set -uo pipefail
+
+mode="${ACTUAL_TEST_MODE:-allow}"
+
+if [ "${1:-}" = "--version" ]; then
+  echo "actual 0.0.0-test"
+  exit 0
+fi
+
+if [ "${1:-}" != "plan-check" ]; then
+  echo "error: unrecognized subcommand '${1:-}'" >&2
+  exit 2
+fi
+shift
+
+if [ "$mode" = "no-plan-check" ]; then
+  echo "error: unrecognized subcommand 'plan-check'" >&2
+  exit 2
+fi
+
+if [ "${1:-}" = "--help" ]; then
+  echo "Usage: actual plan-check [--claude-hook]"
+  exit 0
+fi
+
+payload=$(cat)
+if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
+  printf '%s' "$payload" > "$ACTUAL_TEST_CAPTURE"
+fi
+
+case "$mode" in
+  allow)
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Plan conforms to all applicable rules."}}\n'
+    exit 0
+    ;;
+  deny)
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler."}}\n'
+    exit 0
+    ;;
+  deny-exit2)
+    echo "R-001 MUST: all persistence goes through the repository layer." >&2
+    exit 2
+    ;;
+  crash)
+    echo "thread 'main' panicked at src/plan_check.rs:42" >&2
+    exit 101
+    ;;
+  garbage)
+    echo "not json at all"
+    exit 0
+    ;;
+  *)
+    echo "unknown ACTUAL_TEST_MODE: $mode" >&2
+    exit 3
+    ;;
+esac
