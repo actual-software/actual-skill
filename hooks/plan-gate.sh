@@ -7,7 +7,9 @@
 #
 # This wrapper does only cheap shell checks and then hands the raw hook envelope to
 # `actual plan-check --claude-hook`, which resolves the plan text and returns the
-# verdict. It never parses JSON (see hooks/lib/bootstrap.sh for why).
+# verdict. It never parses JSON (see hooks/lib/bootstrap.sh for why). Plan
+# resolution lives in the CLI: prefer tool_input.plan / tool_input.planFilePath
+# (current Claude Code injects both), then the transcript plan_mode attachment.
 #
 # Fail-open contract: every unexpected condition exits 0 and leaves the normal
 # permission flow untouched. Only an explicit deny (JSON or exit 2) can block.

@@ -82,7 +82,7 @@ decision() {
 
 echo
 echo "=== plan-gate: no committed rules ==="
-for shape in inline file; do
+for shape in injected inline file; do
   st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-${shape}.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=deny)
   if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
     pass "plan-${shape}: silent no-op (exit 0, no stdout, no stderr)"
@@ -122,7 +122,7 @@ fi
 
 echo
 echo "=== plan-gate: verdict passthrough ==="
-for shape in inline file; do
+for shape in injected inline file; do
   st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-${shape}.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow)
   if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && [ ! -s "${WORK}/out" ]; then
     pass "plan-${shape}: conforming plan makes no permission decision"
@@ -154,6 +154,8 @@ fi
 
 echo
 echo "=== plan-gate: envelope passthrough ==="
+# Three recorded ExitPlanMode shapes. The wrapper must forward each intact;
+# plan-check --claude-hook resolves plan text (injected first, transcript last).
 CAPTURE="${WORK}/captured.json"
 st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE")
 if [ -s "$CAPTURE" ] \
@@ -165,18 +167,38 @@ else
   fail "envelope passthrough broken" "captured=$(cat "$CAPTURE" 2>/dev/null)"
 fi
 
+CAPTURE_INJECTED="${WORK}/captured-injected.json"
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_INJECTED")
+injected_plan=$(jq -r '.tool_input.plan // ""' "$CAPTURE_INJECTED" 2>/dev/null)
+injected_path=$(jq -r '.tool_input.planFilePath // ""' "$CAPTURE_INJECTED" 2>/dev/null)
+if [ "$st" = "0" ] && printf '%s' "$injected_plan" | grep -q "Redis cache" \
+   && [ -f "$injected_path" ] && grep -q "Redis cache" "$injected_path"; then
+  pass "injected shape: plan and planFilePath reach the CLI (no transcript scrape needed)"
+else
+  fail "injected shape: tool_input.plan / planFilePath not forwarded" "captured=$(cat "$CAPTURE_INJECTED" 2>/dev/null)"
+fi
+
+injected_src_plan=$(jq -r '.tool_input.plan // ""' "${RESOLVED}/pretooluse-plan-injected.json")
+injected_src_path=$(jq -r '.tool_input.planFilePath // ""' "${RESOLVED}/pretooluse-plan-injected.json")
+if printf '%s' "$injected_src_plan" | grep -q "Redis cache" \
+   && [ -f "$injected_src_path" ]; then
+  pass "injected shape: current envelope has tool_input.plan and a readable planFilePath"
+else
+  fail "injected shape: fixture missing injected plan fields" "path=$injected_src_path"
+fi
+
 resolved_plan=$(jq -r 'select(.attachment.type=="plan_mode") | .attachment.planFilePath' "${RESOLVED}/transcript-plan-file.jsonl" 2>/dev/null | tail -1)
 if [ -n "$resolved_plan" ] && [ -f "$resolved_plan" ] && grep -q "Redis cache" "$resolved_plan"; then
-  pass "plan-file shape: plan text resolvable via transcript plan_mode attachment"
+  pass "legacy file shape: plan text resolvable via transcript when tool_input is empty"
 else
-  fail "plan-file shape: could not resolve plan via transcript" "resolved=$resolved_plan"
+  fail "legacy file shape: could not resolve plan via transcript" "resolved=$resolved_plan"
 fi
 
 inline_plan=$(jq -r '.tool_input.plan // ""' "${RESOLVED}/pretooluse-plan-inline.json")
 if printf '%s' "$inline_plan" | grep -q "Redis cache"; then
-  pass "plan-inline shape: plan text present in tool_input.plan"
+  pass "legacy inline shape: plan text present in tool_input.plan"
 else
-  fail "plan-inline shape: tool_input.plan missing" ""
+  fail "legacy inline shape: tool_input.plan missing" ""
 fi
 
 echo

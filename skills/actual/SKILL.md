@@ -64,7 +64,7 @@ release.
 | `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
 | `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
-| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook` (newer builds only; verify with `actual plan-check --help`) |
+| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
 
 ## Platform Identity & Advisor
 
@@ -175,6 +175,29 @@ dialog. The wrapper will drop an `allow` verdict if one is returned.
 |----------|--------|
 | `ACTUAL_PLAN_GATE=off` | Disable both hooks entirely |
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo) |
+
+### `--claude-hook` plan resolution
+
+The wrapper does not parse the hook envelope. `actual plan-check --claude-hook`
+must resolve plan text itself, in this order, and stop at the first hit:
+
+1. **`tool_input.plan`** — non-empty string. Current Claude Code injects the plan
+   into the envelope before hooks run, even when the model's literal input was
+   empty. Older builds also put the plan here.
+2. **`tool_input.planFilePath`** — set and readable. Same injection; no transcript
+   I/O.
+3. **Transcript fallback** — only if both of those are missing: `prompt_id` +
+   `transcript_path` → the `plan_mode` attachment → `planFilePath`. Do not scrape
+   the transcript when (1) or (2) already produced the plan.
+4. If none of those work: fail open (notice, no `permissionDecision`).
+
+Fixtures under `hooks/tests/fixtures/` encode the three envelopes:
+
+| Fixture | Shape |
+|---------|--------|
+| `pretooluse-plan-injected.json` | Current: `tool_input.plan` and `tool_input.planFilePath` |
+| `pretooluse-plan-inline.json` | Legacy: plan in `tool_input.plan` only |
+| `pretooluse-plan-file.json` | Legacy: empty `tool_input`; plan only via transcript |
 
 ### Requirements
 
