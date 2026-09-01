@@ -72,6 +72,8 @@ Installing the plugin registers two hooks, with no further setup:
 Both hooks are **silent no-ops in any repository without `.actual/rules/`**, so
 installing the plugin does not affect unrelated work. They also never hard-fail: a
 missing, outdated, or crashing CLI produces a message and no permission decision.
+A conforming plan also makes no permission decision, so the user's approval dialog
+still appears. Only an explicit deny from `plan-check` can block.
 
 Set `ACTUAL_PLAN_GATE=off` to disable them, or `ACTUAL_RULES_DIR` to point them at a
 different rules directory. Run `bash hooks/tests/run.sh` to exercise the hooks

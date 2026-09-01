@@ -10,7 +10,9 @@
 # verdict. It never parses JSON (see hooks/lib/bootstrap.sh for why).
 #
 # Fail-open contract: every unexpected condition exits 0 and leaves the normal
-# permission flow untouched. Only an explicit verdict from the CLI can block.
+# permission flow untouched. Only an explicit deny (JSON or exit 2) can block.
+# A conforming plan must not emit permissionDecision:allow -- that field can skip
+# the user's plan-approval dialog. Pass = empty stdout, or JSON with no decision.
 
 set -uo pipefail
 
@@ -57,10 +59,13 @@ status=$?
 
 case "$status" in
   0)
-    # Pass a well-formed verdict straight through; the CLI owns the decision.
+    # Forward a well-formed verdict, except permissionDecision:allow. That field
+    # is never valid here: a conforming plan must leave the approval dialog intact.
+    # The CLI contract is deny-or-silent; this guard is defense in depth.
     trimmed=${verdict#"${verdict%%[![:space:]]*}"}
     trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
-    if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ]; then
+    if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ] \
+       && ! is_allow_decision "$trimmed"; then
       printf '%s\n' "$verdict"
     fi
     exit 0

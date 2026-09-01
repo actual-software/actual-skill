@@ -163,7 +163,11 @@ effect on repositories that are not governed by Actual.
 
 The gate also never hard-fails. If the CLI is missing, too old, or crashes, the hook
 reports the problem and **makes no permission decision**, leaving the normal approval
-flow intact. Only an explicit verdict from `plan-check` can block a plan.
+flow intact. Only an explicit **deny** from `plan-check` (JSON `permissionDecision`
+or exit 2) can block a plan. A conforming plan must print no `permissionDecision`
+(empty stdout is the contract). Never emit `permissionDecision: "allow"`: that
+field is version-fragile on `ExitPlanMode` and can skip the user's plan-approval
+dialog. The wrapper will drop an `allow` verdict if one is returned.
 
 ### Environment variables
 
@@ -187,7 +191,7 @@ actual plan-check --help
 bash hooks/tests/run.sh
 ```
 
-Runs the full decision matrix (no-op, missing binary, old CLI, allow, deny, crash)
+Runs the full decision matrix (no-op, missing binary, old CLI, pass, deny, crash)
 against recorded hook payloads and a fake CLI. No network and no real `actual`
 install required.
 

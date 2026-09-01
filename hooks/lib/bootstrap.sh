@@ -125,12 +125,26 @@ json_escape() {
   printf '%s' "$s"
 }
 
+# True when a JSON object names permissionDecision:allow. Whitespace-insensitive so
+# pretty-printed CLI output is still caught. A substring match, not a parse: enough
+# to refuse the unsafe shape without jq/python.
+is_allow_decision() {
+  local s="$1"
+  s=${s// /}
+  s=${s//$'\n'/}
+  s=${s//$'\t'/}
+  s=${s//$'\r'/}
+  [ "${s#*\"permissionDecision\":\"allow\"}" != "$s" ]
+}
+
 # Advisory for a PreToolUse hook that is NOT making a permission decision.
 #
 # Deliberately emits no `permissionDecision`. Per the hook protocol a hook "can deny
 # the call, but staying silent doesn't approve it" -- so omitting the field leaves the
-# normal permission flow intact. Returning "allow" here would *grant* ExitPlanMode and
-# skip the user's plan-approval dialog, which is exactly wrong for an advisory.
+# normal permission flow intact. `permissionDecision: "allow"` is never correct on
+# this gate: it is version-fragile on ExitPlanMode and can skip the user's
+# plan-approval dialog. A conforming plan must stay silent on that field. Only
+# `deny` (or exit 2) may block.
 #
 # systemMessage is emitted both top level and inside hookSpecificOutput because its
 # documented location has moved between versions; unknown fields are ignored.

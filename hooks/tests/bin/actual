@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fake `actual` CLI for hook tests. Behaviour is driven by ACTUAL_TEST_MODE:
 #
-#   allow        plan-check exists, returns an "allow" verdict
+#   allow        plan-check exists, plan conforms: exit 0, no permission decision
+#   emit-allow   plan-check exists, wrongly emits permissionDecision:allow
 #   deny         plan-check exists, returns a "deny" verdict at exit 0
 #   deny-exit2   plan-check exists, blocks via exit 2 + stderr (fallback path)
 #   no-plan-check   an older CLI that does not know the subcommand
@@ -43,6 +44,10 @@ fi
 
 case "$mode" in
   allow)
+    # Conforming plan: silent on permissionDecision so the user's dialog stays.
+    exit 0
+    ;;
+  emit-allow)
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Plan conforms to all applicable rules."}}\n'
     exit 0
     ;;

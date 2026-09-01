@@ -73,6 +73,10 @@ run_hook_no_cli() {
 }
 
 decision() {
+  if [ ! -s "${WORK}/out" ]; then
+    printf 'none'
+    return
+  fi
   jq -r '.hookSpecificOutput.permissionDecision // "none"' < "${WORK}/out" 2>/dev/null || printf 'unparseable'
 }
 
@@ -120,10 +124,10 @@ echo
 echo "=== plan-gate: verdict passthrough ==="
 for shape in inline file; do
   st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-${shape}.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow)
-  if [ "$st" = "0" ] && [ "$(decision)" = "allow" ]; then
-    pass "plan-${shape}: allow verdict passed through"
+  if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && [ ! -s "${WORK}/out" ]; then
+    pass "plan-${shape}: conforming plan makes no permission decision"
   else
-    fail "plan-${shape}: expected allow" "status=$st decision=$(decision)"
+    fail "plan-${shape}: expected silent pass (no decision)" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
   fi
 
   st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-${shape}.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny)
@@ -139,6 +143,13 @@ if [ "$st" = "2" ] && grep -q "R-001" "${WORK}/err"; then
   pass "exit-2 fallback: blocks with the reason on stderr"
 else
   fail "exit-2 fallback: expected exit 2 + stderr reason" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ]; then
+  pass "CLI allow verdict is not forwarded (leaves the approval dialog intact)"
+else
+  fail "allow must not be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
 fi
 
 echo
