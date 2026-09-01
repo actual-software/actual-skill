@@ -8,7 +8,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/preflight.sh",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }

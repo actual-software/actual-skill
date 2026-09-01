@@ -81,6 +81,18 @@ have_plan_check() {
   actual plan-check --help >/dev/null 2>&1
 }
 
+# True when plan-check exited 2 because this CLI build has no such subcommand.
+# Used by the gate instead of a second --help spawn: an unknown subcommand must
+# fail open with upgrade guidance, not be treated as a deny (exit 2 fallback).
+is_unrecognized_plan_check() {
+  local err
+  err=$(<"$1") || return 1
+  case "$err" in
+    *unrecognized\ subcommand*plan-check*) return 0 ;;
+  esac
+  return 1
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.

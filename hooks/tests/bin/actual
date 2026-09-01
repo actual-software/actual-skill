@@ -11,7 +11,8 @@
 #
 # It also records the envelope it received to $ACTUAL_TEST_CAPTURE, and the
 # remaining argv to $ACTUAL_TEST_CAPTURE.argv, so tests can assert stdin and
-# --rules-dir / --claude-hook were forwarded.
+# --rules-dir / --claude-hook were forwarded. plan-check (other than --help)
+# refuses to run without --claude-hook, so dropping the flag cannot pass.
 
 set -uo pipefail
 
@@ -36,6 +37,21 @@ fi
 if [ "${1:-}" = "--help" ]; then
   echo "Usage: actual plan-check [--claude-hook] [--rules-dir <dir>]"
   exit 0
+fi
+
+# The real plan-check --claude-hook contract requires this flag. Without it the
+# fake CLI would still return a verdict and hook tests would pass even if
+# plan-gate.sh dropped --claude-hook.
+has_claude_hook=0
+for arg in "$@"; do
+  if [ "$arg" = "--claude-hook" ]; then
+    has_claude_hook=1
+    break
+  fi
+done
+if [ "$has_claude_hook" -eq 0 ]; then
+  echo "error: missing --claude-hook" >&2
+  exit 2
 fi
 
 if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then

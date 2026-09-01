@@ -265,6 +265,17 @@ else
 fi
 
 echo
+echo "=== fake CLI requires --claude-hook ==="
+env PATH="${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=allow \
+    actual plan-check </dev/null >"${WORK}/out" 2>"${WORK}/err"
+st=$?
+if [ "$st" != "0" ] && grep -q -- '--claude-hook' "${WORK}/err"; then
+  pass "fake CLI rejects plan-check without --claude-hook"
+else
+  fail "fake CLI must require --claude-hook" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
+echo
 echo "=== rules directory override ==="
 OVERRIDE_CAPTURE="${WORK}/captured-override.json"
 env ACTUAL_RULES_DIR="${REPO_WITH_RULES}/.actual/rules" \

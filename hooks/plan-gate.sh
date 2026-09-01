@@ -42,15 +42,12 @@ if ! have_actual; then
   exit 0
 fi
 
-# 5. CLI present but too old to know plan-check: actionable upgrade, decide nothing.
-if ! have_plan_check; then
-  emit_pretooluse_notice "$(upgrade_message)"
-  exit 0
-fi
-
-# 6. Delegate. Pass --rules-dir so the CLI scores the same directory this hook just
-#    checked, including ACTUAL_RULES_DIR. cd to the repo root for any other
-#    cwd-relative CLI discovery; do not rely on cwd for rules.
+# 5. Delegate. Do not probe `plan-check --help` here: SessionStart already did,
+#    and a second spawn is a cold Node boot on the plan boundary. An old CLI's
+#    unknown-subcommand exit 2 is classified below as upgrade + fail-open, not deny.
+#    Pass --rules-dir so the CLI scores the same directory this hook just checked,
+#    including ACTUAL_RULES_DIR. cd to the repo root for any other cwd-relative
+#    CLI discovery; do not rely on cwd for rules.
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-plan-gate.XXXXXX") || exit 0
 trap 'rm -f "$stderr_file"' EXIT
 
@@ -75,7 +72,12 @@ case "$status" in
     exit 0
     ;;
   2)
-    # Fallback block path: stderr becomes the reason shown to the agent.
+    # Unknown subcommand: old CLI, fail open with upgrade guidance.
+    # Any other exit 2 is the CLI's fallback block path.
+    if is_unrecognized_plan_check "$stderr_file"; then
+      emit_pretooluse_notice "$(upgrade_message)"
+      exit 0
+    fi
     cat "$stderr_file" >&2
     exit 2
     ;;

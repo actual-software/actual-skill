@@ -196,6 +196,10 @@ where `<dir>` is `ACTUAL_RULES_DIR` if set, otherwise `<repo>/.actual/rules`.
 `plan-check` must score that directory and must not ignore the flag in favor of
 cwd. `--help` should list `--rules-dir`.
 
+Stdout must be exactly one JSON object, or empty. Logs go to stderr. A line
+before the JSON makes the wrapper drop a deny; `{...}` that is not valid hook
+JSON is forwarded and Claude Code reports a hook error.
+
 Fixtures under `hooks/tests/fixtures/` encode the three envelopes:
 
 | Fixture | Shape |

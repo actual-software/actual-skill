@@ -3,7 +3,9 @@
 #
 # Surfaces install/upgrade guidance once, early in the session, instead of at the
 # plan boundary where it would add latency and noise. Read-only and advisory: it
-# adds session context and nothing else.
+# adds session context and nothing else. The --help capability probe lives here
+# only; the ExitPlanMode gate classifies an old CLI from the real plan-check exit
+# so it does not spawn actual twice.
 #
 # Silent unless this repository actually has committed rules, so installing the
 # plugin is invisible in unrelated repositories.
