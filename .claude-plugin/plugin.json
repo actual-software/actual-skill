@@ -8,6 +8,5 @@
   "homepage": "https://cli.actual.ai",
   "repository": "https://github.com/actual-software/actual-skill",
   "license": "Apache-2.0",
-  "keywords": ["actual", "cli", "adr", "claude-md", "agents-md", "cursor-rules"],
-  "hooks": "./hooks/hooks.json"
+  "keywords": ["actual", "cli", "adr", "claude-md", "agents-md", "cursor-rules"]
 }

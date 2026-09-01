@@ -372,6 +372,26 @@ else
 fi
 
 echo
+echo "=== plugin manifest ==="
+
+# hooks/hooks.json is loaded automatically by convention. Declaring it again via the
+# manifest's `hooks` key registers it twice, which Claude Code reports as
+# "Duplicate hooks file detected" and marks the whole plugin hook-load-failed.
+# The manifest may only point at ADDITIONAL hook files.
+MANIFEST="${HOOKS_DIR}/../.claude-plugin/plugin.json"
+if grep -qE '"hooks"[[:space:]]*:' "$MANIFEST" 2>/dev/null; then
+  fail "manifest re-declares hooks/hooks.json" "the conventional path is auto-loaded; declaring it again fails plugin hook loading"
+else
+  pass "manifest does not re-declare the conventional hooks/hooks.json"
+fi
+
+if [ -f "${HOOKS_DIR}/hooks.json" ]; then
+  pass "hooks/hooks.json exists at the conventional auto-loaded path"
+else
+  fail "hooks/hooks.json missing from the conventional path" ""
+fi
+
+echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
      "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
