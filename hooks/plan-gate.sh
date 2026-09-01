@@ -48,15 +48,17 @@ if ! have_plan_check; then
   exit 0
 fi
 
-# 6. Delegate. Run from the repo root so the CLI's own rules discovery lines up with
-#    the directory this hook just checked.
+# 6. Delegate. Pass --rules-dir so the CLI scores the same directory this hook just
+#    checked, including ACTUAL_RULES_DIR. cd to the repo root for any other
+#    cwd-relative CLI discovery; do not rely on cwd for rules.
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-plan-gate.XXXXXX") || exit 0
 trap 'rm -f "$stderr_file"' EXIT
 
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 
-verdict=$(printf '%s' "$payload" | actual plan-check --claude-hook 2>"$stderr_file")
+dir=$(rules_dir)
+verdict=$(printf '%s' "$payload" | actual plan-check --claude-hook --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 
 case "$status" in

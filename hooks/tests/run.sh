@@ -80,6 +80,12 @@ decision() {
   jq -r '.hookSpecificOutput.permissionDecision // "none"' < "${WORK}/out" 2>/dev/null || printf 'unparseable'
 }
 
+# Print the argv token after FLAG in a capture sidecar written by bin/actual.
+argv_after() {
+  local flag="$1" file="$2"
+  awk -v f="$flag" '$0==f{getline; print; exit}' "$file"
+}
+
 echo
 echo "=== plan-gate: no committed rules ==="
 for shape in injected inline file; do
@@ -165,6 +171,13 @@ if [ -s "$CAPTURE" ] \
   pass "raw envelope reaches the CLI with prompt_id and a readable transcript_path"
 else
   fail "envelope passthrough broken" "captured=$(cat "$CAPTURE" 2>/dev/null)"
+fi
+
+if grep -Fxq -- '--claude-hook' "${CAPTURE}.argv" \
+   && [ "$(argv_after --rules-dir "${CAPTURE}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ]; then
+  pass "CLI is invoked with --claude-hook and --rules-dir pointing at the repo rules"
+else
+  fail "missing --claude-hook / --rules-dir" "argv=$(cat "${CAPTURE}.argv" 2>/dev/null)"
 fi
 
 CAPTURE_INJECTED="${WORK}/captured-injected.json"
@@ -253,14 +266,22 @@ fi
 
 echo
 echo "=== rules directory override ==="
+OVERRIDE_CAPTURE="${WORK}/captured-override.json"
 env ACTUAL_RULES_DIR="${REPO_WITH_RULES}/.actual/rules" \
-    PATH="${TESTS_DIR}/bin:${PATH}" CLAUDE_PROJECT_DIR="$REPO_NO_RULES" ACTUAL_TEST_MODE=deny \
+    PATH="${TESTS_DIR}/bin:${PATH}" CLAUDE_PROJECT_DIR="$REPO_NO_RULES" \
+    ACTUAL_TEST_MODE=deny ACTUAL_TEST_CAPTURE="$OVERRIDE_CAPTURE" \
     bash "${HOOKS_DIR}/plan-gate.sh" < "${RESOLVED}/pretooluse-plan-file.json" > "${WORK}/out" 2>"${WORK}/err"
 st=$?
 if [ "$st" = "0" ] && [ "$(decision)" = "deny" ]; then
   pass "ACTUAL_RULES_DIR points the gate at another directory"
 else
   fail "ACTUAL_RULES_DIR override ignored" "status=$st decision=$(decision)"
+fi
+
+if [ "$(argv_after --rules-dir "${OVERRIDE_CAPTURE}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ]; then
+  pass "ACTUAL_RULES_DIR is forwarded to the CLI as --rules-dir (not inferred from cwd)"
+else
+  fail "--rules-dir did not receive the override" "argv=$(cat "${OVERRIDE_CAPTURE}.argv" 2>/dev/null)"
 fi
 
 echo

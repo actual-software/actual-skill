@@ -64,7 +64,7 @@ release.
 | `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
 | `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
-| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
+| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
 
 ## Platform Identity & Advisor
 
@@ -174,7 +174,7 @@ dialog. The wrapper will drop an `allow` verdict if one is returned.
 | Variable | Effect |
 |----------|--------|
 | `ACTUAL_PLAN_GATE=off` | Disable both hooks entirely |
-| `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo) |
+| `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). The hook forwards the resolved path to the CLI as `--rules-dir`; `plan-check` must honor that flag rather than rediscovering rules from cwd |
 
 ### `--claude-hook` plan resolution
 
@@ -190,6 +190,11 @@ must resolve plan text itself, in this order, and stop at the first hit:
    `transcript_path` → the `plan_mode` attachment → `planFilePath`. Do not scrape
    the transcript when (1) or (2) already produced the plan.
 4. If none of those work: fail open (notice, no `permissionDecision`).
+
+The hook always invokes `actual plan-check --claude-hook --rules-dir <dir>`,
+where `<dir>` is `ACTUAL_RULES_DIR` if set, otherwise `<repo>/.actual/rules`.
+`plan-check` must score that directory and must not ignore the flag in favor of
+cwd. `--help` should list `--rules-dir`.
 
 Fixtures under `hooks/tests/fixtures/` encode the three envelopes:
 

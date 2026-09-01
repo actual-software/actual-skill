@@ -36,7 +36,8 @@ resolve_repo_root() {
 }
 
 # Directory holding the committed rule files. ACTUAL_RULES_DIR overrides it, which
-# is how a monorepo points the gate at a subproject's rules.
+# is how a monorepo points the gate at a subproject's rules. plan-gate.sh passes
+# this path to the CLI as --rules-dir so scoring uses the same directory.
 rules_dir() {
   if [ -n "${ACTUAL_RULES_DIR:-}" ]; then
     printf '%s' "${ACTUAL_RULES_DIR}"

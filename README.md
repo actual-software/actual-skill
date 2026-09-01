@@ -76,8 +76,9 @@ A conforming plan also makes no permission decision, so the user's approval dial
 still appears. Only an explicit deny from `plan-check` can block.
 
 Set `ACTUAL_PLAN_GATE=off` to disable them, or `ACTUAL_RULES_DIR` to point them at a
-different rules directory. Run `bash hooks/tests/run.sh` to exercise the hooks
-locally — no network or CLI install needed.
+different rules directory (forwarded to the CLI as `--rules-dir`). Run
+`bash hooks/tests/run.sh` to exercise the hooks locally — no network or CLI
+install needed.
 
 Hooks are a Claude Code feature; the Codex/universal manifest
 (`.codex-plugin/plugin.json`) has no equivalent, so it deliberately declares none.
