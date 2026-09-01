@@ -28,6 +28,11 @@ trap 'rm -rf "$WORK"' EXIT
 REPO_WITH_RULES="${WORK}/with-rules"
 REPO_NO_RULES="${WORK}/no-rules"
 mkdir -p "${REPO_WITH_RULES}/.actual/rules" "${REPO_NO_RULES}" "${WORK}/empty-bin"
+# Real git repos, so resolve_repo_root's `git rev-parse` branch is deterministic
+# no matter where TMPDIR lives (a TMPDIR nested inside a checkout would otherwise
+# resolve to that outer repo and make the fallback tests flaky).
+git -C "${REPO_WITH_RULES}" init -q
+git -C "${REPO_NO_RULES}" init -q
 cat > "${REPO_WITH_RULES}/.actual/rules/cross-cutting-persistence-abc123.md" <<'EOF'
 # Persistence
 
@@ -68,6 +73,23 @@ run_hook_no_cli() {
       PATH="${WORK}/empty-bin:/usr/bin:/bin" \
       CLAUDE_PROJECT_DIR="$project_dir" \
       bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err"
+  status=$?
+  printf '%s' "$status"
+}
+
+# Run a hook from an explicit working directory, with CLAUDE_PROJECT_DIR set to an
+# arbitrary value. Used to exercise the resolve_repo_root fallback chain, which only
+# consults git/$PWD when CLAUDE_PROJECT_DIR is unset or does not name a directory.
+run_hook_cwd() {
+  local script="$1" payload="$2" project_dir="$3" workdir="$4"
+  shift 4
+  local status
+  ( cd "$workdir" || exit 1
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE \
+        PATH="${TESTS_DIR}/bin:${PATH}" \
+        CLAUDE_PROJECT_DIR="$project_dir" \
+        "$@" \
+        bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
   printf '%s' "$status"
 }
@@ -309,6 +331,44 @@ if [ -z "$missing" ]; then
   pass "SessionStart matcher includes startup, resume, clear, compact, and fork"
 else
   fail "SessionStart matcher missing sources" "matcher=$matcher missing=$missing"
+fi
+
+echo
+echo "=== repo root fallback (bogus CLAUDE_PROJECT_DIR) ==="
+
+BOGUS="${WORK}/does-not-exist/nested/nope"
+
+# A CLAUDE_PROJECT_DIR that does not name a directory must be ignored, not trusted:
+# the hook falls back to the git toplevel of the working directory and still finds
+# the rules there. Regression test for a path typo silently disabling the gate.
+st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$BOGUS" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ "$(decision)" = "deny" ]; then
+  pass "bogus project dir: falls back to the git root and still governs"
+else
+  fail "bogus project dir: fallback did not reach the rules" "status=$st decision=$(decision)"
+fi
+
+# Same bogus value, but the fallback lands somewhere with no rules: degrade quietly.
+st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$BOGUS" "$REPO_NO_RULES" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "bogus project dir, no rules in fallback: silent no-op, no error"
+else
+  fail "bogus project dir should degrade quietly" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+st=$(run_hook_cwd "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$BOGUS" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow)
+if [ "$st" = "0" ] && [ "$(jq -r '.hookSpecificOutput.hookEventName' < "${WORK}/out" 2>/dev/null)" = "SessionStart" ]; then
+  pass "preflight: bogus project dir falls back to the git root"
+else
+  fail "preflight fallback broken" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# An empty CLAUDE_PROJECT_DIR takes the same path as an unset one.
+st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ "$(decision)" = "deny" ]; then
+  pass "empty project dir: falls back to the git root and still governs"
+else
+  fail "empty project dir: fallback did not reach the rules" "status=$st decision=$(decision)"
 fi
 
 echo
