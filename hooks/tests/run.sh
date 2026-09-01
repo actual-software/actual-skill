@@ -296,6 +296,22 @@ else
 fi
 
 echo
+echo "=== SessionStart matcher ==="
+matcher=$(jq -r '.hooks.SessionStart[0].matcher // ""' "${HOOKS_DIR}/hooks.json")
+missing=""
+for src in startup resume clear compact fork; do
+  case "$matcher" in
+    *"$src"*) ;;
+    *) missing="$missing $src" ;;
+  esac
+done
+if [ -z "$missing" ]; then
+  pass "SessionStart matcher includes startup, resume, clear, compact, and fork"
+else
+  fail "SessionStart matcher missing sources" "matcher=$matcher missing=$missing"
+fi
+
+echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
      "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \

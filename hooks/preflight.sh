@@ -8,7 +8,8 @@
 # so it does not spawn actual twice.
 #
 # Silent unless this repository actually has committed rules, so installing the
-# plugin is invisible in unrelated repositories.
+# plugin is invisible in unrelated repositories. Registered for startup, resume,
+# clear, compact, and fork so the reminder is restored after compaction.
 
 set -uo pipefail
 

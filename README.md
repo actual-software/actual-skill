@@ -63,8 +63,9 @@ ln -s ~/.local/share/actual-skill/skills/actual ~/.agents/skills/actual
 
 Installing the plugin registers two hooks, with no further setup:
 
-- **`SessionStart`** — checks that the `actual` CLI is installed and new enough,
-  and says how to fix it if not.
+- **`SessionStart`** (`startup`, `resume`, `clear`, `compact`, `fork`) — checks
+  that the `actual` CLI is installed and new enough, and says how to fix it if
+  not. Compact re-injects the reminder after summarization.
 - **`PreToolUse` on `ExitPlanMode`** — the plan/implementation boundary. The plan is
   checked against the ADR rules committed in `.actual/rules/`, and a conflicting plan
   is blocked before it reaches the approval dialog.

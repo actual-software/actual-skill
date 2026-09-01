@@ -148,7 +148,7 @@ registered automatically on install — there is no manual setup.
 
 | Hook | Event | What it does |
 |------|-------|--------------|
-| `hooks/preflight.sh` | `SessionStart` | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough, once per session |
+| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough. Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
 
 `PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
