@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Scenario stand-in for `actual plan-check` (AK-676, not yet implemented).
+#
+# Unlike hooks/tests/bin/actual, which returns a canned verdict, this one actually
+# READS THE PLAN and decides from its content. That is what makes the demo real:
+# the same hook denies one plan and passes its revision, with no test-mode switch.
+#
+# It is a keyword matcher, not the real judge. It stands in for selection+judging
+# only well enough to exercise the block -> feedback -> revise loop end to end.
+
+set -uo pipefail
+
+LOG="${SCENARIO_LOG:-/tmp/actual-scenario.log}"
+
+if [ "${1:-}" = "--version" ]; then echo "actual 0.3.0-scenario"; exit 0; fi
+
+if [ "${1:-}" != "plan-check" ]; then
+  echo "error: unrecognized subcommand '${1:-}'" >&2; exit 2
+fi
+shift
+
+RULES_DIR=""
+CLAUDE_HOOK=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help) echo "Usage: actual plan-check --claude-hook [--rules-dir <dir>]"; exit 0 ;;
+    --claude-hook) CLAUDE_HOOK=1 ;;
+    --rules-dir) RULES_DIR="${2:-}"; shift ;;
+  esac
+  shift
+done
+
+[ "$CLAUDE_HOOK" -eq 1 ] || { echo "error: scenario stub requires --claude-hook" >&2; exit 2; }
+
+envelope=$(cat)
+
+# --- Resolve the plan text: injected -> planFilePath -> transcript scrape ---
+plan=$(printf '%s' "$envelope" | jq -r '.tool_input.plan // ""')
+if [ -z "$plan" ]; then
+  pf=$(printf '%s' "$envelope" | jq -r '.tool_input.planFilePath // ""')
+  if [ -z "$pf" ]; then
+    tp=$(printf '%s' "$envelope" | jq -r '.transcript_path // ""')
+    [ -n "$tp" ] && [ -f "$tp" ] && pf=$(jq -r 'select(.attachment.type=="plan_mode") | .attachment.planFilePath' "$tp" 2>/dev/null | tail -1)
+  fi
+  [ -n "$pf" ] && [ -f "$pf" ] && plan=$(cat "$pf")
+fi
+
+# Count prior rounds. `grep -c` prints 0 AND exits 1 on an existing-but-empty file,
+# so a naive `|| echo 0` yields "0\n0" and breaks the arithmetic. Be explicit.
+prior=0
+if [ -f "$LOG" ]; then
+  prior=$(grep -c '^ROUND' "$LOG" 2>/dev/null | tr -cd '0-9')
+  [ -n "$prior" ] || prior=0
+fi
+round=$((prior + 1))
+{
+  echo "ROUND $round  $(date '+%H:%M:%S')  plan_chars=${#plan}  rules_dir=${RULES_DIR:-<none>}"
+} >> "$LOG"
+
+emit_allow() {
+  echo "  verdict=conforming" >> "$LOG"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Plan conforms to R-001, R-002, R-003."}}\n'
+  exit 0
+}
+
+if [ -z "$plan" ]; then
+  echo "  verdict=unresolvable-plan (allowing)" >> "$LOG"
+  printf '{"systemMessage":"actual plan-check could not resolve the plan text; this plan was not governed."}\n'
+  exit 0
+fi
+
+# --- Judge: does the plan put SQL / the pool / direct queries in a handler? ---
+offending=$(printf '%s' "$plan" \
+  | grep -inE 'raw sql|direct sql|sql (query|join)|\bjoin\b.*\bquer|db/pool|pool\.query|\bquery\(|SELECT .*FROM|inline .*quer|quer.*(directly|in the handler)|in the handler.*quer' \
+  | head -4)
+
+if [ -n "$offending" ]; then
+  rule_stmt="All persistence goes through the repository layer in src/repositories/. Handlers MUST NOT compose SQL, call query(), or import src/db/pool directly."
+  if [ -n "$RULES_DIR" ] && [ -d "$RULES_DIR" ]; then
+    extracted=$(grep -h -A3 '^\*\*R-001\*\*' "$RULES_DIR"/*.md 2>/dev/null | tr '\n' ' ' | sed 's/\*\*R-001\*\* MUST: //; s/  */ /g; s/ *### .*//')
+    [ -n "$extracted" ] && rule_stmt="$extracted"
+  fi
+
+  spans=$(printf '%s' "$offending" | sed 's/^/    plan line /')
+  echo "  verdict=conflicting R-001" >> "$LOG"
+  printf '%s\n' "$offending" | sed 's/^/    span: /' >> "$LOG"
+
+  reason=$(printf 'BLOCKED by Actual plan-stage governance.\n\nConflicting rule: R-001 (MUST) — Data Access Layering\n  %s\n\nConflicting portion of your plan:\n%s\n\nHow to resolve: add a named function to src/repositories/ that encapsulates the query, and have the handler call it. R-003 prefers a NEW repository function over widening an existing one. Revise the plan and call ExitPlanMode again.\n' \
+    "$rule_stmt" "$spans")
+
+  jq -nc --arg r "$reason" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
+fi
+
+emit_allow

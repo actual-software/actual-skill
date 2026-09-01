@@ -1,0 +1,1 @@
+Add a `GET /users/:id/orders` endpoint that returns the user's orders along with their total spend. For performance, do it as a single SQL join across users and orders issued directly in the handler — I don't want two separate repository calls for this.
