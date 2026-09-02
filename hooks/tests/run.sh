@@ -446,6 +446,30 @@ else
     fail "ungoverned worktree inherited another checkout's rules" \
          "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
   fi
+  # Claude Code's OWN worktrees live at <project>/.claude/worktrees/<name>, i.e.
+  # nested INSIDE CLAUDE_PROJECT_DIR. Measured on 2.1.231: the session's cwd moves
+  # there while CLAUDE_PROJECT_DIR stays on the original checkout. A containment
+  # test alone would keep the original root and govern the wrong branch, so the
+  # deeper of the two paths has to win.
+  NESTED_WT="${WT_MAIN}/.claude/worktrees/nested"
+  git -C "$WT_MAIN" worktree add -q -b hook-test-nested "$NESTED_WT" >/dev/null 2>&1
+  if [ ! -d "$NESTED_WT" ]; then
+    fail "could not create a nested worktree fixture" "git worktree add failed"
+  else
+    mkdir -p "${NESTED_WT}/.actual/rules"
+    printf '# nested\n**R-001** MUST: all persistence goes through the repository layer.\n' \
+      > "${NESTED_WT}/.actual/rules/nested-only.md"
+
+    NESTED_CAPTURE="${WORK}/captured-nested.json"
+    st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" \
+         "$WT_MAIN" "$NESTED_WT" ACTUAL_TEST_MODE=deny ACTUAL_TEST_CAPTURE="$NESTED_CAPTURE")
+    if [ "$(argv_after --rules-dir "${NESTED_CAPTURE}.argv")" = "${NESTED_WT}/.actual/rules" ]; then
+      pass "worktree nested under CLAUDE_PROJECT_DIR still governs itself"
+    else
+      fail "nested worktree resolved to the enclosing project root" \
+           "status=$st argv=$(cat "${NESTED_CAPTURE}.argv" 2>/dev/null)"
+    fi
+  fi
 fi
 
 echo

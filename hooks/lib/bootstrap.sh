@@ -37,41 +37,59 @@ is_within() {
 # Resolve the repository root the hook is running against -- the checkout whose
 # .actual/rules/ must govern this decision.
 #
-# CLAUDE_PROJECT_DIR is Claude Code's *original* project root, and it does not
-# follow the session into a git worktree: there it keeps naming the first checkout
-# while the session works in another one, on another branch, with its own rules.
-# Trusting it unconditionally would score a plan against the wrong branch's rules,
-# or skip governance entirely when the original checkout has none.
+# Two signals, neither sufficient alone:
 #
-# So it is preferred only while the session is genuinely working inside it, which
-# keeps the monorepo case intact (Claude Code launched in a subdirectory of a larger
-# repo: cwd is inside CLAUDE_PROJECT_DIR, and that subproject stays the root).
-# Once cwd is elsewhere -- the worktree case -- the git toplevel of the active
-# directory wins. This tracks the hook envelope's `cwd` field without parsing it:
-# Claude Code runs the hook from that directory.
+#   CLAUDE_PROJECT_DIR  Claude Code's project root. It does NOT follow the session
+#                       into a git worktree: it keeps naming the original checkout
+#                       while the session works in another one, on another branch.
+#   git toplevel of cwd The checkout actually being worked in. But when Claude Code
+#                       was launched inside a subdirectory of a larger repository,
+#                       this is the outer repo, not the subproject.
+#
+# When one contains the other, the DEEPER path is the more specific context and wins:
+#
+#   worktree   project=/repo, toplevel=/repo/.claude/worktrees/x  -> the worktree.
+#              Claude Code puts worktrees under the project root, so the active
+#              checkout is nested inside CLAUDE_PROJECT_DIR, not outside it.
+#   monorepo   project=/repo/packages/api, toplevel=/repo         -> the subproject.
+#   ordinary   the two are equal                                  -> either.
+#
+# Otherwise they are unrelated (a worktree created outside the project root, say) and
+# the active checkout under cwd wins. All of this reads cwd rather than the hook
+# envelope's `cwd` field, which would mean parsing JSON; Claude Code runs the hook
+# from that directory, so the two agree.
 resolve_repo_root() {
   local project_dir here git_root
+
   project_dir=$(canonical_dir "${CLAUDE_PROJECT_DIR:-}") || project_dir=""
   here=$(pwd -P 2>/dev/null) || here="$PWD"
 
-  if [ -n "$project_dir" ] && is_within "$project_dir" "$here"; then
+  git_root=$(git rev-parse --show-toplevel 2>/dev/null) || git_root=""
+  if [ -n "$git_root" ]; then
+    git_root=$(canonical_dir "$git_root") || git_root=""
+  fi
+
+  # Only one signal available.
+  if [ -z "$project_dir" ]; then
+    [ -n "$git_root" ] && { printf '%s' "$git_root"; return 0; }
+    printf '%s' "$here"
+    return 0
+  fi
+  if [ -z "$git_root" ]; then
     printf '%s' "$project_dir"
     return 0
   fi
 
-  if git_root=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$git_root" ]; then
+  # Both known: the deeper of the two when nested, else the active checkout.
+  if is_within "$project_dir" "$git_root"; then
     printf '%s' "$git_root"
     return 0
   fi
-
-  # Not a git checkout: an unrelated cwd is no reason to discard a usable project
-  # root, so fall back to it before giving up on cwd.
-  if [ -n "$project_dir" ]; then
+  if is_within "$git_root" "$project_dir"; then
     printf '%s' "$project_dir"
     return 0
   fi
-
-  printf '%s' "$here"
+  printf '%s' "$git_root"
 }
 
 # Directory holding the committed rule files. ACTUAL_RULES_DIR overrides it, which

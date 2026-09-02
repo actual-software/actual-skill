@@ -181,13 +181,30 @@ check is undocumented, so the wrapper drops an `allow` verdict rather than rely 
 
 ### Which repository root is governed
 
-`<repo>` is the checkout the session is actually working in. `CLAUDE_PROJECT_DIR`
-names it in an ordinary session and is used as-is — including when Claude Code was
-launched inside a subdirectory of a larger repository, so a monorepo subproject
-stays the root. But it does **not** follow the session into a git worktree: there it
-keeps pointing at the original checkout. So once the working directory is outside
-`CLAUDE_PROJECT_DIR`, the git toplevel of the working directory wins instead, and
-the active worktree's rules — on its own branch — are the ones enforced.
+`<repo>` is the checkout the session is actually working in. Two signals decide it,
+because neither is sufficient alone. `CLAUDE_PROJECT_DIR` is Claude Code's project
+root, but it does **not** follow the session into a git worktree — it keeps naming
+the original checkout. The git toplevel of the working directory names the active
+checkout, but when Claude Code was launched inside a subdirectory of a larger
+repository it names the outer repo rather than the subproject.
+
+When one contains the other, the **deeper** path wins, because it is the more
+specific context:
+
+| Situation | `CLAUDE_PROJECT_DIR` | git toplevel of cwd | Governed |
+|---|---|---|---|
+| Worktree | `/repo` | `/repo/.claude/worktrees/x` | the worktree |
+| Monorepo subproject | `/repo/packages/api` | `/repo` | the subproject |
+| Ordinary session | `/repo` | `/repo` | either, they agree |
+
+Otherwise the two are unrelated — a worktree created outside the project root, say —
+and the active checkout under the working directory wins.
+
+Measured on Claude Code **2.1.231**: entering a worktree leaves `CLAUDE_PROJECT_DIR`
+on the original checkout and moves the working directory to
+`<project>/.claude/worktrees/<name>`, i.e. **nested inside** that project root. A
+plain "is cwd inside `CLAUDE_PROJECT_DIR`" test therefore keeps the original root and
+governs the wrong branch, which is why the rule is depth rather than containment.
 
 ### Environment variables
 
