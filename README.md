@@ -76,6 +76,10 @@ missing, outdated, or crashing CLI produces a message and no permission decision
 A conforming plan also makes no permission decision, so the user's approval dialog
 still appears. Only an explicit deny from `plan-check` can block.
 
+In a git worktree the rules enforced are the active worktree's, on its own branch:
+`CLAUDE_PROJECT_DIR` stays on the original checkout there, so the hooks fall back to
+the git toplevel of the working directory whenever it lies outside that project root.
+
 Set `ACTUAL_PLAN_GATE=off` to disable them, or `ACTUAL_RULES_DIR` to point them at a
 different rules directory (forwarded to the CLI as `--rules-dir`). Run
 `bash hooks/tests/run.sh` to exercise the hooks locally — no network or CLI

@@ -24,6 +24,10 @@ fail() { printf '  [FAIL] %s\n' "$1"; printf '         %s\n' "${2:-}"; fail_coun
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/actual-hook-tests.XXXXXX") || exit 1
 trap 'rm -rf "$WORK"' EXIT
+# Physical path: on macOS TMPDIR sits under the /var -> /private/var symlink, and the
+# hooks canonicalize the roots they resolve. Comparing a forwarded --rules-dir against
+# a logical path would fail on that symlink alone.
+WORK=$(cd "$WORK" && pwd -P) || exit 1
 
 REPO_WITH_RULES="${WORK}/with-rules"
 REPO_NO_RULES="${WORK}/no-rules"
@@ -50,15 +54,22 @@ for f in "${FIXTURES}"/*; do
   sed -e "s|__FIXTURE_DIR__|${RESOLVED}|g" -e "s|__REPO_ROOT__|${REPO_WITH_RULES}|g" "$f" > "${RESOLVED}/${base}"
 done
 
+# Run a hook the way Claude Code does in an ordinary session: from inside the
+# project directory. Root resolution reads cwd (a worktree keeps CLAUDE_PROJECT_DIR
+# on the original checkout), so a harness that ran hooks from an unrelated cwd would
+# be exercising a configuration Claude Code never produces. Tests that deliberately
+# separate the two use run_hook_cwd.
 run_hook() {
   local script="$1" payload="$2" project_dir="$3"
   shift 3
-  local status
-  env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE \
-      PATH="${TESTS_DIR}/bin:${PATH}" \
-      CLAUDE_PROJECT_DIR="$project_dir" \
-      "$@" \
-      bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err"
+  local status workdir="$PWD"
+  [ -d "$project_dir" ] && workdir="$project_dir"
+  ( cd "$workdir" || exit 1
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE \
+        PATH="${TESTS_DIR}/bin:${PATH}" \
+        CLAUDE_PROJECT_DIR="$project_dir" \
+        "$@" \
+        bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
   printf '%s' "$status"
 }
@@ -68,11 +79,13 @@ run_hook() {
 # test a condition that cannot occur, not a missing CLI.
 run_hook_no_cli() {
   local script="$1" payload="$2" project_dir="$3"
-  local status
-  env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE \
-      PATH="${WORK}/empty-bin:/usr/bin:/bin" \
-      CLAUDE_PROJECT_DIR="$project_dir" \
-      bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err"
+  local status workdir="$PWD"
+  [ -d "$project_dir" ] && workdir="$project_dir"
+  ( cd "$workdir" || exit 1
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE \
+        PATH="${WORK}/empty-bin:/usr/bin:/bin" \
+        CLAUDE_PROJECT_DIR="$project_dir" \
+        bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
   printf '%s' "$status"
 }
@@ -369,6 +382,101 @@ if [ "$st" = "0" ] && [ "$(decision)" = "deny" ]; then
   pass "empty project dir: falls back to the git root and still governs"
 else
   fail "empty project dir: fallback did not reach the rules" "status=$st decision=$(decision)"
+fi
+
+echo
+echo "=== git worktree: the active checkout governs ==="
+
+# Claude Code keeps CLAUDE_PROJECT_DIR on the ORIGINAL checkout after a session
+# enters a git worktree, while running hooks from the worktree itself. The rules
+# that apply are the active worktree's, on its own branch -- never the first
+# checkout's. Regression test for a gate that scored plans against the wrong
+# branch, or skipped governance entirely because the original checkout had none.
+WT_MAIN="${WORK}/wt-main"
+WT_LINKED="${WORK}/wt-linked"
+mkdir -p "$WT_MAIN"
+git -C "$WT_MAIN" init -q
+git -C "$WT_MAIN" -c user.email=hooks@test.invalid -c user.name=hooks \
+    commit -q --allow-empty -m init
+git -C "$WT_MAIN" worktree add -q -b hook-test-branch "$WT_LINKED" >/dev/null 2>&1
+worktree_ready=$?
+
+if [ "$worktree_ready" -ne 0 ] || [ ! -d "$WT_LINKED" ]; then
+  fail "could not create a git worktree fixture" "git worktree add failed"
+else
+  # Both checkouts governed, by different rule files: the worktree's must win.
+  mkdir -p "${WT_MAIN}/.actual/rules" "${WT_LINKED}/.actual/rules"
+  printf '# main\n**R-900** MUST: main checkout rule.\n' \
+    > "${WT_MAIN}/.actual/rules/main-only.md"
+  printf '# worktree\n**R-001** MUST: all persistence goes through the repository layer.\n' \
+    > "${WT_LINKED}/.actual/rules/worktree-only.md"
+
+  WT_CAPTURE="${WORK}/captured-worktree.json"
+  st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" \
+       "$WT_MAIN" "$WT_LINKED" ACTUAL_TEST_MODE=deny ACTUAL_TEST_CAPTURE="$WT_CAPTURE")
+  if [ "$(argv_after --rules-dir "${WT_CAPTURE}.argv")" = "${WT_LINKED}/.actual/rules" ]; then
+    pass "worktree: --rules-dir is the active worktree's, not CLAUDE_PROJECT_DIR's"
+  else
+    fail "worktree: gate forwarded the wrong rules directory" \
+         "status=$st argv=$(cat "${WT_CAPTURE}.argv" 2>/dev/null)"
+  fi
+
+  # The reported failure mode: only the worktree is governed. The gate must still
+  # fire, rather than no-op because the original checkout has no rules.
+  rm -rf "${WT_MAIN}/.actual"
+  st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" \
+       "$WT_MAIN" "$WT_LINKED" ACTUAL_TEST_MODE=deny)
+  if [ "$st" = "0" ] && [ "$(decision)" = "deny" ]; then
+    pass "worktree governed, original checkout not: the gate still fires"
+  else
+    fail "worktree governance was skipped" "status=$st decision=$(decision)"
+  fi
+
+  # The mirror image: the active worktree is ungoverned, so nothing applies. Another
+  # checkout's rules must not be enforced against it.
+  rm -rf "${WT_LINKED}/.actual"
+  mkdir -p "${WT_MAIN}/.actual/rules"
+  printf '# main\n**R-900** MUST: main checkout rule.\n' \
+    > "${WT_MAIN}/.actual/rules/main-only.md"
+  st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" \
+       "$WT_MAIN" "$WT_LINKED" ACTUAL_TEST_MODE=deny)
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+    pass "ungoverned worktree: silent no-op, not the original checkout's rules"
+  else
+    fail "ungoverned worktree inherited another checkout's rules" \
+         "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+  fi
+fi
+
+echo
+echo "=== monorepo subproject (CLAUDE_PROJECT_DIR below the git root) ==="
+
+# The case CLAUDE_PROJECT_DIR must still win: Claude Code launched inside a
+# subdirectory of a larger repo. cwd is within the project dir, so the subproject
+# stays the root even though the git toplevel is higher up and has no rules.
+MONO="${WORK}/mono"
+MONO_SUB="${MONO}/packages/service"
+mkdir -p "${MONO_SUB}/.actual/rules"
+git -C "$MONO" init -q 2>/dev/null || git init -q "$MONO"
+printf '# subproject\n**R-001** MUST: all persistence goes through the repository layer.\n' \
+  > "${MONO_SUB}/.actual/rules/subproject.md"
+
+st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" \
+     "$MONO_SUB" "$MONO_SUB" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ "$(decision)" = "deny" ]; then
+  pass "monorepo: CLAUDE_PROJECT_DIR below the git root still governs"
+else
+  fail "monorepo subproject root was discarded" "status=$st decision=$(decision)"
+fi
+
+# Same subproject root, but the hook runs from a nested directory inside it.
+mkdir -p "${MONO_SUB}/src/handlers"
+st=$(run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" \
+     "$MONO_SUB" "${MONO_SUB}/src/handlers" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ "$(decision)" = "deny" ]; then
+  pass "monorepo: a nested cwd inside the project dir keeps that root"
+else
+  fail "nested cwd lost the project root" "status=$st decision=$(decision)"
 fi
 
 echo

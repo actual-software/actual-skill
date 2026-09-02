@@ -169,6 +169,16 @@ or exit 2) can block a plan. A conforming plan must print no `permissionDecision
 field is version-fragile on `ExitPlanMode` and can skip the user's plan-approval
 dialog. The wrapper will drop an `allow` verdict if one is returned.
 
+### Which repository root is governed
+
+`<repo>` is the checkout the session is actually working in. `CLAUDE_PROJECT_DIR`
+names it in an ordinary session and is used as-is — including when Claude Code was
+launched inside a subdirectory of a larger repository, so a monorepo subproject
+stays the root. But it does **not** follow the session into a git worktree: there it
+keeps pointing at the original checkout. So once the working directory is outside
+`CLAUDE_PROJECT_DIR`, the git toplevel of the working directory wins instead, and
+the active worktree's rules — on its own branch — are the ones enforced.
+
 ### Environment variables
 
 | Variable | Effect |

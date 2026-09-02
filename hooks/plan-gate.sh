@@ -46,15 +46,18 @@ fi
 #    and a second spawn is a cold Node boot on the plan boundary. An old CLI's
 #    unknown-subcommand exit 2 is classified below as upgrade + fail-open, not deny.
 #    Pass --rules-dir so the CLI scores the same directory this hook just checked,
-#    including ACTUAL_RULES_DIR. cd to the repo root for any other cwd-relative
-#    CLI discovery; do not rely on cwd for rules.
+#    including ACTUAL_RULES_DIR. Resolve that directory BEFORE the cd: root
+#    resolution reads cwd (see resolve_repo_root), so moving first would ask the
+#    question from a different place than rules_present answered it.
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-plan-gate.XXXXXX") || exit 0
 trap 'rm -f "$stderr_file"' EXIT
 
+dir=$(rules_dir)
+
+# cd to the repo root for any other cwd-relative CLI discovery.
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 
-dir=$(rules_dir)
 verdict=$(printf '%s' "$payload" | actual plan-check --claude-hook --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 

@@ -18,21 +18,60 @@ set -uo pipefail
 
 # --- Repo and rules discovery ---
 
-# Resolve the repository root the hook is running against.
-# CLAUDE_PROJECT_DIR is set by Claude Code; git and $PWD are fallbacks.
+# Canonicalize a directory path -- resolves symlinks and trailing slashes so two
+# paths can be compared as plain strings. Fails for anything that is not a directory.
+canonical_dir() {
+  [ -n "${1:-}" ] || return 1
+  [ -d "$1" ] || return 1
+  (cd -- "$1" 2>/dev/null && pwd -P) || return 1
+}
+
+# True when $2 is $1 itself or a directory beneath it. Both arguments must already
+# be canonical.
+is_within() {
+  local outer="${1%/}" inner="$2"
+  [ -n "$outer" ] || return 0        # "/" contains every absolute path
+  [ "$inner" = "$outer" ] || [ "${inner#"${outer}/"}" != "$inner" ]
+}
+
+# Resolve the repository root the hook is running against -- the checkout whose
+# .actual/rules/ must govern this decision.
+#
+# CLAUDE_PROJECT_DIR is Claude Code's *original* project root, and it does not
+# follow the session into a git worktree: there it keeps naming the first checkout
+# while the session works in another one, on another branch, with its own rules.
+# Trusting it unconditionally would score a plan against the wrong branch's rules,
+# or skip governance entirely when the original checkout has none.
+#
+# So it is preferred only while the session is genuinely working inside it, which
+# keeps the monorepo case intact (Claude Code launched in a subdirectory of a larger
+# repo: cwd is inside CLAUDE_PROJECT_DIR, and that subproject stays the root).
+# Once cwd is elsewhere -- the worktree case -- the git toplevel of the active
+# directory wins. This tracks the hook envelope's `cwd` field without parsing it:
+# Claude Code runs the hook from that directory.
 resolve_repo_root() {
-  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "${CLAUDE_PROJECT_DIR}" ]; then
-    printf '%s' "${CLAUDE_PROJECT_DIR}"
+  local project_dir here git_root
+  project_dir=$(canonical_dir "${CLAUDE_PROJECT_DIR:-}") || project_dir=""
+  here=$(pwd -P 2>/dev/null) || here="$PWD"
+
+  if [ -n "$project_dir" ] && is_within "$project_dir" "$here"; then
+    printf '%s' "$project_dir"
     return 0
   fi
 
-  local root
-  if root=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$root" ]; then
-    printf '%s' "$root"
+  if git_root=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$git_root" ]; then
+    printf '%s' "$git_root"
     return 0
   fi
 
-  printf '%s' "$PWD"
+  # Not a git checkout: an unrelated cwd is no reason to discard a usable project
+  # root, so fall back to it before giving up on cwd.
+  if [ -n "$project_dir" ]; then
+    printf '%s' "$project_dir"
+    return 0
+  fi
+
+  printf '%s' "$here"
 }
 
 # Directory holding the committed rule files. ACTUAL_RULES_DIR overrides it, which
