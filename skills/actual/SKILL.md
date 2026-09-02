@@ -155,6 +155,13 @@ registered automatically on install — there is no manual setup.
 user's plan-approval dialog, so a blocked plan is revised by the agent rather than
 shown to the human as an approvable artifact.
 
+This ordering is **observed behavior, not a documented contract**. It was verified on
+Claude Code **2.1.231**: a hook deny on `ExitPlanMode` logs `ExitPlanMode tool
+permission denied`, the agent receives the reason and revises, and no approval dialog
+is shown. Re-check it when moving to a materially newer Claude Code. Enforcement does
+not depend on it — a deny blocks the call whenever the hook runs — but the "the human
+never sees a blocked plan" property does.
+
 ### When the hooks do nothing
 
 Both hooks are silent no-ops — no output, exit 0 — unless the repository has at
@@ -165,9 +172,12 @@ The gate also never hard-fails. If the CLI is missing, too old, or crashes, the 
 reports the problem and **makes no permission decision**, leaving the normal approval
 flow intact. Only an explicit **deny** from `plan-check` (JSON `permissionDecision`
 or exit 2) can block a plan. A conforming plan must print no `permissionDecision`
-(empty stdout is the contract). Never emit `permissionDecision: "allow"`: that
-field is version-fragile on `ExitPlanMode` and can skip the user's plan-approval
-dialog. The wrapper will drop an `allow` verdict if one is returned.
+(empty stdout is the contract). Never emit `permissionDecision: "allow"`: it is a
+**grant**, and a gate has no business approving a plan on the user's behalf. On
+Claude Code 2.1.231 an `allow` does not actually bypass the plan-approval dialog —
+Claude Code logs `Hook returned 'allow' for ExitPlanMode, but ask rule/safety check
+requires full permission pipeline` and prompts the user anyway — but that safety
+check is undocumented, so the wrapper drops an `allow` verdict rather than rely on it.
 
 ### Which repository root is governed
 

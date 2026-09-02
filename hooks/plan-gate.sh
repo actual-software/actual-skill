@@ -3,7 +3,9 @@
 #
 # Fires when the agent calls ExitPlanMode -- after the plan has been written, and
 # before the user's plan-approval dialog. A denied plan therefore never reaches the
-# human as an approvable artifact; the agent revises first.
+# human as an approvable artifact; the agent revises first. That ordering is observed
+# behavior, not a documented contract: verified on Claude Code 2.1.231, where a hook
+# deny logs "ExitPlanMode tool permission denied" and no approval dialog is shown.
 #
 # This wrapper does only cheap shell checks and then hands the raw hook envelope to
 # `actual plan-check --claude-hook`, which resolves the plan text and returns the
@@ -13,8 +15,8 @@
 #
 # Fail-open contract: every unexpected condition exits 0 and leaves the normal
 # permission flow untouched. Only an explicit deny (JSON or exit 2) can block.
-# A conforming plan must not emit permissionDecision:allow -- that field can skip
-# the user's plan-approval dialog. Pass = empty stdout, or JSON with no decision.
+# A conforming plan must not emit permissionDecision:allow -- a gate does not grant
+# approval on the user's behalf. Pass = empty stdout, or JSON with no decision.
 
 set -uo pipefail
 

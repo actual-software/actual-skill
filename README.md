@@ -68,7 +68,9 @@ Installing the plugin registers two hooks, with no further setup:
   not. Compact re-injects the reminder after summarization.
 - **`PreToolUse` on `ExitPlanMode`** — the plan/implementation boundary. The plan is
   checked against the ADR rules committed in `.actual/rules/`, and a conflicting plan
-  is blocked before it reaches the approval dialog.
+  is blocked before it reaches the approval dialog. Verified on Claude Code 2.1.231;
+  the ordering is observed behavior rather than a documented contract, so it is worth
+  re-checking on a materially newer release.
 
 Both hooks are **silent no-ops in any repository without `.actual/rules/`**, so
 installing the plugin does not affect unrelated work. They also never hard-fail: a

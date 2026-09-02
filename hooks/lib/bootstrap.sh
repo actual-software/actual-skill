@@ -193,10 +193,15 @@ is_allow_decision() {
 #
 # Deliberately emits no `permissionDecision`. Per the hook protocol a hook "can deny
 # the call, but staying silent doesn't approve it" -- so omitting the field leaves the
-# normal permission flow intact. `permissionDecision: "allow"` is never correct on
-# this gate: it is version-fragile on ExitPlanMode and can skip the user's
-# plan-approval dialog. A conforming plan must stay silent on that field. Only
-# `deny` (or exit 2) may block.
+# normal permission flow intact. A conforming plan must stay silent on that field;
+# only `deny` (or exit 2) may block.
+#
+# `allow` is never correct on this gate, because it is a grant: a gate has no business
+# approving a plan on the user's behalf. Measured on Claude Code 2.1.231, an `allow`
+# here does NOT in fact bypass the plan-approval dialog -- Claude Code logs "Hook
+# returned 'allow' for ExitPlanMode, but ask rule/safety check requires full
+# permission pipeline" and prompts the user anyway. That upstream safety check is
+# undocumented, so this wrapper drops an `allow` verdict rather than depending on it.
 #
 # systemMessage is emitted both top level and inside hookSpecificOutput because its
 # documented location has moved between versions; unknown fields are ignored.
