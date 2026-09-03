@@ -65,13 +65,16 @@ status=$?
 
 case "$status" in
   0)
-    # Forward a well-formed verdict, except permissionDecision:allow. That field
-    # is never valid here: a conforming plan must leave the approval dialog intact.
-    # The CLI contract is deny-or-silent; this guard is defense in depth.
+    # Forward a verdict only when it is a recognized deny. permissionDecision:allow
+    # is never valid here -- a conforming plan must leave the approval dialog
+    # intact -- and the CLI contract is deny-or-silent, so this is defense in depth.
+    # Allowlisting the one shape this gate may act on, rather than blocklisting the
+    # one it must not, keeps every unrecognized shape (an escaped "allow", garbage,
+    # a future field) on the fail-safe side: no decision, not a forwarded verdict.
     trimmed=${verdict#"${verdict%%[![:space:]]*}"}
     trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
     if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ] \
-       && ! is_allow_decision "$trimmed"; then
+       && is_deny_decision "$trimmed"; then
       printf '%s\n' "$verdict"
     fi
     exit 0

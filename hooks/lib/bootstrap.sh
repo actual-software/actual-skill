@@ -195,16 +195,21 @@ json_escape() {
   printf '%s' "$s"
 }
 
-# True when a JSON object names permissionDecision:allow. Whitespace-insensitive so
-# pretty-printed CLI output is still caught. A substring match, not a parse: enough
-# to refuse the unsafe shape without jq/python.
-is_allow_decision() {
+# True when a JSON object names permissionDecision:deny. Whitespace-insensitive so
+# pretty-printed CLI output is still caught. A substring match, not a parse -- so
+# plan-gate.sh forwards a verdict only when this recognizes it, never on the absence
+# of some other shape. JSON lets any character be spelled as a \uXXXX escape, which
+# defeats a literal-bytes match; an escaped "allow" that this function fails to
+# recognize as deny is therefore refused (advisory, no decision), not forwarded.
+# That asymmetry is deliberate: the failure mode of this match landing wrong must be
+# fail-safe, and "no decision" is always safe here.
+is_deny_decision() {
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}
   s=${s//$'\t'/}
   s=${s//$'\r'/}
-  [ "${s#*\"permissionDecision\":\"allow\"}" != "$s" ]
+  [ "${s#*\"permissionDecision\":\"deny\"}" != "$s" ]
 }
 
 # Advisory for a PreToolUse hook that is NOT making a permission decision.

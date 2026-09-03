@@ -193,6 +193,17 @@ else
   fail "allow must not be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
 fi
 
+# \uXXXX-escaped "allow": the literal bytes "permissionDecision":"allow" never
+# appear, so a blocklist for that exact string would miss it. is_deny_decision is
+# an allowlist for "deny" instead, so this is refused the same way as any other
+# unrecognized shape -- no decision, verdict not forwarded.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow-escaped)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && [ ! -s "${WORK}/out" ]; then
+  pass "escaped allow verdict is not forwarded (allowlist, not a literal-bytes blocklist)"
+else
+  fail "escaped allow must not be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
 echo
 echo "=== plan-gate: envelope passthrough ==="
 # Three recorded ExitPlanMode shapes. The wrapper must forward each intact;
