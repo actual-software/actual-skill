@@ -64,6 +64,7 @@ release.
 | `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
 | `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
+| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
 
 ## Platform Identity & Advisor
 
@@ -138,6 +139,130 @@ Scope behavior is version-dependent:
 Always inspect `actual advisor --help` before using the newer scope workflow.
 
 > For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
+
+## Plan-Stage Governance (Claude Code hooks)
+
+This plugin ships Claude Code hooks that check an implementation plan against the
+ADR rules committed in the repository **before** implementation begins. They are
+registered automatically on install — there is no manual setup.
+
+| Hook | Event | What it does |
+|------|-------|--------------|
+| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough. Re-runs after compact so the reminder survives summarization |
+| `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
+
+`PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
+user's plan-approval dialog, so a blocked plan is revised by the agent rather than
+shown to the human as an approvable artifact.
+
+This ordering is **observed behavior, not a documented contract**. It was verified on
+Claude Code **2.1.231**: a hook deny on `ExitPlanMode` logs `ExitPlanMode tool
+permission denied`, the agent receives the reason and revises, and no approval dialog
+is shown. Re-check it when moving to a materially newer Claude Code. Enforcement does
+not depend on it — a deny blocks the call whenever the hook runs — but the "the human
+never sees a blocked plan" property does.
+
+### When the hooks do nothing
+
+Both hooks are silent no-ops — no output, exit 0 — unless the repository has at
+least one `*.md` file in `.actual/rules/`. Installing the plugin therefore has no
+effect on repositories that are not governed by Actual.
+
+The gate also never hard-fails. If the CLI is missing, too old, or crashes, the hook
+reports the problem and **makes no permission decision**, leaving the normal approval
+flow intact. Only an explicit **deny** from `plan-check` (JSON `permissionDecision`
+or exit 2) can block a plan. A conforming plan must print no `permissionDecision`
+(empty stdout is the contract). Never emit `permissionDecision: "allow"`: it is a
+**grant**, and a gate has no business approving a plan on the user's behalf. On
+Claude Code 2.1.231 an `allow` does not actually bypass the plan-approval dialog —
+Claude Code logs `Hook returned 'allow' for ExitPlanMode, but ask rule/safety check
+requires full permission pipeline` and prompts the user anyway — but that safety
+check is undocumented, so the wrapper drops an `allow` verdict rather than rely on it.
+
+### Which repository root is governed
+
+`<repo>` is the checkout the session is actually working in. Two signals decide it,
+because neither is sufficient alone. `CLAUDE_PROJECT_DIR` is Claude Code's project
+root, but it does **not** follow the session into a git worktree — it keeps naming
+the original checkout. The git toplevel of the working directory names the active
+checkout, but when Claude Code was launched inside a subdirectory of a larger
+repository it names the outer repo rather than the subproject.
+
+When one contains the other, the **deeper** path wins, because it is the more
+specific context:
+
+| Situation | `CLAUDE_PROJECT_DIR` | git toplevel of cwd | Governed |
+|---|---|---|---|
+| Worktree | `/repo` | `/repo/.claude/worktrees/x` | the worktree |
+| Monorepo subproject | `/repo/packages/api` | `/repo` | the subproject |
+| Ordinary session | `/repo` | `/repo` | either, they agree |
+
+Otherwise the two are unrelated — a worktree created outside the project root, say —
+and the active checkout under the working directory wins.
+
+Measured on Claude Code **2.1.231**: entering a worktree leaves `CLAUDE_PROJECT_DIR`
+on the original checkout and moves the working directory to
+`<project>/.claude/worktrees/<name>`, i.e. **nested inside** that project root. A
+plain "is cwd inside `CLAUDE_PROJECT_DIR`" test therefore keeps the original root and
+governs the wrong branch, which is why the rule is depth rather than containment.
+
+### Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `ACTUAL_PLAN_GATE=off` | Disable both hooks entirely |
+| `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). The hook forwards the resolved path to the CLI as `--rules-dir`; `plan-check` must honor that flag rather than rediscovering rules from cwd |
+
+### `--claude-hook` plan resolution
+
+The wrapper does not parse the hook envelope. `actual plan-check --claude-hook`
+must resolve plan text itself, in this order, and stop at the first hit:
+
+1. **`tool_input.plan`** — non-empty string. Current Claude Code injects the plan
+   into the envelope before hooks run, even when the model's literal input was
+   empty. Older builds also put the plan here.
+2. **`tool_input.planFilePath`** — set and readable. Same injection; no transcript
+   I/O.
+3. **Transcript fallback** — only if both of those are missing: `prompt_id` +
+   `transcript_path` → the `plan_mode` attachment → `planFilePath`. Do not scrape
+   the transcript when (1) or (2) already produced the plan.
+4. If none of those work: fail open (notice, no `permissionDecision`).
+
+The hook always invokes `actual plan-check --claude-hook --rules-dir <dir>`,
+where `<dir>` is `ACTUAL_RULES_DIR` if set, otherwise `<repo>/.actual/rules`.
+`plan-check` must score that directory and must not ignore the flag in favor of
+cwd. `--help` should list `--rules-dir`.
+
+Stdout must be exactly one JSON object, or empty. Logs go to stderr. A line
+before the JSON makes the wrapper drop a deny; `{...}` that is not valid hook
+JSON is forwarded and Claude Code reports a hook error.
+
+Fixtures under `hooks/tests/fixtures/` encode the three envelopes:
+
+| Fixture | Shape |
+|---------|--------|
+| `pretooluse-plan-injected.json` | Current: `tool_input.plan` and `tool_input.planFilePath` |
+| `pretooluse-plan-inline.json` | Legacy: plan in `tool_input.plan` only |
+| `pretooluse-plan-file.json` | Legacy: empty `tool_input`; plan only via transcript |
+
+### Requirements
+
+`actual plan-check` is only present in newer CLI builds. On an older CLI the hook
+emits an upgrade message instead of a flag error — check with:
+
+```bash
+actual plan-check --help
+```
+
+### Testing the hooks
+
+```bash
+bash hooks/tests/run.sh
+```
+
+Runs the full decision matrix (no-op, missing binary, old CLI, pass, deny, crash)
+against recorded hook payloads and a fake CLI. No network and no real `actual`
+install required.
 
 ## Runner Decision Tree
 

@@ -1,0 +1,11 @@
+{
+  "session_id": "test-session-planfile",
+  "prompt_id": "feb8f53b-f97b-4b59-a872-5d0a38b8dd11",
+  "transcript_path": "__FIXTURE_DIR__/transcript-plan-file.jsonl",
+  "cwd": "__REPO_ROOT__",
+  "permission_mode": "plan",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "ExitPlanMode",
+  "tool_input": {},
+  "tool_use_id": "toolu_01TESTPLANFILE"
+}

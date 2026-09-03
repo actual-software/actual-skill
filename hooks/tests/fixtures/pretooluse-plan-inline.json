@@ -1,0 +1,13 @@
+{
+  "session_id": "test-session-inline",
+  "prompt_id": "b856b7bf-d38e-4f23-a6ae-700facdb9068",
+  "transcript_path": "__FIXTURE_DIR__/transcript-plan-inline.jsonl",
+  "cwd": "__REPO_ROOT__",
+  "permission_mode": "plan",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "ExitPlanMode",
+  "tool_input": {
+    "plan": "# Add a caching layer\n\n## Context\n\nRead-heavy endpoints re-query on every request.\n\n## Approach\n\nAdd a Redis cache in front of the user repository."
+  },
+  "tool_use_id": "toolu_01TESTINLINE"
+}

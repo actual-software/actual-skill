@@ -1,0 +1,14 @@
+{
+  "session_id": "test-session-injected",
+  "prompt_id": "c3a1d9e0-4b12-4f08-9e7a-2c8f1b0d4a55",
+  "transcript_path": "__FIXTURE_DIR__/transcript-plan-injected.jsonl",
+  "cwd": "__REPO_ROOT__",
+  "permission_mode": "plan",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "ExitPlanMode",
+  "tool_input": {
+    "plan": "# Add a caching layer\n\n## Context\n\nRead-heavy endpoints re-query on every request.\n\n## Approach\n\nAdd a Redis cache in front of the user repository.",
+    "planFilePath": "__FIXTURE_DIR__/plan-file.md"
+  },
+  "tool_use_id": "toolu_01TESTINJECTED"
+}
