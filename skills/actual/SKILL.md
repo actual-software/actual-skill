@@ -176,11 +176,16 @@ conditions:
   A `PreToolUse` hook that could get stuck or wrongly block on its own dependencies
   being unavailable would make the tool itself unreliable for reasons that have
   nothing to do with the plan.
-- **A rules corpus over ~60 individual rules selected for one plan fails open for
-  the whole batch**, not just the overflow — one large document is enough on its
-  own, and several ordinary ones add up just as easily. A broad or vague plan is
-  *more* likely to hit this, not less, since the deterministic selector has no
-  relevance threshold below which it stops adding documents.
+- **A rules corpus over ~60 individual rules selected for one plan is only
+  partially judged** — one large document is enough on its own, and several
+  ordinary ones add up just as easily. A broad or vague plan is *more* likely
+  to hit this, not less, since the deterministic selector has no relevance
+  threshold below which it stops adding documents. This is disclosed, not
+  silent: a deterministically-prioritized prefix of the rules is judged and
+  acted on normally, and every surface (the panel, `--json`'s `partial`
+  field, the hook's deny message, and its otherwise-silent notice) says
+  plainly "N of M rules checked" rather than either reporting the prefix as
+  complete coverage or refusing to check anything at all.
 - **The revision loop's own escape valves are additional, deliberate fail-open
   paths, not enforcement**: the round limit stops blocking a persistently
   unresolved rule specifically so the hook does not get uninstalled, and a human
