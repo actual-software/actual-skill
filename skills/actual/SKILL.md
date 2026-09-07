@@ -64,7 +64,8 @@ release.
 | `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
 | `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
-| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
+| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
+| `actual plan-check-override` | A human explicitly clears a denied rule for a session (never invoked by the agent) | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable), `--reason "<text>"` — all required |
 
 ## Platform Identity & Advisor
 
@@ -253,6 +254,31 @@ emits an upgrade message instead of a flag error — check with:
 ```bash
 actual plan-check --help
 ```
+
+### The revision loop, overrides, and round limits
+
+A denied plan is not a dead end: the agent revises and calls `ExitPlanMode`
+again, which fires the hook again. `plan-check` tracks this per Claude Code
+`session_id` (state lives under the user's config directory, never inside the
+governed repo):
+
+- **Cleared rules stay cleared.** Once a rule is judged conforming in a
+  session, it is never sent to the judge again for that session — a later
+  round cannot re-flag it, even if the judge would otherwise be
+  non-deterministic about it.
+- **An explicit, recorded override.** A human — never the agent — can run
+  `actual plan-check-override --session <id> --rule <doc-slug>::<rule-id>
+  --reason "<why>"` directly. The deny message's last line gives this exact
+  command with the session id already filled in. An overridden rule is
+  excluded from judging from then on, and every subsequent round says so in a
+  non-blocking notice — an override is visible, never a silent bypass.
+- **A round limit.** After `--max-rounds` (default 3, or
+  `ACTUAL_PLAN_CHECK_MAX_ROUNDS`) real judge calls still deny the same
+  session, the gate stops blocking rather than denying indefinitely. This
+  pass is not silent either: the hook emits a loud notice, and both an
+  override and a round-limit pass are appended to
+  `~/.actualai/actual/plan-check-overrides.log` (JSONL, one line per event)
+  for a durable, inspectable trace.
 
 ### Testing the hooks
 
