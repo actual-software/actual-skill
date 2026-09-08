@@ -204,6 +204,16 @@ else
   fail "escaped allow must not be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
 fi
 
+# A bare notice (partial coverage / round-limit disclosure) carries no
+# permissionDecision at all, so it must reach stdout even though it isn't a deny --
+# dropping it would silently discard the safety disclosure SKILL.md promises.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "Partial coverage" "${WORK}/out"; then
+  pass "CLI notice (no permission decision) is forwarded to stdout"
+else
+  fail "bare notice must be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
 echo
 echo "=== plan-gate: envelope passthrough ==="
 # Three recorded ExitPlanMode shapes. The wrapper must forward each intact;

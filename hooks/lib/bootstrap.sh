@@ -212,6 +212,34 @@ is_deny_decision() {
   [ "${s#*\"permissionDecision\":\"deny\"}" != "$s" ]
 }
 
+# True when a JSON object names a systemMessage field at all (any value). Used
+# together with has_permission_decision below to allowlist a second shape
+# plan-gate.sh may forward: a bare notice, such as partial-coverage or
+# round-limit disclosure, that carries no permission decision of any kind.
+has_system_message() {
+  local s="$1"
+  s=${s// /}
+  s=${s//$'\n'/}
+  s=${s//$'\t'/}
+  s=${s//$'\r'/}
+  [ "${s#*\"systemMessage\":}" != "$s" ]
+}
+
+# True when a JSON object names a permissionDecision field at all, regardless of
+# its value. Deliberately broader than is_deny_decision: a verdict that carries
+# any permissionDecision -- deny (already forwarded on its own), allow, or an
+# escaped/unrecognized value -- must never additionally be forwarded as a bare
+# notice. Fail-safe means the notice path requires proven absence of this field,
+# not merely a failed match against "allow" or "deny".
+has_permission_decision() {
+  local s="$1"
+  s=${s// /}
+  s=${s//$'\n'/}
+  s=${s//$'\t'/}
+  s=${s//$'\r'/}
+  [ "${s#*\"permissionDecision\":}" != "$s" ]
+}
+
 # Advisory for a PreToolUse hook that is NOT making a permission decision.
 #
 # Deliberately emits no `permissionDecision`. Per the hook protocol a hook "can deny

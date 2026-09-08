@@ -65,17 +65,26 @@ status=$?
 
 case "$status" in
   0)
-    # Forward a verdict only when it is a recognized deny. permissionDecision:allow
-    # is never valid here -- a conforming plan must leave the approval dialog
-    # intact -- and the CLI contract is deny-or-silent, so this is defense in depth.
-    # Allowlisting the one shape this gate may act on, rather than blocklisting the
-    # one it must not, keeps every unrecognized shape (an escaped "allow", garbage,
-    # a future field) on the fail-safe side: no decision, not a forwarded verdict.
+    # Forward a verdict only when it is one of two recognized, allowlisted shapes.
+    # permissionDecision:allow is never valid here -- a conforming plan must leave
+    # the approval dialog intact -- and the CLI contract is deny-or-notice-or-silent,
+    # so this is defense in depth. Allowlisting the shapes this gate may act on,
+    # rather than blocklisting the ones it must not, keeps every unrecognized shape
+    # (an escaped "allow", garbage, a future field) on the fail-safe side: no
+    # decision, not a forwarded verdict.
     trimmed=${verdict#"${verdict%%[![:space:]]*}"}
     trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
-    if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ] \
-       && is_deny_decision "$trimmed"; then
-      printf '%s\n' "$verdict"
+    if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ]; then
+      if is_deny_decision "$trimmed"; then
+        printf '%s\n' "$verdict"
+      elif has_system_message "$trimmed" && ! has_permission_decision "$trimmed"; then
+        # A bare notice -- partial-coverage or round-limit disclosure, for
+        # example -- carries no permission decision at all, so forwarding it
+        # cannot affect the approval dialog. Requiring proven absence of
+        # permissionDecision (not just a non-deny value) keeps this on the
+        # same fail-safe footing as the deny allowlist above.
+        printf '%s\n' "$verdict"
+      fi
     fi
     exit 0
     ;;
