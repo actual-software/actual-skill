@@ -64,7 +64,8 @@ release.
 | `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
 | `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
-| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
+| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
+| `actual plan-check-override` | A human explicitly clears a denied rule for a session (refuses to run non-interactively; never invoked by the agent) | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable), `--reason "<text>"` — all required; `--repo`/`--rules-dir` optional, defaulting to the current directory |
 
 ## Platform Identity & Advisor
 
@@ -162,6 +163,41 @@ is shown. Re-check it when moving to a materially newer Claude Code. Enforcement
 not depend on it — a deny blocks the call whenever the hook runs — but the "the human
 never sees a blocked plan" property does.
 
+### This is an advisory gate, not an enforcement boundary
+
+Worth stating plainly: this raises the cost of an unreviewed change and catches
+oversights before they ship, but it is not a security control, and several
+deliberate design choices mean it fails open rather than blocking under real-world
+conditions:
+
+- **Any infrastructure problem fails open** — no `actual` CLI installed, no runner
+  available, the judge call itself failing, no plan text resolvable, no rules
+  directory readable. All of these degrade to a non-blocking notice, never a deny.
+  A `PreToolUse` hook that could get stuck or wrongly block on its own dependencies
+  being unavailable would make the tool itself unreliable for reasons that have
+  nothing to do with the plan.
+- **A rules corpus over ~60 individual rules selected for one plan is only
+  partially judged** — one large document is enough on its own, and several
+  ordinary ones add up just as easily. A broad or vague plan is *more* likely
+  to hit this, not less, since the deterministic selector has no relevance
+  threshold below which it stops adding documents. This is disclosed, not
+  silent: a deterministically-prioritized prefix of the rules is judged and
+  acted on normally, and every surface (the panel, `--json`'s `partial`
+  field, the hook's deny message, and its otherwise-silent notice) says
+  plainly "N of M rules checked" rather than either reporting the prefix as
+  complete coverage or refusing to check anything at all.
+- **The revision loop's own escape valves are additional, deliberate fail-open
+  paths, not enforcement**: the round limit stops blocking a persistently
+  unresolved rule specifically so the hook does not get uninstalled, and a human
+  can run `actual plan-check-override` to wave a specific rule through outright.
+  Both are recorded (`~/.actualai/actual/plan-check-overrides.log`), which makes
+  them *inspectable*, not enforced.
+
+None of this is a defect — a hook that could hang or wrongly block a tool call
+under infrastructure failure would be worse than one that fails open — but treat
+every deny this plugin produces as a strong nudge with a paper trail, not a
+guarantee nothing gets past it.
+
 ### When the hooks do nothing
 
 Both hooks are silent no-ops — no output, exit 0 — unless the repository has at
@@ -253,6 +289,47 @@ emits an upgrade message instead of a flag error — check with:
 ```bash
 actual plan-check --help
 ```
+
+### The revision loop, overrides, and round limits
+
+A denied plan is not a dead end: the agent revises and calls `ExitPlanMode`
+again, which fires the hook again. `plan-check` tracks this per
+`(session_id, rules_dir)` — not `session_id` alone, since one Claude Code
+conversation can govern more than one repository or monorepo subproject
+(`ACTUAL_RULES_DIR`), and those commonly share synced rule slugs from the same
+ADR bank. State lives under the user's config directory, never inside the
+governed repo.
+
+- **A `requires_decision` verdict blocks exactly like a real conflict.** A
+  plan the judge classifies as *deliberately* superseding a rule is not
+  automatically believed — that classification is model output, not a
+  recorded human decision — so it is denied the same way an outright
+  violation is, not just noted and allowed to proceed.
+- **Cleared rules stay cleared — for the plan text that earned it.** Once a
+  rule is judged conforming against a specific plan, it is never sent to the
+  judge again *for that same plan text* in this session — a later round
+  cannot re-flag it, even if the judge would otherwise be non-deterministic
+  about it. Edit the plan at all and the rule is judged fresh; a clearance is
+  never a standing pass regardless of what the plan says later.
+- **An explicit, recorded override.** A human — never the agent — runs
+  `actual plan-check-override --session <id> --rule <doc-slug>::<rule-id>
+  --reason "<why>"` directly, from an interactive terminal (it refuses to run
+  non-interactively, since the whole point is that this is a human action).
+  The deny message names the session id but deliberately does not hand back a
+  ready-to-paste invocation — run `actual plan-check-override --help` for the
+  exact flags, and pass `--repo`/`--rules-dir` if you are not standing in the
+  same repo the denial came from. An overridden rule is excluded from judging
+  from then on regardless of plan text, and every subsequent round says so in
+  a non-blocking notice — an override is visible, never a silent bypass.
+- **A round limit, tracked per rule.** After `--max-rounds` (default 3, or
+  `ACTUAL_PLAN_CHECK_MAX_ROUNDS`) denials of the *same rule*, the gate stops
+  blocking on that rule specifically, rather than denying indefinitely. A
+  rule that has exhausted its own count never exempts a different,
+  still-fresh conflict in the same round — the whole call stays denied until
+  every currently-blocking rule has individually hit its limit. This pass is
+  not silent either: the hook emits a loud notice, and both an override and a
+  round-limit pass are appended to `~/.actualai/actual/plan-check-overrides.log`
+  (JSONL, one line per event) for a durable, inspectable trace.
 
 ### Testing the hooks
 

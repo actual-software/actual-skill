@@ -20,7 +20,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/plan-gate.sh",
-            "timeout": 120,
+            "timeout": 180,
             "statusMessage": "Checking plan against architecture rules..."
           }
         ]
