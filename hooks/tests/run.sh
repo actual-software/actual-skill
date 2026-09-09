@@ -214,6 +214,18 @@ else
   fail "bare notice must be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
 fi
 
+# A systemMessage alongside permissionDecision:allow, but with the key \uXXXX-escaped
+# so the literal bytes "permissionDecision": never appear. has_system_message is true
+# and a literal-bytes has_permission_decision check alone would be fooled into
+# treating this as a decision-free notice and forwarding it -- which Claude Code's
+# real JSON parser then decodes back to permissionDecision:allow. Must be refused.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice-escaped-key)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && [ ! -s "${WORK}/out" ]; then
+  pass "notice with an escaped permissionDecision key is not forwarded"
+else
+  fail "escaped-key notice must not be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
 echo
 echo "=== plan-gate: envelope passthrough ==="
 # Three recorded ExitPlanMode shapes. The wrapper must forward each intact;

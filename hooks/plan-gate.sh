@@ -77,12 +77,16 @@ case "$status" in
     if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ]; then
       if is_deny_decision "$trimmed"; then
         printf '%s\n' "$verdict"
-      elif has_system_message "$trimmed" && ! has_permission_decision "$trimmed"; then
+      elif has_system_message "$trimmed" && ! has_permission_decision "$trimmed" \
+           && ! has_unicode_escape "$trimmed"; then
         # A bare notice -- partial-coverage or round-limit disclosure, for
         # example -- carries no permission decision at all, so forwarding it
         # cannot affect the approval dialog. Requiring proven absence of
         # permissionDecision (not just a non-deny value) keeps this on the
-        # same fail-safe footing as the deny allowlist above.
+        # same fail-safe footing as the deny allowlist above. A \uXXXX escape
+        # anywhere means that "proven absence" cannot be trusted -- the field
+        # could be hiding under an escaped key -- so refuse to forward rather
+        # than risk a verdict that decodes to permissionDecision:allow.
         printf '%s\n' "$verdict"
       fi
     fi

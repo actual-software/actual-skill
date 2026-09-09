@@ -207,8 +207,10 @@ effect on repositories that are not governed by Actual.
 The gate also never hard-fails. If the CLI is missing, too old, or crashes, the hook
 reports the problem and **makes no permission decision**, leaving the normal approval
 flow intact. Only an explicit **deny** from `plan-check` (JSON `permissionDecision`
-or exit 2) can block a plan. A conforming plan must print no `permissionDecision`
-(empty stdout is the contract). Never emit `permissionDecision: "allow"`: it is a
+or exit 2) can block a plan. A conforming plan must print no `permissionDecision` --
+either empty stdout, or a bare `systemMessage` notice (a partial-coverage or
+round-limit disclosure, for example) with no decision attached, are both the
+contract. Never emit `permissionDecision: "allow"`: it is a
 **grant**, and a gate has no business approving a plan on the user's behalf. On
 Claude Code 2.1.231 an `allow` does not actually bypass the plan-approval dialog —
 Claude Code logs `Hook returned 'allow' for ExitPlanMode, but ask rule/safety check
