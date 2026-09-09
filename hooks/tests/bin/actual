@@ -8,6 +8,9 @@
 #                       never appear even though it decodes to the same grant
 #   deny         plan-check exists, returns a "deny" verdict at exit 0
 #   deny-exit2   plan-check exists, blocks via exit 2 + stderr (fallback path)
+#   notice       plan-check exists, plan conforms but the CLI has a disclosure to
+#                make (partial coverage / round-limit pass): exit 0, systemMessage
+#                only, no permissionDecision
 #   no-plan-check   an older CLI that does not know the subcommand
 #   crash        plan-check panics
 #   garbage      plan-check exits 0 but prints non-JSON
@@ -89,6 +92,10 @@ case "$mode" in
   deny-exit2)
     echo "R-001 MUST: all persistence goes through the repository layer." >&2
     exit 2
+    ;;
+  notice)
+    printf '{"systemMessage":"Partial coverage: 60 of 118 rules checked for this plan.","hookSpecificOutput":{"hookEventName":"PreToolUse","systemMessage":"Partial coverage: 60 of 118 rules checked for this plan."}}\n'
+    exit 0
     ;;
   crash)
     echo "thread 'main' panicked at src/plan_check.rs:42" >&2
