@@ -243,9 +243,12 @@ has_permission_decision() {
 # True when the payload contains a \uXXXX escape anywhere. JSON permits spelling any
 # character this way, which is exactly what defeats the literal-bytes matching above:
 # a payload can decode to "permissionDecision":"allow" while never containing those
-# literal bytes (escape the key, the value, or both). has_permission_decision's
-# "proven absence" cannot be trusted against such a payload, so plan-gate.sh must
-# not treat it as a decision-free notice just because the literal match failed.
+# literal bytes (escape the key, the value, or both) -- and, on a duplicate key,
+# whichever decoder reads it last wins, so an escaped duplicate can silently override
+# even a literal "deny". Neither is_deny_decision's nor has_permission_decision's
+# match can be trusted against such a payload, so plan-gate.sh must gate both the
+# deny and the notice branch on this, not treat a failed literal match as proof of
+# anything.
 has_unicode_escape() {
   local s="$1"
   s=${s// /}
