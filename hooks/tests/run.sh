@@ -194,12 +194,12 @@ else
 fi
 
 # \uXXXX-escaped "allow": the literal bytes "permissionDecision":"allow" never
-# appear, so a blocklist for that exact string would miss it. is_deny_decision is
-# an allowlist for "deny" instead, so this is refused the same way as any other
-# unrecognized shape -- no decision, verdict not forwarded.
+# appear, so a blocklist for that exact string would miss it. has_unicode_escape
+# catches the escape itself before is_deny_decision or has_permission_decision are
+# even consulted, so this is refused with a diagnostic, not forwarded.
 st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow-escaped)
-if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && [ ! -s "${WORK}/out" ]; then
-  pass "escaped allow verdict is not forwarded (allowlist, not a literal-bytes blocklist)"
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "escaped allow verdict is not forwarded, and the drop is diagnosed"
 else
   fail "escaped allow must not be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
 fi
@@ -212,6 +212,32 @@ if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "Partial coverage" "
   pass "CLI notice (no permission decision) is forwarded to stdout"
 else
   fail "bare notice must be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
+# A systemMessage alongside permissionDecision:allow, but with the key \uXXXX-escaped
+# so the literal bytes "permissionDecision": never appear. has_system_message is true
+# and a literal-bytes has_permission_decision check alone would be fooled into
+# treating this as a decision-free notice and forwarding it -- which Claude Code's
+# real JSON parser then decodes back to permissionDecision:allow. Must be refused,
+# and the user must be told a verdict was dropped rather than hearing nothing.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice-escaped-key)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "notice with an escaped permissionDecision key is not forwarded, and the drop is diagnosed"
+else
+  fail "escaped-key notice must not be forwarded" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
+# A literal permissionDecision:deny plus a duplicate permissionDecision key spelled
+# with a \uXXXX escape and set to allow. is_deny_decision matches the literal deny
+# bytes, so without gating the deny branch on has_unicode_escape too, this would be
+# forwarded verbatim -- and a decoder resolving the duplicate key last-wins (as
+# Python's json.loads does) reads permissionDecision:allow. The escape check must
+# cover this branch as well, not just the notice branch.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-escaped-key)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "deny verdict with an escaped duplicate key is not forwarded, and the drop is diagnosed"
+else
+  fail "escaped-key deny must not be forwarded verbatim" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
 fi
 
 echo

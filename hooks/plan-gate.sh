@@ -75,7 +75,18 @@ case "$status" in
     trimmed=${verdict#"${verdict%%[![:space:]]*}"}
     trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
     if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ]; then
-      if is_deny_decision "$trimmed"; then
+      if has_unicode_escape "$trimmed"; then
+        # A \uXXXX escape anywhere means none of the literal-bytes matches below
+        # can be trusted: a duplicate, escaped permissionDecision key can ride
+        # alongside a literal "deny" (decoding, on duplicate-key last-wins, to
+        # allow) just as easily as it can hide beside a systemMessage. So this
+        # check gates BOTH branches, not just the notice one -- refuse to
+        # forward the verdict in any shape. Say so rather than dropping it
+        # silently: a disclosure the user never sees is the failure this
+        # hook's fail-open philosophy exists to avoid.
+        emit_pretooluse_notice \
+          "Actual plan governance received a verdict it could not safely interpret (it contained an escaped character sequence); this plan was not checked against .actual/rules/."
+      elif is_deny_decision "$trimmed"; then
         printf '%s\n' "$verdict"
       elif has_system_message "$trimmed" && ! has_permission_decision "$trimmed"; then
         # A bare notice -- partial-coverage or round-limit disclosure, for

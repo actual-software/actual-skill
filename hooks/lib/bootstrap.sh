@@ -240,6 +240,27 @@ has_permission_decision() {
   [ "${s#*\"permissionDecision\":}" != "$s" ]
 }
 
+# True when the payload contains a \uXXXX escape anywhere. JSON permits spelling any
+# character this way, which is exactly what defeats the literal-bytes matching above:
+# a payload can decode to "permissionDecision":"allow" while never containing those
+# literal bytes (escape the key, the value, or both) -- and, on a duplicate key,
+# whichever decoder reads it last wins, so an escaped duplicate can silently override
+# even a literal "deny". Neither is_deny_decision's nor has_permission_decision's
+# match can be trusted against such a payload, so plan-gate.sh must gate both the
+# deny and the notice branch on this, not treat a failed literal match as proof of
+# anything.
+has_unicode_escape() {
+  local s="$1"
+  s=${s// /}
+  s=${s//$'\n'/}
+  s=${s//$'\t'/}
+  s=${s//$'\r'/}
+  case "$s" in
+    *'\u'[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]*) return 0 ;;
+  esac
+  return 1
+}
+
 # Advisory for a PreToolUse hook that is NOT making a permission decision.
 #
 # Deliberately emits no `permissionDecision`. Per the hook protocol a hook "can deny
