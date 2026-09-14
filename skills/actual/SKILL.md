@@ -207,7 +207,10 @@ effect on repositories that are not governed by Actual.
 The gate also never hard-fails. If the CLI is missing, too old, or crashes, the hook
 reports the problem and **makes no permission decision**, leaving the normal approval
 flow intact. Only an explicit **deny** from `plan-check` (JSON `permissionDecision`
-or exit 2) can block a plan. A conforming plan must print no `permissionDecision` --
+or exit 2) can block a plan, and only when the wrapper can read it: a verdict that
+carries a `\uXXXX` escape anywhere, or a duplicate `permissionDecision` key, is
+refused with a notice saying the plan was not checked, because the wrapper matches
+bytes and never parses JSON. A conforming plan must print no `permissionDecision` --
 either empty stdout, or a bare `systemMessage` notice (a partial-coverage or
 round-limit disclosure, for example) with no decision attached, are both the
 contract. Never emit `permissionDecision: "allow"`: it is a

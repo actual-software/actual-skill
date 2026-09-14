@@ -240,6 +240,18 @@ else
   fail "escaped-key deny must not be forwarded verbatim" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
 fi
 
+# A literal permissionDecision:deny plus a second, also literal, permissionDecision
+# key set to allow -- no escape anywhere. is_deny_decision matches the first,
+# literal deny bytes, so without a dedicated duplicate-key guard this would be
+# forwarded verbatim -- and a decoder resolving the duplicate key last-wins (as
+# Claude Code's does) reads permissionDecision:allow.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-duplicate-key)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "deny verdict with a literal duplicate permissionDecision key is not forwarded, and the drop is diagnosed"
+else
+  fail "duplicate-key deny must not be forwarded verbatim" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
 echo
 echo "=== plan-gate: envelope passthrough ==="
 # Three recorded ExitPlanMode shapes. The wrapper must forward each intact;
