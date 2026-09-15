@@ -261,6 +261,25 @@ has_unicode_escape() {
   return 1
 }
 
+# True when the payload names permissionDecision twice in plain bytes, with no
+# escape needed. A decoder resolving duplicate keys last-wins (as Claude Code's
+# does) reads whichever value comes last, so a literal "deny" followed by a
+# second, literal permissionDecision key decodes to that second value even
+# though is_deny_decision's literal-bytes match is satisfied by the first
+# occurrence alone. has_unicode_escape does not catch this -- nothing here is
+# escaped -- so check for the duplicate explicitly, on the same fail-safe
+# footing: cut at the first permissionDecision key and look for a second.
+has_duplicate_permission_decision() {
+  local s="$1"
+  s=${s// /}
+  s=${s//$'\n'/}
+  s=${s//$'\t'/}
+  s=${s//$'\r'/}
+  local rest="${s#*\"permissionDecision\":}"
+  [ "$rest" = "$s" ] && return 1
+  [ "${rest#*\"permissionDecision\":}" != "$rest" ]
+}
+
 # Advisory for a PreToolUse hook that is NOT making a permission decision.
 #
 # Deliberately emits no `permissionDecision`. Per the hook protocol a hook "can deny
