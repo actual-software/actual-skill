@@ -148,6 +148,12 @@ else
   fail "missing binary: expected an offer-to-install instruction" "stdout=$(cat "${WORK}/out")"
 fi
 
+if grep -q "regardless of what else is in progress" "${WORK}/out" && grep -q "your very next reply" "${WORK}/out"; then
+  pass "missing binary: instructs the agent to surface this even mid-task"
+else
+  fail "missing binary: expected the mid-task interrupt instruction" "stdout=$(cat "${WORK}/out")"
+fi
+
 if [ "$(decision)" = "none" ]; then
   pass "missing binary: makes no permission decision"
 else
@@ -165,6 +171,12 @@ if grep -q "Offer to upgrade it now" "${WORK}/out" && grep -q "ask the user for 
   pass "old CLI: instructs the agent to offer upgrading, not just describe it"
 else
   fail "old CLI: expected an offer-to-upgrade instruction" "stdout=$(cat "${WORK}/out")"
+fi
+
+if grep -q "regardless of what else is in progress" "${WORK}/out" && grep -q "your very next reply" "${WORK}/out"; then
+  pass "old CLI: instructs the agent to surface this even mid-task"
+else
+  fail "old CLI: expected the mid-task interrupt instruction" "stdout=$(cat "${WORK}/out")"
 fi
 
 if [ "$(decision)" = "none" ]; then

@@ -159,18 +159,31 @@ is_unrecognized_plan_check() {
 # systemMessage), so ask the agent to actively offer the install rather than passively
 # describe it. It must still ask the user first -- installing a global CLI is a
 # machine-wide change the agent should never make unprompted.
+#
+# additionalContext/systemMessage is advisory, not a directive the agent is forced to
+# act on -- unlike a deny, nothing about the hook protocol makes the agent interrupt
+# what it is already doing to surface this. Observed on Claude Code 2.1.206: dropped
+# into a session already mid-task (a feature plan already underway), a softer "offer
+# to install" phrasing was silently absorbed into context and never mentioned in any
+# reply. The explicit "regardless of what else is in progress" / "in your very next
+# reply" language below exists to fight exactly that -- raising the odds this gets
+# noticed, not guaranteeing it: the fail-open contract means this can never be turned
+# into a real interrupt (a deny) just to make it more reliable.
 install_message() {
   cat <<'EOF'
 Actual plan-stage governance is configured for this repository (.actual/rules/ is
 present), but the `actual` CLI is not on PATH, so plans are not being checked.
 
-Offer to install it now rather than just describing the steps: ask the user for a
-go-ahead, and if they agree, run one of these with the Bash tool:
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to install it now rather than just
+describing the steps -- ask the user for a go-ahead, and if they agree, run one of
+these with the Bash tool:
   npm install -g @actualai/actual
   brew install actual-software/actual/actual
 
 Then verify with: actual --version
-If they decline, don't run anything -- installation stays optional.
+If they decline, don't run anything -- installation stays optional, but still
+acknowledge the request in that reply instead of staying silent about it.
 Docs: https://cli.actual.ai
 EOF
 }
@@ -181,13 +194,16 @@ Actual plan-stage governance is configured for this repository (.actual/rules/ i
 present), but the installed `actual` CLI has no `plan-check` subcommand, so plans
 are not being checked.
 
-Offer to upgrade it now rather than just describing the steps: ask the user for a
-go-ahead, and if they agree, run one of these with the Bash tool:
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to upgrade it now rather than just
+describing the steps -- ask the user for a go-ahead, and if they agree, run one of
+these with the Bash tool:
   npm install -g @actualai/actual@latest
   brew upgrade actual-software/actual/actual
 
 Then verify with: actual plan-check --help
-If they decline, don't run anything -- upgrading stays optional.
+If they decline, don't run anything -- upgrading stays optional, but still
+acknowledge the request in that reply instead of staying silent about it.
 EOF
 }
 
