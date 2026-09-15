@@ -153,16 +153,24 @@ is_unrecognized_plan_check() {
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
+#
+# Phrased as an instruction to the agent, not just information for a human: this
+# text is consumed as hook context (SessionStart additionalContext, or a PreToolUse
+# systemMessage), so ask the agent to actively offer the install rather than passively
+# describe it. It must still ask the user first -- installing a global CLI is a
+# machine-wide change the agent should never make unprompted.
 install_message() {
   cat <<'EOF'
 Actual plan-stage governance is configured for this repository (.actual/rules/ is
 present), but the `actual` CLI is not on PATH, so plans are not being checked.
 
-Install it with one of:
+Offer to install it now rather than just describing the steps: ask the user for a
+go-ahead, and if they agree, run one of these with the Bash tool:
   npm install -g @actualai/actual
   brew install actual-software/actual/actual
 
 Then verify with: actual --version
+If they decline, don't run anything -- installation stays optional.
 Docs: https://cli.actual.ai
 EOF
 }
@@ -173,11 +181,13 @@ Actual plan-stage governance is configured for this repository (.actual/rules/ i
 present), but the installed `actual` CLI has no `plan-check` subcommand, so plans
 are not being checked.
 
-Upgrade with one of:
+Offer to upgrade it now rather than just describing the steps: ask the user for a
+go-ahead, and if they agree, run one of these with the Bash tool:
   npm install -g @actualai/actual@latest
   brew upgrade actual-software/actual/actual
 
 Then verify with: actual plan-check --help
+If they decline, don't run anything -- upgrading stays optional.
 EOF
 }
 

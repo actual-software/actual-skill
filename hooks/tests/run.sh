@@ -142,6 +142,12 @@ else
   fail "missing binary: expected exit 0 + install matrix" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+if grep -q "Offer to install it now" "${WORK}/out" && grep -q "ask the user for a" "${WORK}/out"; then
+  pass "missing binary: instructs the agent to offer installing, not just describe it"
+else
+  fail "missing binary: expected an offer-to-install instruction" "stdout=$(cat "${WORK}/out")"
+fi
+
 if [ "$(decision)" = "none" ]; then
   pass "missing binary: makes no permission decision"
 else
@@ -153,6 +159,12 @@ if [ "$st" = "0" ] && grep -q 'no .plan-check. subcommand' "${WORK}/out"; then
   pass "old CLI: exit 0 with upgrade guidance, not a flag error"
 else
   fail "old CLI: expected exit 0 + upgrade message" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+if grep -q "Offer to upgrade it now" "${WORK}/out" && grep -q "ask the user for a" "${WORK}/out"; then
+  pass "old CLI: instructs the agent to offer upgrading, not just describe it"
+else
+  fail "old CLI: expected an offer-to-upgrade instruction" "stdout=$(cat "${WORK}/out")"
 fi
 
 if [ "$(decision)" = "none" ]; then
@@ -345,15 +357,17 @@ else
 fi
 
 st=$(run_hook_no_cli "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES")
-if [ "$st" = "0" ] && grep -q "brew install actual-software/actual/actual" "${WORK}/out"; then
-  pass "rules + no CLI: install matrix as session context"
+if [ "$st" = "0" ] && grep -q "brew install actual-software/actual/actual" "${WORK}/out" \
+   && grep -q "Offer to install it now" "${WORK}/out"; then
+  pass "rules + no CLI: install matrix as session context, framed as an offer"
 else
   fail "missing-CLI preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-plan-check)
-if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out"; then
-  pass "rules + old CLI: upgrade guidance as session context"
+if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
+   && grep -q "Offer to upgrade it now" "${WORK}/out"; then
+  pass "rules + old CLI: upgrade guidance as session context, framed as an offer"
 else
   fail "old-CLI preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
