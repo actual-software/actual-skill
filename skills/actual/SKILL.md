@@ -19,7 +19,7 @@ Inline knowledge and operational workflows for the actual CLI. Read this file fi
 
 ## CLI Not Installed
 
-If the `actual` binary is not in PATH, **stop and help the user install it** before doing anything else. All commands, pre-flight checks, and diagnostics require the CLI.
+If the `actual` binary is not in PATH, **stop before doing anything else** — all commands, pre-flight checks, and diagnostics require the CLI. Offer to install it rather than just printing the steps: ask using an interactive question tool (e.g. `AskUserQuestion`) so your turn actually pauses for an answer, and don't continue — not even to keep exploring or planning — until the user responds. Mentioning it and continuing anyway isn't the same as asking. If they agree, run the command yourself with the Bash tool; if they decline, leave it at that and resume — installation stays optional, but only once they've actually answered.
 
 Detect with:
 ```bash
@@ -39,7 +39,7 @@ For one-off use without installing globally:
 npx @actualai/actual adr-bot [flags]
 ```
 
-After install, verify: `actual --version`
+After installing (or after the user declines and installs it themselves), verify: `actual --version`
 
 Before using a documented subcommand or flag, verify it exists in the installed
 CLI with `actual --help` or `actual <subcommand> --help`. If it is missing,
