@@ -162,13 +162,22 @@ is_unrecognized_plan_check() {
 #
 # additionalContext/systemMessage is advisory, not a directive the agent is forced to
 # act on -- unlike a deny, nothing about the hook protocol makes the agent interrupt
-# what it is already doing to surface this. Observed on Claude Code 2.1.206: dropped
-# into a session already mid-task (a feature plan already underway), a softer "offer
-# to install" phrasing was silently absorbed into context and never mentioned in any
-# reply. The explicit "regardless of what else is in progress" / "in your very next
-# reply" language below exists to fight exactly that -- raising the odds this gets
-# noticed, not guaranteeing it: the fail-open contract means this can never be turned
-# into a real interrupt (a deny) just to make it more reliable.
+# what it is already doing to surface this. Observed on Claude Code 2.1.206, in two
+# stages:
+#   1. A softer "offer to install" phrasing, dropped into a session already mid-task
+#      (a feature plan already underway), was silently absorbed into context and
+#      never mentioned in any reply.
+#   2. Adding "regardless of what else is in progress" / "in your very next reply"
+#      fixed that -- the agent did mention it -- but then proceeded straight through
+#      plan approval into implementation without ever getting an actual answer.
+#      Mentioning something in passing and pausing for a decision are different
+#      behaviors, and the text has to ask for the second one explicitly: naming the
+#      question tool (AskUserQuestion, matching SKILL.md's existing convention) and
+#      saying in so many words that a mention followed by continuing anyway does not
+#      count as asking.
+# This is still a probability improvement, not a guarantee: the fail-open contract
+# (see plan-gate.sh) means a missing CLI can never become a real interrupt (a deny)
+# just to make this more reliable, so the agent is always free to disregard it.
 install_message() {
   cat <<'EOF'
 Actual plan-stage governance is configured for this repository (.actual/rules/ is
@@ -176,14 +185,18 @@ present), but the `actual` CLI is not on PATH, so plans are not being checked.
 
 This is worth interrupting the current task for: mention it in your very next reply,
 regardless of what else is in progress. Offer to install it now rather than just
-describing the steps -- ask the user for a go-ahead, and if they agree, run one of
-these with the Bash tool:
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+If they agree, run one of these with the Bash tool:
   npm install -g @actualai/actual
   brew install actual-software/actual/actual
 
-Then verify with: actual --version
-If they decline, don't run anything -- installation stays optional, but still
-acknowledge the request in that reply instead of staying silent about it.
+Then verify with: actual --version. If they decline, don't run anything --
+installation stays optional -- but only resume the original task once they have
+actually answered either way.
 Docs: https://cli.actual.ai
 EOF
 }
@@ -196,14 +209,18 @@ are not being checked.
 
 This is worth interrupting the current task for: mention it in your very next reply,
 regardless of what else is in progress. Offer to upgrade it now rather than just
-describing the steps -- ask the user for a go-ahead, and if they agree, run one of
-these with the Bash tool:
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+If they agree, run one of these with the Bash tool:
   npm install -g @actualai/actual@latest
   brew upgrade actual-software/actual/actual
 
-Then verify with: actual plan-check --help
-If they decline, don't run anything -- upgrading stays optional, but still
-acknowledge the request in that reply instead of staying silent about it.
+Then verify with: actual plan-check --help. If they decline, don't run anything --
+upgrading stays optional -- but only resume the original task once they have
+actually answered either way.
 EOF
 }
 

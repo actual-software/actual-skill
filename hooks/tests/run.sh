@@ -142,7 +142,7 @@ else
   fail "missing binary: expected exit 0 + install matrix" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
-if grep -q "Offer to install it now" "${WORK}/out" && grep -q "ask the user for a" "${WORK}/out"; then
+if grep -q "Offer to install it now" "${WORK}/out" && grep -q "ask using an interactive question tool" "${WORK}/out"; then
   pass "missing binary: instructs the agent to offer installing, not just describe it"
 else
   fail "missing binary: expected an offer-to-install instruction" "stdout=$(cat "${WORK}/out")"
@@ -152,6 +152,12 @@ if grep -q "regardless of what else is in progress" "${WORK}/out" && grep -q "yo
   pass "missing binary: instructs the agent to surface this even mid-task"
 else
   fail "missing binary: expected the mid-task interrupt instruction" "stdout=$(cat "${WORK}/out")"
+fi
+
+if grep -q "AskUserQuestion" "${WORK}/out" && grep -q "does not satisfy this" "${WORK}/out"; then
+  pass "missing binary: instructs the agent to wait for an actual answer, not just mention it"
+else
+  fail "missing binary: expected the wait-for-answer instruction" "stdout=$(cat "${WORK}/out")"
 fi
 
 if [ "$(decision)" = "none" ]; then
@@ -167,7 +173,7 @@ else
   fail "old CLI: expected exit 0 + upgrade message" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
-if grep -q "Offer to upgrade it now" "${WORK}/out" && grep -q "ask the user for a" "${WORK}/out"; then
+if grep -q "Offer to upgrade it now" "${WORK}/out" && grep -q "ask using an interactive question tool" "${WORK}/out"; then
   pass "old CLI: instructs the agent to offer upgrading, not just describe it"
 else
   fail "old CLI: expected an offer-to-upgrade instruction" "stdout=$(cat "${WORK}/out")"
@@ -177,6 +183,12 @@ if grep -q "regardless of what else is in progress" "${WORK}/out" && grep -q "yo
   pass "old CLI: instructs the agent to surface this even mid-task"
 else
   fail "old CLI: expected the mid-task interrupt instruction" "stdout=$(cat "${WORK}/out")"
+fi
+
+if grep -q "AskUserQuestion" "${WORK}/out" && grep -q "does not satisfy this" "${WORK}/out"; then
+  pass "old CLI: instructs the agent to wait for an actual answer, not just mention it"
+else
+  fail "old CLI: expected the wait-for-answer instruction" "stdout=$(cat "${WORK}/out")"
 fi
 
 if [ "$(decision)" = "none" ]; then

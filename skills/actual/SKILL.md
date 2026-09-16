@@ -19,7 +19,7 @@ Inline knowledge and operational workflows for the actual CLI. Read this file fi
 
 ## CLI Not Installed
 
-If the `actual` binary is not in PATH, **stop before doing anything else** — all commands, pre-flight checks, and diagnostics require the CLI. Offer to install it rather than just printing the steps: ask the user for a go-ahead, and if they agree, run the command yourself with the Bash tool. If they decline, leave it at that — installation stays optional.
+If the `actual` binary is not in PATH, **stop before doing anything else** — all commands, pre-flight checks, and diagnostics require the CLI. Offer to install it rather than just printing the steps: ask using an interactive question tool (e.g. `AskUserQuestion`) so your turn actually pauses for an answer, and don't continue — not even to keep exploring or planning — until the user responds. Mentioning it and continuing anyway isn't the same as asking. If they agree, run the command yourself with the Bash tool; if they decline, leave it at that and resume — installation stays optional, but only once they've actually answered.
 
 Detect with:
 ```bash
