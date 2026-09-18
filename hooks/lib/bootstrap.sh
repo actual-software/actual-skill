@@ -150,6 +150,24 @@ is_unrecognized_plan_check() {
   return 1
 }
 
+# impl-check's own counterpart of have_plan_check -- see that function's
+# comment. Checked separately because a CLI can have one subcommand without
+# the other: plan-check shipped first (AK-672-era builds), impl-check later
+# (AK-755), so "has plan-check" does not imply "has impl-check".
+have_impl_check() {
+  actual impl-check --help >/dev/null 2>&1
+}
+
+# impl-check's own counterpart of is_unrecognized_plan_check.
+is_unrecognized_impl_check() {
+  local err
+  err=$(<"$1") || return 1
+  case "$err" in
+    *unrecognized\ subcommand*impl-check*) return 0 ;;
+  esac
+  return 1
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
@@ -219,6 +237,31 @@ If they agree, run one of these with the Bash tool:
   brew upgrade actual-software/actual/actual
 
 Then verify with: actual plan-check --help. If they decline, don't run anything --
+upgrading stays optional -- but only resume the original task once they have
+actually answered either way.
+EOF
+}
+
+# impl-check's own counterpart of upgrade_message, for a CLI build that has
+# plan-check but predates AK-755 (no impl-check subcommand yet).
+impl_upgrade_message() {
+  cat <<'EOF'
+Actual implementation-stage governance is configured for this repository
+(.actual/rules/ is present), but the installed `actual` CLI has no `impl-check` subcommand,
+so your changes are not being checked as you go.
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to upgrade it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+If they agree, run one of these with the Bash tool:
+  npm install -g @actualai/actual@latest
+  brew upgrade actual-software/actual/actual
+
+Then verify with: actual impl-check --help. If they decline, don't run anything --
 upgrading stays optional -- but only resume the original task once they have
 actually answered either way.
 EOF
@@ -349,4 +392,121 @@ emit_pretooluse_notice() {
 emit_sessionstart_context() {
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
     "$(json_escape "$1")"
+}
+
+# --- Stop hook output (impl-gate.sh) ---
+#
+# Stop's decision control is NOT hookSpecificOutput.permissionDecision -- it is
+# a top-level `decision`/`reason` pair, `{"decision":"block","reason":"..."}`,
+# verified against https://code.claude.com/docs/en/hooks (Stop decision
+# control), not assumed from the PreToolUse/ExitPlanMode precedent these
+# PreToolUse emitters above were verified against. `actual impl-check
+# --claude-hook` reuses plan-check's own JSON renderer, which always emits a
+# PreToolUse-shaped hookSpecificOutput regardless of which Claude Code event is
+# asking -- forwarded verbatim to Stop, that shape carries no `decision` field
+# at all, so Claude Code would silently ignore it and let the turn end. Every
+# function below therefore re-renders rather than forwards.
+
+# Extract the value of the first top-level "<field>":"..." string in a JSON
+# document, as a quote-aware byte scan -- never a JSON parse, matching this
+# library's dependency-hygiene constraint (see the file header). The returned
+# value is still JSON-string-escaped exactly as it appeared in $1: callers
+# that copy it into a *_raw emitter below must not run it through json_escape
+# again, or they will double-escape it.
+#
+# Callers MUST gate this on has_unicode_escape/has_duplicate_permission_decision
+# returning false first (impl-gate.sh always does, via render_stop_verdict):
+# a \uXXXX escape spells a literal double-quote a byte scan cannot see, so
+# this function's quote-termination logic can only be trusted once those
+# checks have ruled that out. Prints nothing and fails (exit 1) when the
+# field is absent.
+extract_json_string_field() {
+  local s="$1" field="$2" needle rest out c i len
+  needle="\"${field}\":\""
+  rest="${s#*"$needle"}"
+  [ "$rest" = "$s" ] && return 1
+
+  out=""
+  i=0
+  len=${#rest}
+  while [ "$i" -lt "$len" ]; do
+    c="${rest:$i:1}"
+    if [ "$c" = '\' ]; then
+      # A backslash always introduces a single-char escape here (\\, \", \n,
+      # \t, \r, \/, \b, \f) -- \uXXXX is excluded by the caller-side gate
+      # above -- so consume it and the next byte together, verbatim, and
+      # never test that next byte as a potential terminating quote.
+      out="${out}${c}${rest:$((i + 1)):1}"
+      i=$((i + 2))
+      continue
+    fi
+    if [ "$c" = '"' ]; then
+      printf '%s' "$out"
+      return 0
+    fi
+    out="${out}${c}"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Stop's one blocking shape: top-level decision:"block" with a required
+# reason (see the section comment above for why this differs from
+# emit_pretooluse_notice's shape). $1 has already been extracted from another
+# JSON document's string value via extract_json_string_field and is therefore
+# already valid JSON-string-escaped bytes -- running it through json_escape
+# here would double-escape it. (render_stop_verdict is impl-gate.sh's only
+# caller today, and every reason it blocks with comes from extraction; a
+# script-composed, not-yet-escaped reason would need a json_escape'd sibling
+# of this function, which does not exist because nothing needs it yet.)
+emit_stop_block_raw() {
+  printf '{"decision":"block","reason":"%s"}\n' "$1"
+}
+
+# Advisory for a Stop hook that must NOT force continuation. Stop's only two
+# channels that reach Claude -- decision:"block" and
+# hookSpecificOutput.additionalContext -- both force continuation ("the same
+# loop protections as decision: block", per the docs); neither is safe for a
+# fail-open notice that must let the turn end normally. So this emits a plain,
+# user-facing systemMessage and nothing else -- unlike
+# emit_pretooluse_notice, there is no agent-facing counterpart here to also
+# populate.
+emit_stop_notice() {
+  printf '{"systemMessage":"%s"}\n' "$(json_escape "$1")"
+}
+
+# Same shape, but $1 is already JSON-string-escaped (see emit_stop_block_raw).
+emit_stop_notice_raw() {
+  printf '{"systemMessage":"%s"}\n' "$1"
+}
+
+# Classify and re-render `actual impl-check --claude-hook`'s PreToolUse-shaped
+# stdout ($1) into Stop's own JSON contract, printing the result (or nothing)
+# to stdout. Mirrors the allowlist plan-gate.sh applies inline to its own
+# verdict -- see that script's comments for the full rationale -- but ends in
+# a re-render instead of a forward, and the deny branch here requires the
+# reason to be safely extractable, not just present.
+render_stop_verdict() {
+  local verdict="$1" trimmed reason message
+
+  trimmed=${verdict#"${verdict%%[![:space:]]*}"}
+  trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
+
+  if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ]; then
+    if has_unicode_escape "$trimmed" || has_duplicate_permission_decision "$trimmed"; then
+      emit_stop_notice \
+        "Actual implementation governance received a verdict it could not safely interpret (it contained an escaped character sequence or a duplicate permissionDecision key); this turn's diff was not checked against .actual/rules/."
+    elif is_deny_decision "$trimmed"; then
+      reason=$(extract_json_string_field "$verdict" "permissionDecisionReason") || reason=""
+      if [ -n "$reason" ]; then
+        emit_stop_block_raw "$reason"
+      else
+        emit_stop_notice \
+          "Actual implementation governance denied this diff, but the reason could not be safely read; this turn's diff was not checked against .actual/rules/."
+      fi
+    elif has_system_message "$trimmed" && ! has_permission_decision "$trimmed"; then
+      message=$(extract_json_string_field "$verdict" "systemMessage") || message=""
+      [ -n "$message" ] && emit_stop_notice_raw "$message"
+    fi
+  fi
 }

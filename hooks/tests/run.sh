@@ -115,6 +115,18 @@ decision() {
   jq -r '.hookSpecificOutput.permissionDecision // "none"' < "${WORK}/out" 2>/dev/null || printf 'unparseable'
 }
 
+# Stop's decision field is top-level, not nested under hookSpecificOutput --
+# see impl-gate.sh's module comment. Distinct helper from decision() above so
+# a test that reads the wrong field shape fails loudly instead of silently
+# matching "none".
+stop_decision() {
+  if [ ! -s "${WORK}/out" ]; then
+    printf 'none'
+    return
+  fi
+  jq -r '.decision // "none"' < "${WORK}/out" 2>/dev/null || printf 'unparseable'
+}
+
 # Print the argv token after FLAG in a capture sidecar written by bin/actual.
 argv_after() {
   local flag="$1" file="$2"
@@ -363,6 +375,166 @@ else
 fi
 
 echo
+echo "=== impl-gate: no committed rules ==="
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "no rules: silent no-op (exit 0, no stdout, no stderr)"
+else
+  fail "no rules: expected silent exit 0" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+echo
+echo "=== impl-gate: CLI bootstrap preflight ==="
+
+st=$(run_hook_no_cli "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES")
+if [ "$st" = "0" ] && grep -q "npm install -g @actualai/actual" "${WORK}/out" && [ "$(stop_decision)" = "none" ]; then
+  pass "missing binary: exit 0 with install guidance, no decision:block"
+else
+  fail "missing binary: expected exit 0 + install matrix, no block" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+if jq -e '.systemMessage' "${WORK}/out" >/dev/null 2>&1 && ! jq -e 'has("decision")' "${WORK}/out" >/dev/null 2>&1; then
+  pass "missing binary: plain systemMessage, never a channel that forces continuation"
+else
+  fail "missing binary: expected a bare top-level systemMessage" "stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-impl-check)
+if [ "$st" = "0" ] && grep -q "no .impl-check. subcommand" "${WORK}/out" && [ "$(stop_decision)" = "none" ]; then
+  pass "old CLI (has plan-check, not impl-check yet): exit 0 with upgrade guidance, no block"
+else
+  fail "old CLI: expected exit 0 + upgrade message, no block" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+echo
+echo "=== impl-gate: verdict passthrough ==="
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && [ ! -s "${WORK}/out" ]; then
+  pass "conforming diff makes no decision (the turn ends normally)"
+else
+  fail "expected silent pass (no decision)" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] && grep -q "R-001" "${WORK}/out"; then
+  pass "deny verdict is re-rendered as Stop's decision:block, names the rule id"
+else
+  fail "expected decision:block naming R-001" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+# The CLI's own renderer emits a PreToolUse-shaped hookSpecificOutput
+# unconditionally (see impl-gate.sh's module comment) -- forwarded verbatim,
+# Claude Code's Stop handler would read no `decision` field at all and let
+# the turn end. Regression test for reverting to a forward instead of a
+# re-render.
+if jq -e 'has("hookSpecificOutput")' "${WORK}/out" >/dev/null 2>&1; then
+  fail "deny verdict must not carry a leftover PreToolUse-shaped hookSpecificOutput" "stdout=$(cat "${WORK}/out")"
+else
+  pass "deny verdict is Stop's own top-level shape, not forwarded PreToolUse JSON"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-exit2)
+if [ "$st" = "2" ] && grep -q "R-001" "${WORK}/err"; then
+  pass "exit-2 fallback: blocks with the reason on stderr (Stop's exit-2 contract matches PreToolUse's)"
+else
+  fail "exit-2 fallback: expected exit 2 + stderr reason" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ]; then
+  pass "CLI allow verdict is not forwarded (never forces continuation)"
+else
+  fail "allow must not be forwarded" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow-escaped)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "escaped allow verdict is not forwarded, and the drop is diagnosed"
+else
+  fail "escaped allow must not be forwarded" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "Partial coverage" "${WORK}/out"; then
+  pass "CLI notice (no permission decision) is re-rendered as a plain systemMessage"
+else
+  fail "bare notice must be forwarded" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice-escaped-key)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "notice with an escaped permissionDecision key is not forwarded, and the drop is diagnosed"
+else
+  fail "escaped-key notice must not be forwarded" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-escaped-key)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "deny verdict with an escaped duplicate key is not forwarded, and the drop is diagnosed"
+else
+  fail "escaped-key deny must not be forwarded verbatim" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-duplicate-key)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "deny verdict with a literal duplicate permissionDecision key is not forwarded, and the drop is diagnosed"
+else
+  fail "duplicate-key deny must not be forwarded verbatim" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+echo
+echo "=== impl-gate: envelope + argv passthrough ==="
+CAPTURE_STOP="${WORK}/captured-stop.json"
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_STOP")
+if [ -s "$CAPTURE_STOP" ] \
+   && [ "$(jq -r '.hook_event_name' "$CAPTURE_STOP")" = "Stop" ] \
+   && [ "$(jq -r '.session_id' "$CAPTURE_STOP")" = "test-session-stop-turn" ]; then
+  pass "raw Stop envelope reaches the CLI unparsed, with session_id intact"
+else
+  fail "envelope passthrough broken" "captured=$(cat "$CAPTURE_STOP" 2>/dev/null)"
+fi
+
+if grep -Fxq -- '--claude-hook' "${CAPTURE_STOP}.argv" \
+   && [ "$(argv_after --rules-dir "${CAPTURE_STOP}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ]; then
+  pass "CLI is invoked as impl-check --claude-hook --rules-dir pointing at the repo rules"
+else
+  fail "missing --claude-hook / --rules-dir" "argv=$(cat "${CAPTURE_STOP}.argv" 2>/dev/null)"
+fi
+
+echo
+echo "=== impl-gate: fail open ==="
+for mode in crash garbage; do
+  st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ] && [ "$(stop_decision)" != "block" ]; then
+    pass "$mode: fails open (exit 0, no block)"
+  else
+    fail "$mode: expected fail-open exit 0" "status=$st decision=$(stop_decision)"
+  fi
+done
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny ACTUAL_PLAN_GATE=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_PLAN_GATE=off: silent no-op even with a deny verdict available"
+else
+  fail "opt-out did not disable the gate" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+echo
+echo "=== impl-gate: fires unconditionally, independent of plan-gate ==="
+# AK-754 requirement: the Stop hook must govern a turn even when
+# ExitPlanMode/plan-gate.sh never fired in this session at all. impl-gate.sh
+# never reads plan-gate.sh's state (there is none -- plan-gate.sh keeps
+# nothing on disk of its own), so this simply asserts the observable
+# behavior with only the Stop envelope in play: a denied diff still blocks.
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ]; then
+  pass "governs a turn with no prior plan-gate.sh invocation in this session"
+else
+  fail "Stop hook did not fire independently of plan-gate.sh" "status=$st decision=$(stop_decision)"
+fi
+
+echo
 echo "=== preflight: SessionStart ==="
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=allow)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
@@ -390,10 +562,20 @@ fi
 
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-plan-check)
 if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
-   && grep -q "Offer to upgrade it now" "${WORK}/out"; then
-  pass "rules + old CLI: upgrade guidance as session context, framed as an offer"
+   && grep -q "Offer to upgrade it now" "${WORK}/out" \
+   && grep -q "no .plan-check. subcommand" "${WORK}/out"; then
+  pass "rules + CLI missing plan-check entirely: upgrade guidance as session context, framed as an offer"
 else
   fail "old-CLI preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-impl-check)
+if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
+   && grep -q "Offer to upgrade it now" "${WORK}/out" \
+   && grep -q "no .impl-check. subcommand" "${WORK}/out"; then
+  pass "rules + CLI has plan-check but not impl-check yet: its own upgrade guidance, framed as an offer"
+else
+  fail "impl-check-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 echo
@@ -620,17 +802,24 @@ else
   fail "hooks/hooks.json missing from the conventional path" ""
 fi
 
+if [ "$(jq -r '.hooks.Stop[0].hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/impl-gate.sh' ] \
+   && [ "$(jq -r '.hooks.Stop[0].matcher // "none"' "${HOOKS_DIR}/hooks.json")" = "none" ]; then
+  pass "hooks.json registers Stop -> impl-gate.sh, with no matcher (Stop has no matcher support)"
+else
+  fail "hooks.json Stop registration wrong" "$(jq -c '.hooks.Stop' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
+fi
+
 echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
-     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
+     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' > "${WORK}/deps" 2>/dev/null; then
   fail "shipped hooks reference a JSON/runtime dependency" "$(cat "${WORK}/deps")"
 else
   pass "shipped hooks reference no jq/python/node"
 fi
 
-for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/preflight.sh"; do
+for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh"; do
   if [ -x "$f" ]; then pass "$(basename "$f") is executable"; else fail "$(basename "$f") is not executable" ""; fi
 done
 

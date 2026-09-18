@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Fake `actual` CLI for hook tests. Behaviour is driven by ACTUAL_TEST_MODE:
 #
-#   allow        plan-check exists, plan conforms: exit 0, no permission decision
-#   emit-allow   plan-check exists, wrongly emits permissionDecision:allow
+#   allow        the subcommand exists, the material conforms: exit 0, no
+#                permission decision
+#   emit-allow   the subcommand exists, wrongly emits permissionDecision:allow
 #   emit-allow-escaped  wrongly emits allow with the key \uXXXX-escaped, plus an
 #                       updatedInput field, so the literal bytes "permissionDecision":"allow"
 #                       never appear even though it decodes to the same grant
-#   deny         plan-check exists, returns a "deny" verdict at exit 0
-#   deny-exit2   plan-check exists, blocks via exit 2 + stderr (fallback path)
-#   notice       plan-check exists, plan conforms but the CLI has a disclosure to
-#                make (partial coverage / round-limit pass): exit 0, systemMessage
-#                only, no permissionDecision
+#   deny         the subcommand exists, returns a "deny" verdict at exit 0
+#   deny-exit2   the subcommand exists, blocks via exit 2 + stderr (fallback path)
+#   notice       the subcommand exists, the material conforms but the CLI has a
+#                disclosure to make (partial coverage / round-limit pass): exit
+#                0, systemMessage only, no permissionDecision
 #   notice-escaped-key  a systemMessage alongside permissionDecision:allow, but the
 #                       key is spelled with a \uXXXX escape so the literal bytes
 #                       "permissionDecision": never appear -- decodes to a grant
@@ -22,14 +23,23 @@
 #                       literal, permissionDecision key set to allow -- no escape
 #                       needed; is_deny_decision matches the first occurrence, but
 #                       a decoder resolving the duplicate key last-wins reads allow
-#   no-plan-check   an older CLI that does not know the subcommand
-#   crash        plan-check panics
-#   garbage      plan-check exits 0 but prints non-JSON
+#   no-plan-check   an older CLI that does not know the plan-check subcommand
+#                   (impl-check, if invoked, still behaves as "allow")
+#   no-impl-check   a CLI with plan-check but that predates impl-check (AK-755)
+#                   (plan-check, if invoked, still behaves as "allow")
+#   crash        the subcommand panics
+#   garbage      the subcommand exits 0 but prints non-JSON
 #
 # It also records the envelope it received to $ACTUAL_TEST_CAPTURE, and the
 # remaining argv to $ACTUAL_TEST_CAPTURE.argv, so tests can assert stdin and
-# --rules-dir / --claude-hook were forwarded. plan-check (other than --help)
-# refuses to run without --claude-hook, so dropping the flag cannot pass.
+# --rules-dir / --claude-hook were forwarded. plan-check/impl-check (other
+# than --help) refuse to run without --claude-hook, so dropping the flag
+# cannot pass.
+#
+# plan-check and impl-check share this entire dispatch: `actual impl-check
+# --claude-hook` reuses plan-check's own JSON renderer in the real CLI (see
+# AK-755), so the two subcommands' --claude-hook output is byte-for-byte the
+# same shape for every mode below -- this fake mirrors that.
 
 set -uo pipefail
 
@@ -40,19 +50,24 @@ if [ "${1:-}" = "--version" ]; then
   exit 0
 fi
 
-if [ "${1:-}" != "plan-check" ]; then
-  echo "error: unrecognized subcommand '${1:-}'" >&2
+subcommand="${1:-}"
+if [ "$subcommand" != "plan-check" ] && [ "$subcommand" != "impl-check" ]; then
+  echo "error: unrecognized subcommand '${subcommand}'" >&2
   exit 2
 fi
 shift
 
-if [ "$mode" = "no-plan-check" ]; then
+if [ "$subcommand" = "plan-check" ] && [ "$mode" = "no-plan-check" ]; then
   echo "error: unrecognized subcommand 'plan-check'" >&2
+  exit 2
+fi
+if [ "$subcommand" = "impl-check" ] && [ "$mode" = "no-impl-check" ]; then
+  echo "error: unrecognized subcommand 'impl-check'" >&2
   exit 2
 fi
 
 if [ "${1:-}" = "--help" ]; then
-  echo "Usage: actual plan-check [--claude-hook] [--rules-dir <dir>]"
+  echo "Usage: actual ${subcommand} [--claude-hook] [--rules-dir <dir>]"
   exit 0
 fi
 
