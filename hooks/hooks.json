@@ -1,5 +1,5 @@
 {
-  "description": "Actual plan-stage ADR governance: checks implementation plans against the rules committed in .actual/rules/ before implementation begins.",
+  "description": "Actual plan- and implementation-stage ADR governance: checks implementation plans and accumulated diffs against the rules committed in .actual/rules/.",
   "hooks": {
     "SessionStart": [
       {
@@ -22,6 +22,18 @@
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/plan-gate.sh",
             "timeout": 180,
             "statusMessage": "Checking plan against architecture rules..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/impl-gate.sh",
+            "timeout": 180,
+            "statusMessage": "Checking implementation against architecture rules..."
           }
         ]
       }
