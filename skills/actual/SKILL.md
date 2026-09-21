@@ -11,6 +11,13 @@ description: >-
   working with the actual CLI, running actual adr-bot, signing in to
   Actual AI, asking the advisor, configuring runners or models,
   troubleshooting errors, or managing output files.
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - actual
+    primaryEnv: ANTHROPIC_API_KEY
+    homepage: https://cli.actual.ai
 ---
 
 # actual CLI Companion
@@ -45,6 +52,22 @@ Before using a documented subcommand or flag, verify it exists in the installed
 CLI with `actual --help` or `actual <subcommand> --help`. If it is missing,
 help the user update the CLI; do not run development-only flags against an older
 release.
+
+## ADR Pre-Check
+
+Before creating a new skill, component, or feature, check whether the project has ADR context available. This ensures new work aligns with existing architectural decisions.
+
+1. Check for managed section markers in CLAUDE.md or AGENTS.md:
+   ```bash
+   grep -l "managed:actual-start" CLAUDE.md AGENTS.md 2>/dev/null
+   ```
+2. **If markers found**: ADR context is already loaded into the output file. Proceed — the agent session already has this context.
+3. **If no markers but `actual` CLI is available**:
+   ```bash
+   actual adr-bot --dry-run --force --no-tui
+   ```
+   Review the output. If relevant ADRs exist, run `actual adr-bot --force --no-tui` to sync them into CLAUDE.md / AGENTS.md before starting work.
+4. **If no markers and no CLI**: proceed without. Do not block the user.
 
 
 ## Commands
