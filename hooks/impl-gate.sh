@@ -61,9 +61,11 @@ fi
 #    hook's fail-open notice can only ever be user-facing (see
 #    emit_stop_notice's comment): Stop has no channel that reaches Claude
 #    without also forcing continuation, and a missing CLI must never force
-#    continuation.
+#    continuation. stop_install_notice is the short user-facing form;
+#    install_message is an instruction to the agent and belongs on
+#    SessionStart / plan-gate, where that text actually reaches Claude.
 if ! have_actual; then
-  emit_stop_notice "$(install_message)"
+  emit_stop_notice "$(stop_install_notice)"
   exit 0
 fi
 
@@ -90,7 +92,7 @@ case "$status" in
     # (pre-AK-755), fail open with upgrade guidance. Any other exit 2 is
     # impl-check's own fallback block path.
     if is_unrecognized_impl_check "$stderr_file"; then
-      emit_stop_notice "$(impl_upgrade_message)"
+      emit_stop_notice "$(stop_impl_upgrade_notice)"
       exit 0
     fi
     # A real deny via the exit-2 fallback: Stop's exit-2 contract is "blocks,

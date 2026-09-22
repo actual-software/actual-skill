@@ -380,7 +380,9 @@ actual impl-check --help
 `preflight.sh` probes both independently at `SessionStart` and surfaces whichever is
 missing — a CLI can have `plan-check` without `impl-check` (it shipped first), but
 not the reverse, so `plan-check`'s own upgrade guidance takes priority when neither
-is present.
+is present. That SessionStart text is an instruction to the agent. `impl-gate.sh`
+does not repeat it: Stop's `systemMessage` is shown to the user and does not reach
+Claude, so a missing CLI or a CLI without `impl-check` is a one-line warning there.
 
 ### The revision loop, overrides, and round limits
 

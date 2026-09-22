@@ -387,10 +387,13 @@ echo
 echo "=== impl-gate: CLI bootstrap preflight ==="
 
 st=$(run_hook_no_cli "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES")
-if [ "$st" = "0" ] && grep -q "npm install -g @actualai/actual" "${WORK}/out" && [ "$(stop_decision)" = "none" ]; then
-  pass "missing binary: exit 0 with install guidance, no decision:block"
+if [ "$st" = "0" ] && grep -q "npm install -g @actualai/actual" "${WORK}/out" \
+   && grep -q "not checked" "${WORK}/out" \
+   && ! grep -q "AskUserQuestion" "${WORK}/out" \
+   && [ "$(stop_decision)" = "none" ]; then
+  pass "missing binary: exit 0 with a user-facing install warning, no decision:block"
 else
-  fail "missing binary: expected exit 0 + install matrix, no block" "status=$st stdout=$(cat "${WORK}/out")"
+  fail "missing binary: expected exit 0 + a short user-facing warning, no block" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 if jq -e '.systemMessage' "${WORK}/out" >/dev/null 2>&1 && ! jq -e 'has("decision")' "${WORK}/out" >/dev/null 2>&1; then
@@ -400,10 +403,13 @@ else
 fi
 
 st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-impl-check)
-if [ "$st" = "0" ] && grep -q "no .impl-check. subcommand" "${WORK}/out" && [ "$(stop_decision)" = "none" ]; then
-  pass "old CLI (has plan-check, not impl-check yet): exit 0 with upgrade guidance, no block"
+if [ "$st" = "0" ] && grep -q "no .impl-check. subcommand" "${WORK}/out" \
+   && grep -q "not checked" "${WORK}/out" \
+   && ! grep -q "AskUserQuestion" "${WORK}/out" \
+   && [ "$(stop_decision)" = "none" ]; then
+  pass "old CLI (has plan-check, not impl-check yet): exit 0 with a user-facing upgrade warning, no block"
 else
-  fail "old CLI: expected exit 0 + upgrade message, no block" "status=$st stdout=$(cat "${WORK}/out")"
+  fail "old CLI: expected exit 0 + a short user-facing warning, no block" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 echo

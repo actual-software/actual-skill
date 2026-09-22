@@ -176,7 +176,9 @@ is_unrecognized_impl_check() {
 # text is consumed as hook context (SessionStart additionalContext, or a PreToolUse
 # systemMessage), so ask the agent to actively offer the install rather than passively
 # describe it. It must still ask the user first -- installing a global CLI is a
-# machine-wide change the agent should never make unprompted.
+# machine-wide change the agent should never make unprompted. Do not use it from
+# impl-gate.sh: Stop's systemMessage is shown to the user and never reaches
+# Claude (see stop_install_notice).
 #
 # additionalContext/systemMessage is advisory, not a directive the agent is forced to
 # act on -- unlike a deny, nothing about the hook protocol makes the agent interrupt
@@ -264,6 +266,26 @@ If they agree, run one of these with the Bash tool:
 Then verify with: actual impl-check --help. If they decline, don't run anything --
 upgrading stays optional -- but only resume the original task once they have
 actually answered either way.
+EOF
+}
+
+# User-facing counterparts of install_message and impl_upgrade_message, for
+# impl-gate.sh only. Stop's systemMessage is shown to the user and does not
+# reach Claude, and it is emitted again at the end of every turn until the CLI
+# can actually run the check. The agent-directed essay (AskUserQuestion, "your
+# very next reply") is the wrong text for that channel and that cadence.
+# SessionStart already delivers the essay as additionalContext, which is the
+# channel the agent reads. These stay one sentence: what failed, and the
+# command that fixes it.
+stop_install_notice() {
+  cat <<'EOF'
+Actual implementation governance did not run: the `actual` CLI is not installed, so this turn's diff was not checked against .actual/rules/. Install it with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`.
+EOF
+}
+
+stop_impl_upgrade_notice() {
+  cat <<'EOF'
+Actual implementation governance did not run: the installed `actual` CLI has no `impl-check` subcommand, so this turn's diff was not checked against .actual/rules/. Upgrade it with `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
 EOF
 }
 
