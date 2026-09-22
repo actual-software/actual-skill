@@ -101,9 +101,16 @@ case "$status" in
     ;;
   2)
     # Unknown subcommand: old CLI, fail open with upgrade guidance.
-    # Any other exit 2 is the CLI's fallback block path.
     if is_unrecognized_plan_check "$stderr_file"; then
       emit_pretooluse_notice "$(upgrade_message)"
+      exit 0
+    fi
+    # The CLI rejected its own arguments (see is_cli_usage_error): not a deny.
+    # Any other exit 2 is the CLI's fallback block path.
+    if is_cli_usage_error "$stderr_file"; then
+      IFS= read -r err_line <"$stderr_file" || true
+      emit_pretooluse_notice \
+        "Actual plan governance did not run (actual plan-check rejected its invocation: ${err_line}); this plan was not checked against .actual/rules/."
       exit 0
     fi
     cat "$stderr_file" >&2

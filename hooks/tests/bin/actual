@@ -1,16 +1,32 @@
 #!/usr/bin/env bash
 # Fake `actual` CLI for hook tests. Behaviour is driven by ACTUAL_TEST_MODE:
 #
-#   allow        plan-check exists, plan conforms: exit 0, no permission decision
-#   emit-allow   plan-check exists, wrongly emits permissionDecision:allow
+#   allow        the subcommand exists, the material conforms: exit 0, no
+#                permission decision
+#   emit-allow   the subcommand exists, wrongly emits permissionDecision:allow
 #   emit-allow-escaped  wrongly emits allow with the key \uXXXX-escaped, plus an
 #                       updatedInput field, so the literal bytes "permissionDecision":"allow"
 #                       never appear even though it decodes to the same grant
-#   deny         plan-check exists, returns a "deny" verdict at exit 0
-#   deny-exit2   plan-check exists, blocks via exit 2 + stderr (fallback path)
-#   notice       plan-check exists, plan conforms but the CLI has a disclosure to
-#                make (partial coverage / round-limit pass): exit 0, systemMessage
-#                only, no permissionDecision
+#   deny         the subcommand exists, returns a "deny" verdict at exit 0
+#   deny-spaced  deny with whitespace between each key, colon, and value -- the
+#                shape is_deny_decision accepts and extract_json_string_field
+#                must also accept, or impl-gate fails a real deny open
+#   deny-pretty  deny pretty-printed, colon and value on following lines
+#   deny-no-reason  permissionDecision:deny with no reason string -- impl-gate
+#                must still block, with a fixed reason
+#   deny-exit2   the subcommand exists, blocks via exit 2 + stderr (fallback path)
+#   usage-error  clap rejects the invocation (e.g. ACTUAL_IMPL_CHECK_MAX_ROUNDS=0):
+#                exit 2 with an "error: " stderr and no usage section -- not a deny
+#   deny-escaped-span  deny whose reason quotes source containing a \u00e9-style
+#                literal, so the JSON carries an escaped backslash (\\u00e9) and
+#                no real escape -- must still block
+#   deny-escaped-backslash-escape  deny whose reason has an escaped backslash
+#                followed by a real \u0070 escape -- must still be refused
+#   notice       the subcommand exists, the material conforms but the CLI has a
+#                disclosure to make (partial coverage / round-limit pass): exit
+#                0, systemMessage only, no permissionDecision
+#   notice-spaced  the same notice with a space after each colon, which the
+#                Stop re-render must still surface as systemMessage
 #   notice-escaped-key  a systemMessage alongside permissionDecision:allow, but the
 #                       key is spelled with a \uXXXX escape so the literal bytes
 #                       "permissionDecision": never appear -- decodes to a grant
@@ -22,14 +38,23 @@
 #                       literal, permissionDecision key set to allow -- no escape
 #                       needed; is_deny_decision matches the first occurrence, but
 #                       a decoder resolving the duplicate key last-wins reads allow
-#   no-plan-check   an older CLI that does not know the subcommand
-#   crash        plan-check panics
-#   garbage      plan-check exits 0 but prints non-JSON
+#   no-plan-check   an older CLI that does not know the plan-check subcommand
+#                   (impl-check, if invoked, still behaves as "allow")
+#   no-impl-check   a CLI with plan-check but that predates impl-check (AK-755)
+#                   (plan-check, if invoked, still behaves as "allow")
+#   crash        the subcommand panics
+#   garbage      the subcommand exits 0 but prints non-JSON
 #
 # It also records the envelope it received to $ACTUAL_TEST_CAPTURE, and the
 # remaining argv to $ACTUAL_TEST_CAPTURE.argv, so tests can assert stdin and
-# --rules-dir / --claude-hook were forwarded. plan-check (other than --help)
-# refuses to run without --claude-hook, so dropping the flag cannot pass.
+# --rules-dir / --claude-hook were forwarded. plan-check/impl-check (other
+# than --help) refuse to run without --claude-hook, so dropping the flag
+# cannot pass.
+#
+# plan-check and impl-check share this entire dispatch: `actual impl-check
+# --claude-hook` reuses plan-check's own JSON renderer in the real CLI (see
+# AK-755), so the two subcommands' --claude-hook output is byte-for-byte the
+# same shape for every mode below -- this fake mirrors that.
 
 set -uo pipefail
 
@@ -40,19 +65,24 @@ if [ "${1:-}" = "--version" ]; then
   exit 0
 fi
 
-if [ "${1:-}" != "plan-check" ]; then
-  echo "error: unrecognized subcommand '${1:-}'" >&2
+subcommand="${1:-}"
+if [ "$subcommand" != "plan-check" ] && [ "$subcommand" != "impl-check" ]; then
+  echo "error: unrecognized subcommand '${subcommand}'" >&2
   exit 2
 fi
 shift
 
-if [ "$mode" = "no-plan-check" ]; then
+if [ "$subcommand" = "plan-check" ] && [ "$mode" = "no-plan-check" ]; then
   echo "error: unrecognized subcommand 'plan-check'" >&2
+  exit 2
+fi
+if [ "$subcommand" = "impl-check" ] && [ "$mode" = "no-impl-check" ]; then
+  echo "error: unrecognized subcommand 'impl-check'" >&2
   exit 2
 fi
 
 if [ "${1:-}" = "--help" ]; then
-  echo "Usage: actual plan-check [--claude-hook] [--rules-dir <dir>]"
+  echo "Usage: actual ${subcommand} [--claude-hook] [--rules-dir <dir>]"
   exit 0
 fi
 
@@ -100,12 +130,51 @@ case "$mode" in
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler."}}\n'
     exit 0
     ;;
+  deny-spaced)
+    printf '{"hookSpecificOutput":{"hookEventName": "PreToolUse","permissionDecision": "deny","permissionDecisionReason": "R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler."}}\n'
+    exit 0
+    ;;
+  deny-pretty)
+    printf '%s\n' '{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "R-001 MUST: all persistence goes through the repository layer."
+  }
+}'
+    exit 0
+    ;;
+  deny-no-reason)
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}\n'
+    exit 0
+    ;;
   deny-exit2)
     echo "R-001 MUST: all persistence goes through the repository layer." >&2
     exit 2
     ;;
+  usage-error)
+    echo "error: invalid value '0' for '--max-rounds <MAX_ROUNDS>': max-rounds must be at least 1, got 0" >&2
+    echo >&2
+    echo "For more information, try '--help'." >&2
+    exit 2
+    ;;
+  deny-escaped-span)
+    # Decodes to: ... the diff adds "caf\u00e9" ... -- a backslash, then text.
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: strings are NFC-normalized. The diff adds \\"caf\\\\u00e9\\" unnormalized."}}\n'
+    exit 0
+    ;;
+  deny-escaped-backslash-escape)
+    # \\ then \u0070: the first pair is an escaped backslash, the \u0070 after
+    # it is a real escape that stripping the pair must not hide.
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: reviewed under x\\\\\\u0070 probe."}}\n'
+    exit 0
+    ;;
   notice)
     printf '{"systemMessage":"Partial coverage: 60 of 118 rules checked for this plan.","hookSpecificOutput":{"hookEventName":"PreToolUse","systemMessage":"Partial coverage: 60 of 118 rules checked for this plan."}}\n'
+    exit 0
+    ;;
+  notice-spaced)
+    printf '{"systemMessage": "Partial coverage: 60 of 118 rules checked for this plan.","hookSpecificOutput":{"hookEventName": "PreToolUse","systemMessage": "Partial coverage: 60 of 118 rules checked for this plan."}}\n'
     exit 0
     ;;
   notice-escaped-key)

@@ -65,7 +65,8 @@ release.
 | `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
 | `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
-| `actual plan-check-override` | A human explicitly clears a denied rule for a session (refuses to run non-interactively; never invoked by the agent) | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable), `--reason "<text>"` — all required; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart (AK-755) | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes vs `HEAD`, plus untracked, non-ignored files). Direct mode also accepts `--diff-file` or piped stdin, and uses that same working-tree diff when neither is given. Never emit `permissionDecision: "allow"` |
+| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session (refuses to run non-interactively; never invoked by the agent). `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable), `--reason "<text>"` — all required; `--repo`/`--rules-dir` optional, defaulting to the current directory |
 
 ## Platform Identity & Advisor
 
@@ -141,16 +142,17 @@ Always inspect `actual advisor --help` before using the newer scope workflow.
 
 > For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
 
-## Plan-Stage Governance (Claude Code hooks)
+## Plan- and Implementation-Stage Governance (Claude Code hooks)
 
-This plugin ships Claude Code hooks that check an implementation plan against the
-ADR rules committed in the repository **before** implementation begins. They are
-registered automatically on install — there is no manual setup.
+This plugin ships Claude Code hooks that check an implementation plan, and separately
+the diff an agent actually produces, against the ADR rules committed in the
+repository. They are registered automatically on install — there is no manual setup.
 
 | Hook | Event | What it does |
 |------|-------|--------------|
-| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough. Re-runs after compact so the reminder survives summarization |
+| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough for `plan-check` and `impl-check`. Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
+| `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes vs `HEAD`, plus untracked, non-ignored files) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
 
 `PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
 user's plan-approval dialog, so a blocked plan is revised by the agent rather than
@@ -163,6 +165,15 @@ is shown. Re-check it when moving to a materially newer Claude Code. Enforcement
 not depend on it — a deny blocks the call whenever the hook runs — but the "the human
 never sees a blocked plan" property does.
 
+`Stop` fires when Claude finishes responding to a turn. Per Claude Code's own hooks
+reference (https://code.claude.com/docs/en/hooks), a `Stop` hook forces continuation
+through a top-level `{"decision":"block","reason":"..."}` (or exit 2 with the reason
+on stderr) — a different JSON shape from `PreToolUse`'s
+`hookSpecificOutput.permissionDecision`, and not one this plugin assumed by analogy:
+it was verified against the documented Stop contract specifically, because the two
+hook events are not guaranteed to behave identically. See "Stop hook: `impl-gate.sh`'s
+JSON contract" below for why that distinction matters here in particular.
+
 ### This is an advisory gate, not an enforcement boundary
 
 Worth stating plainly: this raises the cost of an unreviewed change and catches
@@ -171,16 +182,16 @@ deliberate design choices mean it fails open rather than blocking under real-wor
 conditions:
 
 - **Any infrastructure problem fails open** — no `actual` CLI installed, no runner
-  available, the judge call itself failing, no plan text resolvable, no rules
+  available, the judge call itself failing, no plan text or diff resolvable, no rules
   directory readable. All of these degrade to a non-blocking notice, never a deny.
-  A `PreToolUse` hook that could get stuck or wrongly block on its own dependencies
-  being unavailable would make the tool itself unreliable for reasons that have
-  nothing to do with the plan.
-- **A rules corpus over ~60 individual rules selected for one plan is only
+  A hook that could get stuck or wrongly block on its own dependencies being
+  unavailable would make the tool itself unreliable for reasons that have nothing to
+  do with the plan or the diff.
+- **A rules corpus over ~60 individual rules selected for one plan or diff is only
   partially judged** — one large document is enough on its own, and several
-  ordinary ones add up just as easily. A broad or vague plan is *more* likely
-  to hit this, not less, since the deterministic selector has no relevance
-  threshold below which it stops adding documents. This is disclosed, not
+  ordinary ones add up just as easily. A broad or vague plan, or a large diff, is
+  *more* likely to hit this, not less, since the deterministic selector has no
+  relevance threshold below which it stops adding documents. This is disclosed, not
   silent: a deterministically-prioritized prefix of the rules is judged and
   acted on normally, and every surface (the panel, `--json`'s `partial`
   field, the hook's deny message, and its otherwise-silent notice) says
@@ -189,9 +200,12 @@ conditions:
 - **The revision loop's own escape valves are additional, deliberate fail-open
   paths, not enforcement**: the round limit stops blocking a persistently
   unresolved rule specifically so the hook does not get uninstalled, and a human
-  can run `actual plan-check-override` to wave a specific rule through outright.
-  Both are recorded (`~/.actualai/actual/plan-check-overrides.log`), which makes
-  them *inspectable*, not enforced.
+  can run `actual check-override` to wave a specific rule through outright.
+  An override recorded against a session clears that rule for both `plan-check` and
+  `impl-check` checks of that session — one override, not two independent
+  mechanisms. Both round-limit passes and overrides are recorded
+  (`~/.actualai/actual/plan-check-overrides.log`), which makes them *inspectable*,
+  not enforced.
 
 None of this is a defect — a hook that could hang or wrongly block a tool call
 under infrastructure failure would be worse than one that fails open — but treat
@@ -200,17 +214,17 @@ guarantee nothing gets past it.
 
 ### When the hooks do nothing
 
-Both hooks are silent no-ops — no output, exit 0 — unless the repository has at
+All three hooks are silent no-ops — no output, exit 0 — unless the repository has at
 least one `*.md` file in `.actual/rules/`. Installing the plugin therefore has no
 effect on repositories that are not governed by Actual.
 
-The gate also never hard-fails. If the CLI is missing, too old, or crashes, the hook
-reports the problem and **makes no permission decision**, leaving the normal approval
-flow intact. Only an explicit **deny** from `plan-check` (JSON `permissionDecision`
-or exit 2) can block a plan, and only when the wrapper can read it: a verdict that
-carries a `\uXXXX` escape anywhere, or a duplicate `permissionDecision` key, is
-refused with a notice saying the plan was not checked, because the wrapper matches
-bytes and never parses JSON. A conforming plan must print no `permissionDecision` --
+The gates also never hard-fail. If the CLI is missing, too old, or crashes, the hook
+reports the problem and **makes no blocking decision**, leaving the turn to proceed
+normally. Only an explicit **deny** from `plan-check`/`impl-check` (JSON decision or
+exit 2) can block, and only when the wrapper can read it: a verdict that carries a
+`\uXXXX` escape anywhere, or a duplicate `permissionDecision` key, is refused with a
+notice saying the material was not checked, because the wrapper matches bytes and
+never parses JSON. A conforming plan must print no `permissionDecision` --
 either empty stdout, or a bare `systemMessage` notice (a partial-coverage or
 round-limit disclosure, for example) with no decision attached, are both the
 contract. Never emit `permissionDecision: "allow"`: it is a
@@ -247,12 +261,64 @@ on the original checkout and moves the working directory to
 plain "is cwd inside `CLAUDE_PROJECT_DIR`" test therefore keeps the original root and
 governs the wrong branch, which is why the rule is depth rather than containment.
 
+### Stop hook: `impl-gate.sh`'s JSON contract
+
+`impl-gate.sh` cannot forward `actual impl-check --claude-hook`'s stdout the way
+`plan-gate.sh` forwards `plan-check`'s: `impl-check --claude-hook` reuses
+`plan-check`'s own JSON renderer in the CLI, so its output is always
+`PreToolUse`-shaped (`hookSpecificOutput.hookEventName: "PreToolUse"`,
+`permissionDecision`), regardless of which Claude Code event is actually asking.
+`Stop`'s own decision control is a **top-level** `decision`/`reason` pair —
+`{"decision":"block","reason":"..."}` — with no `hookSpecificOutput` involved at
+all. Forwarded verbatim, the CLI's verdict would carry no `decision` field Claude
+Code recognizes for `Stop`, and the turn would end silently ungoverned — exactly
+the failure this hook exists to prevent.
+
+So `impl-gate.sh` classifies the CLI's verdict — the same byte-matching allowlist
+`plan-gate.sh` applies (`is_deny_decision`, `has_system_message`,
+`has_permission_decision`, and the `\uXXXX`-escape / duplicate-key guards; see
+`hooks/lib/bootstrap.sh`) — and **re-renders** it in `Stop`'s own shape instead of
+forwarding it:
+
+- A recognized **deny** becomes `{"decision":"block","reason":"<extracted
+  permissionDecisionReason>"}`. The reason text is pulled out of the CLI's JSON with
+  a quote-aware byte scan (`extract_json_string_field`), never a JSON parse — same
+  dependency-hygiene constraint as everything else in `bootstrap.sh` — and is only
+  trusted once the escape/duplicate-key guards have already passed, since those are
+  exactly what make quote-termination unambiguous. Whitespace between the field
+  name, the colon, and the opening quote is skipped, so a pretty-printed verdict
+  still yields its reason. A recognized deny whose reason cannot be read still
+  blocks, with a fixed reason; it does not degrade to a notice.
+- A recognized bare **notice** (partial coverage, round-limit pass — no permission
+  decision at all) becomes a plain top-level `{"systemMessage":"..."}`. This is
+  deliberately *not* `hookSpecificOutput.additionalContext`: per Claude Code's docs,
+  `additionalContext` on `Stop` "keeps the conversation going through the same loop
+  protections as `decision: block`" — i.e. it also forces continuation — so it is
+  unsafe for a fail-open notice that must let the turn end normally.
+  `systemMessage` is `Stop`'s only channel that does not force continuation.
+- Anything unsafe to interpret (an escape or duplicate key) or anything not on the
+  allowlist (e.g. a wrongly-emitted `allow`) produces no decision at all, same as
+  `plan-gate.sh`.
+- The exit-2 fallback path is the one place this **is** a straight passthrough:
+  `Stop`'s exit-2 contract ("blocks, stderr is the reason Claude sees") is identical
+  to `PreToolUse`'s, so `impl-gate.sh` just propagates the CLI's stderr and exit
+  code unchanged.
+
+This was verified against Claude Code's documented `Stop` hook contract
+(https://code.claude.com/docs/en/hooks) specifically — not assumed from the
+`PreToolUse`/`ExitPlanMode` precedent above. The two hook events are not
+guaranteed to behave identically, and here, concretely, they don't: the CLI's
+renderer has no notion of which event asked, so the shell wrapper is the only
+place that distinction is applied.
+
 ### Environment variables
 
 | Variable | Effect |
 |----------|--------|
-| `ACTUAL_PLAN_GATE=off` | Disable both hooks entirely |
-| `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). The hook forwards the resolved path to the CLI as `--rules-dir`; `plan-check` must honor that flag rather than rediscovering rules from cwd |
+| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, and their `preflight.sh` reminder) |
+| `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). Each hook forwards the resolved path to the CLI as `--rules-dir`; `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
+| `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
+| `ACTUAL_IMPL_CHECK_MAX_ROUNDS` | Override `impl-check --claude-hook`'s round limit (default 3) |
 
 ### `--claude-hook` plan resolution
 
@@ -286,24 +352,55 @@ Fixtures under `hooks/tests/fixtures/` encode the three envelopes:
 | `pretooluse-plan-inline.json` | Legacy: plan in `tool_input.plan` only |
 | `pretooluse-plan-file.json` | Legacy: empty `tool_input`; plan only via transcript |
 
+### `--claude-hook` diff resolution
+
+Unlike plan text, there is no envelope field carrying the material to check — no
+tool call injects a diff the way `ExitPlanMode` injects a plan. `actual impl-check
+--claude-hook` always resolves the diff from the working tree in the resolved
+repository root: tracked changes versus `HEAD`, plus untracked files that are not
+gitignored. A file the agent has written but not `git add`ed is part of that diff.
+Gitignored files stay out. The hook envelope
+(`hooks/tests/fixtures/stop-turn.json` is the recorded shape) is forwarded unparsed
+purely to key the revision-loop session off `session_id`, the same way
+`plan-check`'s envelope is. An empty diff (the working tree matches `HEAD` and there
+are no untracked, non-ignored files) is not an error — it is the ordinary "nothing
+changed this turn" case — and degrades to a non-blocking notice, never a deny.
+
+The hook always invokes `actual impl-check --claude-hook --rules-dir <dir>`, same
+`<dir>` resolution as `plan-check`'s.
+
 ### Requirements
 
-`actual plan-check` is only present in newer CLI builds. On an older CLI the hook
-emits an upgrade message instead of a flag error — check with:
+`actual plan-check` and `actual impl-check` are only present in newer CLI builds
+(`impl-check` newer still — see AK-755). On an older CLI the relevant hook emits an
+upgrade message instead of a flag error — check with:
 
 ```bash
 actual plan-check --help
+actual impl-check --help
 ```
+
+`preflight.sh` probes both independently at `SessionStart` and surfaces whichever is
+missing — a CLI can have `plan-check` without `impl-check` (it shipped first), but
+not the reverse, so `plan-check`'s own upgrade guidance takes priority when neither
+is present. That SessionStart text is an instruction to the agent. `impl-gate.sh`
+does not repeat it: Stop's `systemMessage` is shown to the user and does not reach
+Claude, so a missing CLI or a CLI without `impl-check` is a one-line warning there.
 
 ### The revision loop, overrides, and round limits
 
 A denied plan is not a dead end: the agent revises and calls `ExitPlanMode`
-again, which fires the hook again. `plan-check` tracks this per
-`(session_id, rules_dir)` — not `session_id` alone, since one Claude Code
-conversation can govern more than one repository or monorepo subproject
-(`ACTUAL_RULES_DIR`), and those commonly share synced rule slugs from the same
-ADR bank. State lives under the user's config directory, never inside the
-governed repo.
+again, which fires the hook again. Likewise, a denied diff is not a dead end at
+`Stop`: the agent is forced to continue, fixes it, and the next `Stop` re-evaluates
+the new accumulated diff. Both commands track this per `(session_id, rules_dir)` —
+not `session_id` alone, since one Claude Code conversation can govern more than one
+repository or monorepo subproject (`ACTUAL_RULES_DIR`), and those commonly share
+synced rule slugs from the same ADR bank. `plan-check` and `impl-check` sessions for
+the same `(session_id, rules_dir)` share this same state — a rule an override clears
+is cleared for both, and a session `impl-check` sees for the first time (no prior
+`plan-check` call ever touched it) simply starts fresh, the same as any other new
+session. State lives under the user's config directory, never inside the governed
+repo.
 
 - **A `requires_decision` verdict blocks exactly like a real conflict.** A
   plan the judge classifies as *deliberately* superseding a rule is not
@@ -317,24 +414,34 @@ governed repo.
   about it. Edit the plan at all and the rule is judged fresh; a clearance is
   never a standing pass regardless of what the plan says later.
 - **An explicit, recorded override.** A human — never the agent — runs
-  `actual plan-check-override --session <id> --rule <doc-slug>::<rule-id>
+  `actual check-override --session <id> --rule <doc-slug>::<rule-id>
   --reason "<why>"` directly, from an interactive terminal (it refuses to run
   non-interactively, since the whole point is that this is a human action).
-  The deny message names the session id but deliberately does not hand back a
-  ready-to-paste invocation — run `actual plan-check-override --help` for the
+  `plan-check-override` still works as a backward-compatible alias. The deny
+  message names the session id but deliberately does not hand back a
+  ready-to-paste invocation — run `actual check-override --help` for the
   exact flags, and pass `--repo`/`--rules-dir` if you are not standing in the
   same repo the denial came from. An overridden rule is excluded from judging
-  from then on regardless of plan text, and every subsequent round says so in
-  a non-blocking notice — an override is visible, never a silent bypass.
+  from then on regardless of plan or diff text — by both commands, since they
+  share session state — and every subsequent round says so in a non-blocking
+  notice — an override is visible, never a silent bypass.
 - **A round limit, tracked per rule.** After `--max-rounds` (default 3, or
-  `ACTUAL_PLAN_CHECK_MAX_ROUNDS`) denials of the *same rule*, the gate stops
-  blocking on that rule specifically, rather than denying indefinitely. A
-  rule that has exhausted its own count never exempts a different,
+  `ACTUAL_PLAN_CHECK_MAX_ROUNDS` / `ACTUAL_IMPL_CHECK_MAX_ROUNDS` respectively —
+  each command's revision loop is budgeted independently) denials of the *same
+  rule*, the gate stops blocking on that rule specifically, rather than denying
+  indefinitely. A rule that has exhausted its own count never exempts a different,
   still-fresh conflict in the same round — the whole call stays denied until
   every currently-blocking rule has individually hit its limit. This pass is
   not silent either: the hook emits a loud notice, and both an override and a
   round-limit pass are appended to `~/.actualai/actual/plan-check-overrides.log`
-  (JSONL, one line per event) for a durable, inspectable trace.
+  (kept under its original filename for history continuity; JSONL, one line per
+  event) for a durable, inspectable trace.
+
+For `impl-gate.sh` specifically, a round-limit pass or override clearance is a bare
+notice — see "Stop hook: `impl-gate.sh`'s JSON contract" above: it renders as a
+plain `systemMessage`, never `hookSpecificOutput.additionalContext`, since the
+latter would force continuation for a condition this is deliberately choosing not
+to block on.
 
 ### Testing the hooks
 
@@ -343,8 +450,8 @@ bash hooks/tests/run.sh
 ```
 
 Runs the full decision matrix (no-op, missing binary, old CLI, pass, deny, crash)
-against recorded hook payloads and a fake CLI. No network and no real `actual`
-install required.
+against recorded hook payloads and a fake CLI, for both `plan-gate.sh` and
+`impl-gate.sh`. No network and no real `actual` install required.
 
 ## Runner Decision Tree
 

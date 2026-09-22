@@ -1,0 +1,9 @@
+{
+  "session_id": "test-session-stop-turn",
+  "transcript_path": "__FIXTURE_DIR__/transcript-plan-file.jsonl",
+  "cwd": "__REPO_ROOT__",
+  "permission_mode": "default",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "I've made the change."
+}

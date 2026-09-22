@@ -10,8 +10,8 @@ an ADR-powered CLAUDE.md/AGENTS.md generator.
 - Covers all 3 output formats (claude-md, agents-md, cursor-rules)
 - Includes error catalog, config reference, runner guide, and diagnostic script
 - Works as inline knowledge AND operational automation
-- Ships Claude Code hooks that check implementation plans against the ADRs
-  committed in `.actual/rules/` before implementation begins
+- Ships Claude Code hooks that check implementation plans, and then the code
+  changes themselves, against the ADRs committed in `.actual/rules/`
 
 ## Install
 
@@ -59,9 +59,9 @@ ln -s ~/.local/share/actual-skill/skills/actual ~/.claude/skills/actual
 ln -s ~/.local/share/actual-skill/skills/actual ~/.agents/skills/actual
 ```
 
-## Plan-stage governance (Claude Code)
+## Plan- and implementation-stage governance (Claude Code)
 
-Installing the plugin registers two hooks, with no further setup:
+Installing the plugin registers three hooks, with no further setup:
 
 - **`SessionStart`** (`startup`, `resume`, `clear`, `compact`, `fork`) — checks
   that the `actual` CLI is installed and new enough, and says how to fix it if
@@ -71,12 +71,24 @@ Installing the plugin registers two hooks, with no further setup:
   is blocked before it reaches the approval dialog. Verified on Claude Code 2.1.231;
   the ordering is observed behavior rather than a documented contract, so it is worth
   re-checking on a materially newer release.
+- **`Stop`** — the end of every turn. The turn's working-tree diff (tracked changes
+  vs `HEAD`, plus untracked, non-ignored files) is checked with `actual impl-check`,
+  and a conflicting diff sends the reason back to Claude and keeps the turn going
+  until it is fixed. It fires every turn, whether or not the session went through
+  plan mode, so work that skipped the plan gate is still governed.
 
-Both hooks are **silent no-ops in any repository without `.actual/rules/`**, so
+All three hooks are **silent no-ops in any repository without `.actual/rules/`**, so
 installing the plugin does not affect unrelated work. They also never hard-fail: a
-missing, outdated, or crashing CLI produces a message and no permission decision.
-A conforming plan also makes no permission decision, so the user's approval dialog
-still appears. Only an explicit deny from `plan-check` can block.
+missing, outdated, or crashing CLI produces a message and no decision. A conforming
+plan makes no permission decision, so the user's approval dialog still appears, and
+a conforming diff lets the turn end normally. Only an explicit deny from
+`plan-check` or `impl-check` can block.
+
+A rule that stays unresolved stops blocking after three denied rounds per session
+(`ACTUAL_PLAN_CHECK_MAX_ROUNDS` / `ACTUAL_IMPL_CHECK_MAX_ROUNDS`; the two budgets are
+independent). A human can clear a denied rule for the session from an ordinary
+terminal with `actual check-override --session <id> --rule <doc-slug>::<rule-id>
+--reason "..."`; one override covers both hooks.
 
 In a git worktree the rules enforced are the active worktree's, on its own branch.
 `CLAUDE_PROJECT_DIR` stays on the original checkout there, while the working
@@ -84,7 +96,7 @@ directory moves to the worktree, so the hooks resolve the root from both signals
 prefer the more specific one. A monorepo subproject launched inside a larger
 repository still governs itself.
 
-Set `ACTUAL_PLAN_GATE=off` to disable them, or `ACTUAL_RULES_DIR` to point them at a
+Set `ACTUAL_PLAN_GATE=off` to disable all of them, or `ACTUAL_RULES_DIR` to point them at a
 different rules directory (forwarded to the CLI as `--rules-dir`). Run
 `bash hooks/tests/run.sh` to exercise the hooks locally — no network or CLI
 install needed.

@@ -150,6 +150,40 @@ is_unrecognized_plan_check() {
   return 1
 }
 
+# impl-check's own counterpart of have_plan_check -- see that function's
+# comment. Checked separately because a CLI can have one subcommand without
+# the other: plan-check shipped first (AK-672-era builds), impl-check later
+# (AK-755), so "has plan-check" does not imply "has impl-check".
+have_impl_check() {
+  actual impl-check --help >/dev/null 2>&1
+}
+
+# impl-check's own counterpart of is_unrecognized_plan_check.
+is_unrecognized_impl_check() {
+  local err
+  err=$(<"$1") || return 1
+  case "$err" in
+    *unrecognized\ subcommand*impl-check*) return 0 ;;
+  esac
+  return 1
+}
+
+# True when a plan-check/impl-check exit 2 came from the CLI rejecting its own
+# invocation (clap argument parsing: a bad ACTUAL_IMPL_CHECK_MAX_ROUNDS value,
+# a version-skewed flag) rather than from a deny. Every clap error starts with
+# "error: "; the CLI's deny reasons never do. Rejected before the judge ran, so
+# no round limit ever breaks the loop -- the gates must fail open on this, not
+# block. Check is_unrecognized_* first: that stderr also starts with "error: "
+# but gets its own upgrade guidance.
+is_cli_usage_error() {
+  local err
+  err=$(<"$1") || return 1
+  case "$err" in
+    'error: '*) return 0 ;;
+  esac
+  return 1
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
@@ -158,7 +192,9 @@ is_unrecognized_plan_check() {
 # text is consumed as hook context (SessionStart additionalContext, or a PreToolUse
 # systemMessage), so ask the agent to actively offer the install rather than passively
 # describe it. It must still ask the user first -- installing a global CLI is a
-# machine-wide change the agent should never make unprompted.
+# machine-wide change the agent should never make unprompted. Do not use it from
+# impl-gate.sh: Stop's systemMessage is shown to the user and never reaches
+# Claude (see stop_install_notice).
 #
 # additionalContext/systemMessage is advisory, not a directive the agent is forced to
 # act on -- unlike a deny, nothing about the hook protocol makes the agent interrupt
@@ -221,6 +257,51 @@ If they agree, run one of these with the Bash tool:
 Then verify with: actual plan-check --help. If they decline, don't run anything --
 upgrading stays optional -- but only resume the original task once they have
 actually answered either way.
+EOF
+}
+
+# impl-check's own counterpart of upgrade_message, for a CLI build that has
+# plan-check but predates AK-755 (no impl-check subcommand yet).
+impl_upgrade_message() {
+  cat <<'EOF'
+Actual implementation-stage governance is configured for this repository
+(.actual/rules/ is present), but the installed `actual` CLI has no `impl-check` subcommand,
+so your changes are not being checked as you go.
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to upgrade it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+If they agree, run one of these with the Bash tool:
+  npm install -g @actualai/actual@latest
+  brew upgrade actual-software/actual/actual
+
+Then verify with: actual impl-check --help. If they decline, don't run anything --
+upgrading stays optional -- but only resume the original task once they have
+actually answered either way.
+EOF
+}
+
+# User-facing counterparts of install_message and impl_upgrade_message, for
+# impl-gate.sh only. Stop's systemMessage is shown to the user and does not
+# reach Claude, and it is emitted again at the end of every turn until the CLI
+# can actually run the check. The agent-directed essay (AskUserQuestion, "your
+# very next reply") is the wrong text for that channel and that cadence.
+# SessionStart already delivers the essay as additionalContext, which is the
+# channel the agent reads. These stay one sentence: what failed, and the
+# command that fixes it.
+stop_install_notice() {
+  cat <<'EOF'
+Actual implementation governance did not run: the `actual` CLI is not installed, so this turn's diff was not checked against .actual/rules/. Install it with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`.
+EOF
+}
+
+stop_impl_upgrade_notice() {
+  cat <<'EOF'
+Actual implementation governance did not run: the installed `actual` CLI has no `impl-check` subcommand, so this turn's diff was not checked against .actual/rules/. Upgrade it with `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
 EOF
 }
 
@@ -292,12 +373,20 @@ has_permission_decision() {
 # match can be trusted against such a payload, so plan-gate.sh must gate both the
 # deny and the notice branch on this, not treat a failed literal match as proof of
 # anything.
+#
+# Escaped backslash pairs (\\) are dropped first, left to right, the same way a
+# JSON decoder tokenizes them: a deny reason quoting source code that contains a
+# é-style literal arrives as \\u00e9, which decodes to a backslash followed
+# by plain text, not an escape. Without this, such a deny would be refused as
+# uninterpretable and the turn would end unblocked. An escaped backslash followed
+# by a real escape (\\p) still leaves the p behind to be caught.
 has_unicode_escape() {
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}
   s=${s//$'\t'/}
   s=${s//$'\r'/}
+  s=${s//\\\\/}
   case "$s" in
     *'\u'[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]*) return 0 ;;
   esac
@@ -349,4 +438,165 @@ emit_pretooluse_notice() {
 emit_sessionstart_context() {
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
     "$(json_escape "$1")"
+}
+
+# --- Stop hook output (impl-gate.sh) ---
+#
+# Stop's decision control is NOT hookSpecificOutput.permissionDecision -- it is
+# a top-level `decision`/`reason` pair, `{"decision":"block","reason":"..."}`,
+# verified against https://code.claude.com/docs/en/hooks (Stop decision
+# control), not assumed from the PreToolUse/ExitPlanMode precedent these
+# PreToolUse emitters above were verified against. `actual impl-check
+# --claude-hook` reuses plan-check's own JSON renderer, which always emits a
+# PreToolUse-shaped hookSpecificOutput regardless of which Claude Code event is
+# asking -- forwarded verbatim to Stop, that shape carries no `decision` field
+# at all, so Claude Code would silently ignore it and let the turn end. Every
+# function below therefore re-renders rather than forwards.
+
+# Extract the value of the first "<field>" string in a JSON document, as a
+# quote-aware byte scan -- never a JSON parse, matching this library's
+# dependency-hygiene constraint (see the file header). The returned value is
+# still JSON-string-escaped exactly as it appeared in $1: callers that copy it
+# into a *_raw emitter below must not run it through json_escape again, or
+# they will double-escape it.
+#
+# Whitespace between the field name, the colon, and the opening quote is
+# skipped (space, tab, CR, LF -- the same set is_deny_decision strips). A
+# pretty-printed `"permissionDecisionReason": "..."`, or one with the colon on
+# the next line, still yields the reason. Whitespace inside the value is kept.
+# An occurrence of the field name that is not followed by that colon-quote
+# shape is not a field (a shorter key that is only a prefix of a longer one,
+# for example); the scan resumes after it.
+#
+# Callers MUST gate this on has_unicode_escape/has_duplicate_permission_decision
+# returning false first (impl-gate.sh always does, via render_stop_verdict):
+# a \uXXXX escape spells a literal double-quote a byte scan cannot see, so
+# this function's quote-termination logic can only be trusted once those
+# checks have ruled that out. Prints nothing and fails (exit 1) when the
+# field is absent or its value is not a terminated string.
+extract_json_string_field() {
+  local s="$1" field="$2" key rest out c i len found_colon found_quote
+  key="\"${field}\""
+
+  while :; do
+    rest="${s#*"$key"}"
+    [ "$rest" = "$s" ] && return 1
+    # Resume here if this occurrence is not a field, so a prefix of a longer
+    # key cannot hide a later real one.
+    s="$rest"
+
+    i=0
+    len=${#rest}
+    found_colon=0
+    while [ "$i" -lt "$len" ]; do
+      c="${rest:$i:1}"
+      case "$c" in
+        ' '|$'\t'|$'\n'|$'\r') i=$((i + 1)) ;;
+        ':') found_colon=1; i=$((i + 1)); break ;;
+        *) break ;;
+      esac
+    done
+    [ "$found_colon" -eq 1 ] || continue
+
+    found_quote=0
+    while [ "$i" -lt "$len" ]; do
+      c="${rest:$i:1}"
+      case "$c" in
+        ' '|$'\t'|$'\n'|$'\r') i=$((i + 1)) ;;
+        '"') found_quote=1; i=$((i + 1)); break ;;
+        *) break ;;
+      esac
+    done
+    [ "$found_quote" -eq 1 ] || continue
+
+    out=""
+    while [ "$i" -lt "$len" ]; do
+      c="${rest:$i:1}"
+      if [ "$c" = '\' ]; then
+        # A backslash always introduces a single-char escape here (\\, \", \n,
+        # \t, \r, \/, \b, \f) -- \uXXXX is excluded by the caller-side gate
+        # above -- so consume it and the next byte together, verbatim, and
+        # never test that next byte as a potential terminating quote.
+        out="${out}${c}${rest:$((i + 1)):1}"
+        i=$((i + 2))
+        continue
+      fi
+      if [ "$c" = '"' ]; then
+        printf '%s' "$out"
+        return 0
+      fi
+      out="${out}${c}"
+      i=$((i + 1))
+    done
+    return 1
+  done
+}
+
+# Stop's one blocking shape: top-level decision:"block" with a required
+# reason (see the section comment above for why this differs from
+# emit_pretooluse_notice's shape). $1 has already been extracted from another
+# JSON document's string value via extract_json_string_field and is therefore
+# already valid JSON-string-escaped bytes -- running it through json_escape
+# here would double-escape it. A script-composed reason goes through
+# emit_stop_block instead, which escapes first.
+emit_stop_block_raw() {
+  printf '{"decision":"block","reason":"%s"}\n' "$1"
+}
+
+# Same shape as emit_stop_block_raw, for a reason this script composed rather
+# than extracted. json_escape runs first so a quote or newline in $1 cannot
+# break the emitted object.
+emit_stop_block() {
+  emit_stop_block_raw "$(json_escape "$1")"
+}
+
+# Advisory for a Stop hook that must NOT force continuation. Stop's only two
+# channels that reach Claude -- decision:"block" and
+# hookSpecificOutput.additionalContext -- both force continuation ("the same
+# loop protections as decision: block", per the docs); neither is safe for a
+# fail-open notice that must let the turn end normally. So this emits a plain,
+# user-facing systemMessage and nothing else -- unlike
+# emit_pretooluse_notice, there is no agent-facing counterpart here to also
+# populate.
+emit_stop_notice() {
+  printf '{"systemMessage":"%s"}\n' "$(json_escape "$1")"
+}
+
+# Same shape, but $1 is already JSON-string-escaped (see emit_stop_block_raw).
+emit_stop_notice_raw() {
+  printf '{"systemMessage":"%s"}\n' "$1"
+}
+
+# Classify and re-render `actual impl-check --claude-hook`'s PreToolUse-shaped
+# stdout ($1) into Stop's own JSON contract, printing the result (or nothing)
+# to stdout. Mirrors the allowlist plan-gate.sh applies inline to its own
+# verdict -- see that script's comments for the full rationale -- but ends in
+# a re-render instead of a forward. A recognized deny always blocks: the
+# extracted reason when the scan can read it, otherwise a fixed reason. A deny
+# must not degrade to a notice, which would let the turn end.
+render_stop_verdict() {
+  local verdict="$1" trimmed reason message
+
+  trimmed=${verdict#"${verdict%%[![:space:]]*}"}
+  trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
+
+  if [ "${trimmed#\{}" != "$trimmed" ] && [ "${trimmed%\}}" != "$trimmed" ]; then
+    if has_unicode_escape "$trimmed" || has_duplicate_permission_decision "$trimmed"; then
+      emit_stop_notice \
+        "Actual implementation governance received a verdict it could not safely interpret (it contained an escaped character sequence or a duplicate permissionDecision key); this turn's diff was not checked against .actual/rules/."
+    elif is_deny_decision "$trimmed"; then
+      reason=$(extract_json_string_field "$verdict" "permissionDecisionReason") || reason=""
+      if [ -n "$reason" ]; then
+        emit_stop_block_raw "$reason"
+      else
+        # Missing, empty, or not a string. Stop requires a reason on block;
+        # an empty one fails schema validation and the turn would end.
+        emit_stop_block \
+          "Actual implementation governance denied this diff, but the verdict reason could not be read. Revise the diff so it conforms to .actual/rules/."
+      fi
+    elif has_system_message "$trimmed" && ! has_permission_decision "$trimmed"; then
+      message=$(extract_json_string_field "$verdict" "systemMessage") || message=""
+      [ -n "$message" ] && emit_stop_notice_raw "$message"
+    fi
+  fi
 }
