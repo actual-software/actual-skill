@@ -65,7 +65,7 @@ release.
 | `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
 | `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
-| `actual impl-check` | Check a `git diff` against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart (AK-755) | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the diff via `git diff HEAD`; direct mode also accepts `--diff-file` or piped stdin. Never emit `permissionDecision: "allow"` |
+| `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart (AK-755) | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes vs `HEAD`, plus untracked, non-ignored files). Direct mode also accepts `--diff-file` or piped stdin, and uses that same working-tree diff when neither is given. Never emit `permissionDecision: "allow"` |
 | `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session (refuses to run non-interactively; never invoked by the agent). `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable), `--reason "<text>"` — all required; `--repo`/`--rules-dir` optional, defaulting to the current directory |
 
 ## Platform Identity & Advisor
@@ -152,7 +152,7 @@ repository. They are registered automatically on install — there is no manual 
 |------|-------|--------------|
 | `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough for `plan-check` and `impl-check`. Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
-| `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated `git diff HEAD` to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
+| `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes vs `HEAD`, plus untracked, non-ignored files) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
 
 `PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
 user's plan-approval dialog, so a blocked plan is revised by the agent rather than
@@ -356,12 +356,15 @@ Fixtures under `hooks/tests/fixtures/` encode the three envelopes:
 
 Unlike plan text, there is no envelope field carrying the material to check — no
 tool call injects a diff the way `ExitPlanMode` injects a plan. `actual impl-check
---claude-hook` always resolves the diff by shelling out to `git diff HEAD` in the
-resolved repository root; the hook envelope (`hooks/tests/fixtures/stop-turn.json`
-is the recorded shape) is forwarded unparsed purely to key the revision-loop session
-off `session_id`, the same way `plan-check`'s envelope is. An empty diff (the working
-tree already matches `HEAD`) is not an error — it is the ordinary "nothing changed
-this turn" case — and degrades to a non-blocking notice, never a deny.
+--claude-hook` always resolves the diff from the working tree in the resolved
+repository root: tracked changes versus `HEAD`, plus untracked files that are not
+gitignored. A file the agent has written but not `git add`ed is part of that diff.
+Gitignored files stay out. The hook envelope
+(`hooks/tests/fixtures/stop-turn.json` is the recorded shape) is forwarded unparsed
+purely to key the revision-loop session off `session_id`, the same way
+`plan-check`'s envelope is. An empty diff (the working tree matches `HEAD` and there
+are no untracked, non-ignored files) is not an error — it is the ordinary "nothing
+changed this turn" case — and degrades to a non-blocking notice, never a deny.
 
 The hook always invokes `actual impl-check --claude-hook --rules-dir <dir>`, same
 `<dir>` resolution as `plan-check`'s.

@@ -4,8 +4,9 @@
 # Fires when Claude finishes responding to a turn -- unconditionally, every
 # time, never gated on plan-gate.sh having run earlier in the same session.
 # A turn that skipped plan mode entirely (no ExitPlanMode call at all) must
-# still be governed; see AK-754. Hands the turn's accumulated `git diff HEAD`
-# to `actual impl-check --claude-hook`, the implementation-stage counterpart
+# still be governed; see AK-754. Hands the turn's accumulated working-tree
+# diff (tracked changes vs HEAD, plus untracked non-ignored files) to
+# `actual impl-check --claude-hook`, the implementation-stage counterpart
 # of `plan-check` (see AK-755): the same committed `.actual/rules/` corpus,
 # the same pipeline, and the same revision-loop session machinery (keyed on
 # session_id, shared with plan-check sessions in the same repo) -- just a
