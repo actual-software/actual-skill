@@ -168,6 +168,22 @@ is_unrecognized_impl_check() {
   return 1
 }
 
+# True when a plan-check/impl-check exit 2 came from the CLI rejecting its own
+# invocation (clap argument parsing: a bad ACTUAL_IMPL_CHECK_MAX_ROUNDS value,
+# a version-skewed flag) rather than from a deny. Every clap error starts with
+# "error: "; the CLI's deny reasons never do. Rejected before the judge ran, so
+# no round limit ever breaks the loop -- the gates must fail open on this, not
+# block. Check is_unrecognized_* first: that stderr also starts with "error: "
+# but gets its own upgrade guidance.
+is_cli_usage_error() {
+  local err
+  err=$(<"$1") || return 1
+  case "$err" in
+    'error: '*) return 0 ;;
+  esac
+  return 1
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
@@ -357,12 +373,20 @@ has_permission_decision() {
 # match can be trusted against such a payload, so plan-gate.sh must gate both the
 # deny and the notice branch on this, not treat a failed literal match as proof of
 # anything.
+#
+# Escaped backslash pairs (\\) are dropped first, left to right, the same way a
+# JSON decoder tokenizes them: a deny reason quoting source code that contains a
+# é-style literal arrives as \\u00e9, which decodes to a backslash followed
+# by plain text, not an escape. Without this, such a deny would be refused as
+# uninterpretable and the turn would end unblocked. An escaped backslash followed
+# by a real escape (\\p) still leaves the p behind to be caught.
 has_unicode_escape() {
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}
   s=${s//$'\t'/}
   s=${s//$'\r'/}
+  s=${s//\\\\/}
   case "$s" in
     *'\u'[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]*) return 0 ;;
   esac

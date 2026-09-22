@@ -234,6 +234,15 @@ else
   fail "exit-2 fallback: expected exit 2 + stderr reason" "status=$st stderr=$(cat "${WORK}/err")"
 fi
 
+# clap rejecting the invocation (here, an invalid ACTUAL_IMPL_CHECK_MAX_ROUNDS)
+# exits 2 too, but it is not a deny: fail open with a notice naming the error.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=usage-error)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "rejected its invocation: error: invalid value" "${WORK}/out"; then
+  pass "CLI usage error at exit 2 fails open with a notice, not a block"
+else
+  fail "CLI usage error must fail open" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
 st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow)
 if [ "$st" = "0" ] && [ "$(decision)" = "none" ]; then
   pass "CLI allow verdict is not forwarded (leaves the approval dialog intact)"
@@ -298,6 +307,24 @@ if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "could not safely in
   pass "deny verdict with a literal duplicate permissionDecision key is not forwarded, and the drop is diagnosed"
 else
   fail "duplicate-key deny must not be forwarded verbatim" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
+# A deny quoting source that contains a \u00e9-style literal: the JSON carries an
+# escaped backslash (\\u00e9), not an escape, so the deny must still go through.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-escaped-span)
+if [ "$st" = "0" ] && [ "$(decision)" = "deny" ] && grep -q "R-001" "${WORK}/out"; then
+  pass "deny quoting an escaped backslash before u00e9 is still forwarded"
+else
+  fail "escaped-backslash deny must not be refused as uninterpretable" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
+# An escaped backslash followed by a real \u0070 escape: stripping the pair must
+# not hide the escape after it.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-escaped-backslash-escape)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "a real escape after an escaped backslash is still refused"
+else
+  fail "escape after an escaped backslash must be refused" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out")"
 fi
 
 echo
@@ -475,6 +502,15 @@ else
   fail "exit-2 fallback: expected exit 2 + stderr reason" "status=$st stderr=$(cat "${WORK}/err")"
 fi
 
+# The Stop case matters most: a block here would repeat at every turn's end,
+# with no round limit to break the loop because the judge never ran.
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=usage-error)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "rejected its invocation: error: invalid value" "${WORK}/out"; then
+  pass "CLI usage error at exit 2 fails open with a notice, never forces continuation"
+else
+  fail "CLI usage error must fail open" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
 st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow)
 if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ]; then
   pass "CLI allow verdict is not forwarded (never forces continuation)"
@@ -523,6 +559,21 @@ if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "could not safe
   pass "deny verdict with a literal duplicate permissionDecision key is not forwarded, and the drop is diagnosed"
 else
   fail "duplicate-key deny must not be forwarded verbatim" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-escaped-span)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] && grep -q "R-001" "${WORK}/out" \
+   && ! grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "deny quoting an escaped backslash before u00e9 still blocks"
+else
+  fail "escaped-backslash deny must block, not degrade to a notice" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-escaped-backslash-escape)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "could not safely interpret" "${WORK}/out"; then
+  pass "a real escape after an escaped backslash is still refused"
+else
+  fail "escape after an escaped backslash must be refused" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
 fi
 
 echo

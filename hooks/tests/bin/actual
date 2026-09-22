@@ -15,6 +15,13 @@
 #   deny-no-reason  permissionDecision:deny with no reason string -- impl-gate
 #                must still block, with a fixed reason
 #   deny-exit2   the subcommand exists, blocks via exit 2 + stderr (fallback path)
+#   usage-error  clap rejects the invocation (e.g. ACTUAL_IMPL_CHECK_MAX_ROUNDS=0):
+#                exit 2 with an "error: " stderr and no usage section -- not a deny
+#   deny-escaped-span  deny whose reason quotes source containing a \u00e9-style
+#                literal, so the JSON carries an escaped backslash (\\u00e9) and
+#                no real escape -- must still block
+#   deny-escaped-backslash-escape  deny whose reason has an escaped backslash
+#                followed by a real \u0070 escape -- must still be refused
 #   notice       the subcommand exists, the material conforms but the CLI has a
 #                disclosure to make (partial coverage / round-limit pass): exit
 #                0, systemMessage only, no permissionDecision
@@ -144,6 +151,23 @@ case "$mode" in
   deny-exit2)
     echo "R-001 MUST: all persistence goes through the repository layer." >&2
     exit 2
+    ;;
+  usage-error)
+    echo "error: invalid value '0' for '--max-rounds <MAX_ROUNDS>': max-rounds must be at least 1, got 0" >&2
+    echo >&2
+    echo "For more information, try '--help'." >&2
+    exit 2
+    ;;
+  deny-escaped-span)
+    # Decodes to: ... the diff adds "caf\u00e9" ... -- a backslash, then text.
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: strings are NFC-normalized. The diff adds \\"caf\\\\u00e9\\" unnormalized."}}\n'
+    exit 0
+    ;;
+  deny-escaped-backslash-escape)
+    # \\ then \u0070: the first pair is an escaped backslash, the \u0070 after
+    # it is a real escape that stripping the pair must not hide.
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: reviewed under x\\\\\\u0070 probe."}}\n'
+    exit 0
     ;;
   notice)
     printf '{"systemMessage":"Partial coverage: 60 of 118 rules checked for this plan.","hookSpecificOutput":{"hookEventName":"PreToolUse","systemMessage":"Partial coverage: 60 of 118 rules checked for this plan."}}\n'

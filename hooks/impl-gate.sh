@@ -90,10 +90,17 @@ case "$status" in
     ;;
   2)
     # Unknown subcommand: a CLI with plan-check but no impl-check yet
-    # (pre-AK-755), fail open with upgrade guidance. Any other exit 2 is
-    # impl-check's own fallback block path.
+    # (pre-AK-755), fail open with upgrade guidance.
     if is_unrecognized_impl_check "$stderr_file"; then
       emit_stop_notice "$(stop_impl_upgrade_notice)"
+      exit 0
+    fi
+    # The CLI rejected its own arguments before judging anything. Blocking
+    # here would repeat at every Stop with no round limit to end it.
+    if is_cli_usage_error "$stderr_file"; then
+      IFS= read -r err_line <"$stderr_file" || true
+      emit_stop_notice \
+        "Actual implementation governance did not run (actual impl-check rejected its invocation: ${err_line}); this turn's diff was not checked against .actual/rules/."
       exit 0
     fi
     # A real deny via the exit-2 fallback: Stop's exit-2 contract is "blocks,
