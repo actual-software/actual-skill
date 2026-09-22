@@ -434,6 +434,34 @@ else
   pass "deny verdict is Stop's own top-level shape, not forwarded PreToolUse JSON"
 fi
 
+# is_deny_decision is whitespace-insensitive. The Stop re-render has to be too:
+# a space after the colon used to classify as deny and then fail open, because
+# the reason scan required `"permissionDecisionReason":"` with no whitespace.
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-spaced)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] \
+   && [ "$(jq -r '.reason' "${WORK}/out")" = "R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler." ]; then
+  pass "deny with whitespace around colons still blocks, and the reason keeps its spaces"
+else
+  fail "spaced deny must block with the extracted reason" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-pretty)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] \
+   && [ "$(jq -r '.reason' "${WORK}/out")" = "R-001 MUST: all persistence goes through the repository layer." ]; then
+  pass "pretty-printed deny still blocks with the extracted reason"
+else
+  fail "pretty-printed deny must block with the extracted reason" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-no-reason)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] \
+   && grep -q "verdict reason could not be read" "${WORK}/out" \
+   && ! grep -q "was not checked" "${WORK}/out"; then
+  pass "deny with no readable reason still blocks, and does not claim the diff was unchecked"
+else
+  fail "unreadable deny reason must still block" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
 st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-exit2)
 if [ "$st" = "2" ] && grep -q "R-001" "${WORK}/err"; then
   pass "exit-2 fallback: blocks with the reason on stderr (Stop's exit-2 contract matches PreToolUse's)"
@@ -460,6 +488,14 @@ if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "Partial covera
   pass "CLI notice (no permission decision) is re-rendered as a plain systemMessage"
 else
   fail "bare notice must be forwarded" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice-spaced)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] \
+   && [ "$(jq -r '.systemMessage' "${WORK}/out")" = "Partial coverage: 60 of 118 rules checked for this plan." ]; then
+  pass "notice with whitespace around colons is still re-rendered as systemMessage"
+else
+  fail "spaced notice must be re-rendered" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out")"
 fi
 
 st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice-escaped-key)

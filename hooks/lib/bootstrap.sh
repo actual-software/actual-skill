@@ -407,47 +407,83 @@ emit_sessionstart_context() {
 # at all, so Claude Code would silently ignore it and let the turn end. Every
 # function below therefore re-renders rather than forwards.
 
-# Extract the value of the first top-level "<field>":"..." string in a JSON
-# document, as a quote-aware byte scan -- never a JSON parse, matching this
-# library's dependency-hygiene constraint (see the file header). The returned
-# value is still JSON-string-escaped exactly as it appeared in $1: callers
-# that copy it into a *_raw emitter below must not run it through json_escape
-# again, or they will double-escape it.
+# Extract the value of the first "<field>" string in a JSON document, as a
+# quote-aware byte scan -- never a JSON parse, matching this library's
+# dependency-hygiene constraint (see the file header). The returned value is
+# still JSON-string-escaped exactly as it appeared in $1: callers that copy it
+# into a *_raw emitter below must not run it through json_escape again, or
+# they will double-escape it.
+#
+# Whitespace between the field name, the colon, and the opening quote is
+# skipped (space, tab, CR, LF -- the same set is_deny_decision strips). A
+# pretty-printed `"permissionDecisionReason": "..."`, or one with the colon on
+# the next line, still yields the reason. Whitespace inside the value is kept.
+# An occurrence of the field name that is not followed by that colon-quote
+# shape is not a field (a shorter key that is only a prefix of a longer one,
+# for example); the scan resumes after it.
 #
 # Callers MUST gate this on has_unicode_escape/has_duplicate_permission_decision
 # returning false first (impl-gate.sh always does, via render_stop_verdict):
 # a \uXXXX escape spells a literal double-quote a byte scan cannot see, so
 # this function's quote-termination logic can only be trusted once those
 # checks have ruled that out. Prints nothing and fails (exit 1) when the
-# field is absent.
+# field is absent or its value is not a terminated string.
 extract_json_string_field() {
-  local s="$1" field="$2" needle rest out c i len
-  needle="\"${field}\":\""
-  rest="${s#*"$needle"}"
-  [ "$rest" = "$s" ] && return 1
+  local s="$1" field="$2" key rest out c i len found_colon found_quote
+  key="\"${field}\""
 
-  out=""
-  i=0
-  len=${#rest}
-  while [ "$i" -lt "$len" ]; do
-    c="${rest:$i:1}"
-    if [ "$c" = '\' ]; then
-      # A backslash always introduces a single-char escape here (\\, \", \n,
-      # \t, \r, \/, \b, \f) -- \uXXXX is excluded by the caller-side gate
-      # above -- so consume it and the next byte together, verbatim, and
-      # never test that next byte as a potential terminating quote.
-      out="${out}${c}${rest:$((i + 1)):1}"
-      i=$((i + 2))
-      continue
-    fi
-    if [ "$c" = '"' ]; then
-      printf '%s' "$out"
-      return 0
-    fi
-    out="${out}${c}"
-    i=$((i + 1))
+  while :; do
+    rest="${s#*"$key"}"
+    [ "$rest" = "$s" ] && return 1
+    # Resume here if this occurrence is not a field, so a prefix of a longer
+    # key cannot hide a later real one.
+    s="$rest"
+
+    i=0
+    len=${#rest}
+    found_colon=0
+    while [ "$i" -lt "$len" ]; do
+      c="${rest:$i:1}"
+      case "$c" in
+        ' '|$'\t'|$'\n'|$'\r') i=$((i + 1)) ;;
+        ':') found_colon=1; i=$((i + 1)); break ;;
+        *) break ;;
+      esac
+    done
+    [ "$found_colon" -eq 1 ] || continue
+
+    found_quote=0
+    while [ "$i" -lt "$len" ]; do
+      c="${rest:$i:1}"
+      case "$c" in
+        ' '|$'\t'|$'\n'|$'\r') i=$((i + 1)) ;;
+        '"') found_quote=1; i=$((i + 1)); break ;;
+        *) break ;;
+      esac
+    done
+    [ "$found_quote" -eq 1 ] || continue
+
+    out=""
+    while [ "$i" -lt "$len" ]; do
+      c="${rest:$i:1}"
+      if [ "$c" = '\' ]; then
+        # A backslash always introduces a single-char escape here (\\, \", \n,
+        # \t, \r, \/, \b, \f) -- \uXXXX is excluded by the caller-side gate
+        # above -- so consume it and the next byte together, verbatim, and
+        # never test that next byte as a potential terminating quote.
+        out="${out}${c}${rest:$((i + 1)):1}"
+        i=$((i + 2))
+        continue
+      fi
+      if [ "$c" = '"' ]; then
+        printf '%s' "$out"
+        return 0
+      fi
+      out="${out}${c}"
+      i=$((i + 1))
+    done
+    return 1
   done
-  return 1
 }
 
 # Stop's one blocking shape: top-level decision:"block" with a required
@@ -455,12 +491,17 @@ extract_json_string_field() {
 # emit_pretooluse_notice's shape). $1 has already been extracted from another
 # JSON document's string value via extract_json_string_field and is therefore
 # already valid JSON-string-escaped bytes -- running it through json_escape
-# here would double-escape it. (render_stop_verdict is impl-gate.sh's only
-# caller today, and every reason it blocks with comes from extraction; a
-# script-composed, not-yet-escaped reason would need a json_escape'd sibling
-# of this function, which does not exist because nothing needs it yet.)
+# here would double-escape it. A script-composed reason goes through
+# emit_stop_block instead, which escapes first.
 emit_stop_block_raw() {
   printf '{"decision":"block","reason":"%s"}\n' "$1"
+}
+
+# Same shape as emit_stop_block_raw, for a reason this script composed rather
+# than extracted. json_escape runs first so a quote or newline in $1 cannot
+# break the emitted object.
+emit_stop_block() {
+  emit_stop_block_raw "$(json_escape "$1")"
 }
 
 # Advisory for a Stop hook that must NOT force continuation. Stop's only two
@@ -484,8 +525,9 @@ emit_stop_notice_raw() {
 # stdout ($1) into Stop's own JSON contract, printing the result (or nothing)
 # to stdout. Mirrors the allowlist plan-gate.sh applies inline to its own
 # verdict -- see that script's comments for the full rationale -- but ends in
-# a re-render instead of a forward, and the deny branch here requires the
-# reason to be safely extractable, not just present.
+# a re-render instead of a forward. A recognized deny always blocks: the
+# extracted reason when the scan can read it, otherwise a fixed reason. A deny
+# must not degrade to a notice, which would let the turn end.
 render_stop_verdict() {
   local verdict="$1" trimmed reason message
 
@@ -501,8 +543,10 @@ render_stop_verdict() {
       if [ -n "$reason" ]; then
         emit_stop_block_raw "$reason"
       else
-        emit_stop_notice \
-          "Actual implementation governance denied this diff, but the reason could not be safely read; this turn's diff was not checked against .actual/rules/."
+        # Missing, empty, or not a string. Stop requires a reason on block;
+        # an empty one fails schema validation and the turn would end.
+        emit_stop_block \
+          "Actual implementation governance denied this diff, but the verdict reason could not be read. Revise the diff so it conforms to .actual/rules/."
       fi
     elif has_system_message "$trimmed" && ! has_permission_decision "$trimmed"; then
       message=$(extract_json_string_field "$verdict" "systemMessage") || message=""

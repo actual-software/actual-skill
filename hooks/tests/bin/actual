@@ -8,10 +8,18 @@
 #                       updatedInput field, so the literal bytes "permissionDecision":"allow"
 #                       never appear even though it decodes to the same grant
 #   deny         the subcommand exists, returns a "deny" verdict at exit 0
+#   deny-spaced  deny with whitespace between each key, colon, and value -- the
+#                shape is_deny_decision accepts and extract_json_string_field
+#                must also accept, or impl-gate fails a real deny open
+#   deny-pretty  deny pretty-printed, colon and value on following lines
+#   deny-no-reason  permissionDecision:deny with no reason string -- impl-gate
+#                must still block, with a fixed reason
 #   deny-exit2   the subcommand exists, blocks via exit 2 + stderr (fallback path)
 #   notice       the subcommand exists, the material conforms but the CLI has a
 #                disclosure to make (partial coverage / round-limit pass): exit
 #                0, systemMessage only, no permissionDecision
+#   notice-spaced  the same notice with a space after each colon, which the
+#                Stop re-render must still surface as systemMessage
 #   notice-escaped-key  a systemMessage alongside permissionDecision:allow, but the
 #                       key is spelled with a \uXXXX escape so the literal bytes
 #                       "permissionDecision": never appear -- decodes to a grant
@@ -115,12 +123,34 @@ case "$mode" in
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler."}}\n'
     exit 0
     ;;
+  deny-spaced)
+    printf '{"hookSpecificOutput":{"hookEventName": "PreToolUse","permissionDecision": "deny","permissionDecisionReason": "R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler."}}\n'
+    exit 0
+    ;;
+  deny-pretty)
+    printf '%s\n' '{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "R-001 MUST: all persistence goes through the repository layer."
+  }
+}'
+    exit 0
+    ;;
+  deny-no-reason)
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}\n'
+    exit 0
+    ;;
   deny-exit2)
     echo "R-001 MUST: all persistence goes through the repository layer." >&2
     exit 2
     ;;
   notice)
     printf '{"systemMessage":"Partial coverage: 60 of 118 rules checked for this plan.","hookSpecificOutput":{"hookEventName":"PreToolUse","systemMessage":"Partial coverage: 60 of 118 rules checked for this plan."}}\n'
+    exit 0
+    ;;
+  notice-spaced)
+    printf '{"systemMessage": "Partial coverage: 60 of 118 rules checked for this plan.","hookSpecificOutput":{"hookEventName": "PreToolUse","systemMessage": "Partial coverage: 60 of 118 rules checked for this plan."}}\n'
     exit 0
     ;;
   notice-escaped-key)

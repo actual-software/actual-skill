@@ -285,7 +285,10 @@ forwarding it:
   a quote-aware byte scan (`extract_json_string_field`), never a JSON parse — same
   dependency-hygiene constraint as everything else in `bootstrap.sh` — and is only
   trusted once the escape/duplicate-key guards have already passed, since those are
-  exactly what make quote-termination unambiguous.
+  exactly what make quote-termination unambiguous. Whitespace between the field
+  name, the colon, and the opening quote is skipped, so a pretty-printed verdict
+  still yields its reason. A recognized deny whose reason cannot be read still
+  blocks, with a fixed reason; it does not degrade to a notice.
 - A recognized bare **notice** (partial coverage, round-limit pass — no permission
   decision at all) becomes a plain top-level `{"systemMessage":"..."}`. This is
   deliberately *not* `hookSpecificOutput.additionalContext`: per Claude Code's docs,
