@@ -65,7 +65,7 @@ run_hook() {
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         "$@" \
@@ -82,7 +82,7 @@ run_hook_no_cli() {
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
         PATH="${WORK}/empty-bin:/usr/bin:/bin" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
@@ -98,7 +98,7 @@ run_hook_cwd() {
   shift 4
   local status
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         "$@" \
@@ -401,6 +401,14 @@ else
   fail "opt-out did not disable the gate" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+rm -f "${WORK}/subprocess-capture" "${WORK}/subprocess-capture.argv"
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny ACTUAL_CLI_SUBPROCESS=1 ACTUAL_TEST_CAPTURE="${WORK}/subprocess-capture")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${WORK}/subprocess-capture.argv" ]; then
+  pass "ACTUAL_CLI_SUBPROCESS=1: silent no-op that never invokes the CLI"
+else
+  fail "subprocess guard did not disable the plan-gate" "status=$st stdout=$(cat "${WORK}/out") argv=$(cat "${WORK}/subprocess-capture.argv" 2>/dev/null)"
+fi
+
 echo
 echo "=== impl-gate: no committed rules ==="
 st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=deny)
@@ -613,6 +621,14 @@ else
   fail "opt-out did not disable the gate" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+rm -f "${WORK}/subprocess-capture" "${WORK}/subprocess-capture.argv"
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny ACTUAL_CLI_SUBPROCESS=1 ACTUAL_TEST_CAPTURE="${WORK}/subprocess-capture")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${WORK}/subprocess-capture.argv" ]; then
+  pass "ACTUAL_CLI_SUBPROCESS=1: silent no-op that never invokes the CLI (no recursive impl-check)"
+else
+  fail "subprocess guard did not disable the impl-gate" "status=$st stdout=$(cat "${WORK}/out") argv=$(cat "${WORK}/subprocess-capture.argv" 2>/dev/null)"
+fi
+
 echo
 echo "=== impl-gate: fires unconditionally, independent of plan-gate ==="
 # AK-754 requirement: the Stop hook must govern a turn even when
@@ -643,6 +659,13 @@ if [ "$st" = "0" ] && [ "$(jq -r '.hookSpecificOutput.hookEventName' < "${WORK}/
   pass "rules + working CLI: reports governance active with the rule count"
 else
   fail "healthy preflight context wrong" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_CLI_SUBPROCESS=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_CLI_SUBPROCESS=1: no session context inside actual-cli's own subprocess"
+else
+  fail "subprocess guard did not silence preflight" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 st=$(run_hook_no_cli "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES")

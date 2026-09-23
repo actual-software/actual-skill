@@ -97,7 +97,10 @@ prefer the more specific one. A monorepo subproject launched inside a larger
 repository still governs itself.
 
 Set `ACTUAL_PLAN_GATE=off` to disable all of them, or `ACTUAL_RULES_DIR` to point them at a
-different rules directory (forwarded to the CLI as `--rules-dir`). Run
+different rules directory (forwarded to the CLI as `--rules-dir`). The hooks also
+stay silent inside the `claude` subprocesses `actual` itself spawns, which it marks
+with `ACTUAL_CLI_SUBPROCESS=1`. Otherwise the judge's own Stop hook would rerun
+`impl-check` and recurse. Run
 `bash hooks/tests/run.sh` to exercise the hooks locally — no network or CLI
 install needed.
 
