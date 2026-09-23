@@ -45,8 +45,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 payload=$(cat)
 
 # 2. Explicit opt-out, shared with plan-gate.sh -- one switch disables all
-#    of this plugin's governance hooks.
-if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ]; then
+#    of this plugin's governance hooks. Also a no-op inside actual-cli's own
+#    subprocesses, or this hook would recurse (see inside_actual_subprocess).
+if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 

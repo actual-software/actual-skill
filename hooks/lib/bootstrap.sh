@@ -124,6 +124,19 @@ rules_present() {
   [ "$(rules_count "$(rules_dir)")" -gt 0 ]
 }
 
+# True inside a `claude` subprocess that actual-cli itself spawned (its
+# conformance judge, stage-2 rank, or tailoring), which the CLI marks with
+# ACTUAL_CLI_SUBPROCESS=1. Every hook must be a silent no-op there. Otherwise
+# the subprocess's own Stop hook reruns `actual impl-check`, which spawns
+# another subprocess, and so on -- an unbounded chain that holds the outer
+# judge until its budget expires and leaves orphaned hooks spawning model
+# calls after it gives up. actual-cli also passes disableAllHooks to those
+# subprocesses; this is the backstop for a runner or Claude Code version
+# where that flag doesn't take effect.
+inside_actual_subprocess() {
+  [ "${ACTUAL_CLI_SUBPROCESS:-}" = "1" ]
+}
+
 # --- CLI detection ---
 
 have_actual() {
