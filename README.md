@@ -1,4 +1,4 @@
-# actual CLI Skill
+# Actual.ai CLI Skill
 
 A feature-complete AI companion for the [actual CLI](https://cli.actual.ai),
 an ADR-powered CLAUDE.md/AGENTS.md generator.
@@ -13,22 +13,50 @@ an ADR-powered CLAUDE.md/AGENTS.md generator.
 - Ships Claude Code hooks that check implementation plans, and then the code
   changes themselves, against the ADRs committed in `.actual/rules/`
 
-## Install
+## Setup
 
-### Claude Code (recommended)
+### Claude Code CLI Install
+
+Run each step as its own copy/paste.
+
+Step 1 — add this repo as a marketplace:
 
 ```bash
-# Add this repo as a marketplace
 /plugin marketplace add actual-software/actual-skill
+```
 
-# Install the plugin
+Step 2 — install the plugin:
+
+```bash
 /plugin install actual-cli@actual-cli-skills
 ```
 
-### Codex (OpenAI) — current skill install
+Step 3 — reload plugins so Claude Code CLI loads the newly installed plugin:
 
+```bash
+/reload-plugins
 ```
+
+### Codex Install
+
+```bash
 $skill-installer install the actual skill from actual-software/actual-skill
+```
+
+On first use, the actual skill will offer to install the `actual` CLI.
+
+```bash
+$actual
+```
+
+Prompt to install actual-cli
+
+```bash
+The `actual` CLI is still not installed. Should I install it with:
+
+    npm install -g @actualai/actual
+
+Then I'll verify it with `actual --version`.
 ```
 
 ### ChatGPT and Codex plugin
