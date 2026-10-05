@@ -10,7 +10,6 @@
 
 <p align="center">
   <a href="https://github.com/actual-software/actual-skill/blob/main/LICENSE"><img src="https://img.shields.io/github/license/actual-software/actual-skill" alt="License"></a>
-  <a href="https://github.com/actual-software/actual-skill/releases"><img src="https://img.shields.io/github/v/release/actual-software/actual-skill" alt="Release"></a>
   <a href="https://github.com/actual-software/actual-skill/stargazers"><img src="https://img.shields.io/github/stars/actual-software/actual-skill?style=flat" alt="Stars"></a>
   <a href="https://github.com/actual-software/actual-skill/issues"><img src="https://img.shields.io/github/issues/actual-software/actual-skill" alt="Issues"></a>
 </p>
