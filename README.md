@@ -14,6 +14,8 @@
   <a href="https://github.com/actual-software/actual-skill/issues"><img src="https://img.shields.io/github/issues/actual-software/actual-skill" alt="Issues"></a>
 </p>
 
+<img src="assets/divider.svg" width="100%" height="4" alt="">
+
 ## Quickstart
 
 ### Install Actual.ai Skill — Claude Code CLI
@@ -83,6 +85,8 @@ ln -s ~/.local/share/actual-skill/skills/actual ~/.agents/skills/actual
 
 </details>
 
+<img src="assets/divider.svg" width="100%" height="4" alt="">
+
 ## Use Actual.ai Skill
 
 Once installed, ask your agent in plain language. For example:
@@ -95,25 +99,37 @@ Once installed, ask your agent in plain language. For example:
 
 In Codex, you can also call the skill directly by starting the prompt with `$actual`.
 
+<img src="assets/divider.svg" width="100%" height="4" alt="">
+
 ## What is the Actual.ai Skill?
 
 The Actual.ai Skill gives your AI coding agents architectural guardrails, keeping every plan and change grounded in the ADRs your team has already written.
+
+<img src="assets/divider.svg" width="100%" height="4" alt="">
 
 ## Why do I need the Actual.ai Skill?
 
 Coding agents don't know the architecture decisions your team has already made, so they write code that ignores them. The skill gives your agent your team's ADRs as context, so its code follows your architecture from the start.
 
+<img src="assets/divider.svg" width="100%" height="4" alt="">
+
 ## Who is the Actual.ai Skill for?
 
 AI-native software teams: developers who build with coding agents and want those agents to follow the architecture decisions their team has already made.
+
+<img src="assets/divider.svg" width="100%" height="4" alt="">
 
 ## Where does the Actual.ai Skill work?
 
 Inside the coding agent your team already uses: Claude Code, Codex, ChatGPT, Cursor, or OpenCode. It works in any repository with architecture rules committed in `.actual/rules/`, and stays silent in repositories without them.
 
+<img src="assets/divider.svg" width="100%" height="4" alt="">
+
 ## When does the Actual.ai Skill run?
 
 Whenever an architecture question comes up. Before your agent writes code, it asks your ADRs how your team builds things and gets an answer that cites its sources. In Claude Code, the skill also checks the plan before implementation starts and the changes at the end of every turn.
+
+<img src="assets/divider.svg" width="100%" height="4" alt="">
 
 ## How does the Actual.ai Skill work?
 
@@ -146,6 +162,8 @@ See the [Actual CLI docs](https://actual.ai/cli/docs) for getting started and th
 - A supported coding agent: Claude Code, Codex, ChatGPT, Cursor, or OpenCode.
 - Your repository onboarded at [app.actual.ai](https://app.actual.ai), so Actual can generate its ADRs.
 - The `actual` CLI ([actual-software/actual-cli](https://github.com/actual-software/actual-cli)). The skill offers to install it on first use, or you can install it yourself with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`.
+
+<img src="assets/divider.svg" width="100%" height="4" alt="">
 
 ## License
 
