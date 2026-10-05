@@ -139,7 +139,7 @@ When something fails, the skill diagnoses it for you. It knows every error the C
 
 ### Documentation
 
-Full documentation lives online: the [getting started guide and command reference](https://app.actual.ai/cli/docs) for humans, the machine-readable [docs.md](https://app.actual.ai/cli/docs.md), the [developer resources](https://app.actual.ai/developers) (OpenAPI spec, npm package, auth, and service status), and a concise [llms.txt](https://app.actual.ai/cli/llms.txt) summary for LLMs.
+Full documentation lives online: the [getting started guide and command reference](https://actual.ai/cli/docs) for humans, the machine-readable [docs.md](https://actual.ai/cli/docs.md), the [developer resources](https://actual.ai/developers) (OpenAPI spec, npm package, auth, and service status), and a concise [llms.txt](https://actual.ai/cli/llms.txt) summary for LLMs.
 
 ### Requirements
 
