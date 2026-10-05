@@ -36,7 +36,7 @@
       "Preview the ADR guidance Actual would add here.",
       "Diagnose why Actual CLI is failing."
     ],
-    "brandColor": "#2563EB",
+    "brandColor": "#06E58B",
     "composerIcon": "./assets/logo.png",
     "logo": "./assets/logo.png"
   }
