@@ -139,7 +139,7 @@ When something fails, the skill diagnoses it for you. It knows every error the C
 
 ### Documentation
 
-See the [Actual CLI docs](https://actual.ai/cli/docs) for getting started and the full command reference.
+See the [Actual CLI docs](https://actual.ai/cli/docs) for getting started and the full command reference. Point your agent at [docs.md](https://actual.ai/cli/docs.md) for the same docs in Markdown.
 
 ### Requirements
 
