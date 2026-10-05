@@ -39,8 +39,8 @@ Step 3 — reload plugins so Claude Code CLI loads the newly installed plugin:
 ```
 /reload-plugins
 ```
-
-### Install Actual.ai Skill — Codex
+<details>
+<summary><strong>Install Actual.ai Skill — Codex</strong></summary>
 
 ```
 $skill-installer install the actual skill from actual-software/actual-skill
@@ -57,10 +57,7 @@ The `actual` CLI is still not installed. Should I install it with:
 
 Then I'll verify it with `actual --version`.
 ```
-
-### Install Actual.ai Skill — ChatGPT and Codex plugin
-
-This repository also contains a universal plugin manifest at `.codex-plugin/plugin.json`. During local testing, package the repository root as the `actual-cli` plugin and install it from a local marketplace. After public review and publication, install **Actual CLI** from the universal Plugins Directory shared by ChatGPT and Codex.
+</details>
 
 <details>
 <summary><strong>Install Actual.ai Skill — OpenCode / Cursor / Manual</strong></summary>
