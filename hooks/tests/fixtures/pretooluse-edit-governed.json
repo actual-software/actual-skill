@@ -1,0 +1,10 @@
+{
+  "session_id": "test-session-read",
+  "transcript_path": "__FIXTURE_DIR__/transcript-plan-file.jsonl",
+  "cwd": "__REPO_ROOT__",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {"file_path": "__REPO_ROOT__/src/persistence/user_store.ts"},
+  "tool_use_id": "toolu_01TEST"
+}

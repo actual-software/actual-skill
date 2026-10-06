@@ -24,6 +24,16 @@
             "statusMessage": "Checking plan against architecture rules..."
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/rules-brief.sh",
+            "timeout": 2
+          }
+        ]
       }
     ],
     "PostToolUse": [
