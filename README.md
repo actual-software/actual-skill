@@ -145,9 +145,11 @@ When your agent hits an architecture question, the skill asks the Actual advisor
 
 In Claude Code, the skill checks your agent's work against the architecture rules committed in `.actual/rules/`. When your agent leaves plan mode, its plan is checked before you see the approval dialog. At the end of every turn, its changes are checked too. A conflict goes back to the agent with the reason, and the turn continues until it's fixed.
 
+Your agent is also briefed as it reads. When it opens a file covered by a rule, the rules governing that file are surfaced before it makes its first edit. Briefing is advisory: it never blocks anything, and it needs a CLI new enough to have `actual rules brief` — if yours isn't, the two checks above still run and the session start tells you so.
+
 Governance never gets in the way of unrelated work. Outside a repository with `.actual/rules/`, the checks do nothing. If the CLI is missing, outdated, or crashes, you get a message instead of a block. A rule that stays unresolved stops blocking after three denied rounds per session. To clear a denied rule for the rest of the session, run `actual check-override --session <id> --rule <doc-slug>::<rule-id> --reason "..."` from a terminal.
 
-Set `ACTUAL_PLAN_GATE=off` to turn governance off, or `ACTUAL_RULES_DIR` to use a different rules directory. The hooks also stay silent inside the `claude` subprocesses `actual` itself spawns (marked with `ACTUAL_CLI_SUBPROCESS=1`), so the judge's own Stop hook can't rerun `impl-check` and recurse. Run `bash hooks/tests/run.sh` to test the hooks locally; it needs no network or CLI install. Governance relies on Claude Code hooks, so it isn't available in Codex, ChatGPT, Cursor, or OpenCode.
+Set `ACTUAL_PLAN_GATE=off` to turn governance off, `ACTUAL_RULES_BRIEF=off` to turn off read-time briefing alone while the checks keep running, or `ACTUAL_RULES_DIR` to use a different rules directory. The hooks also stay silent inside the `claude` subprocesses `actual` itself spawns (marked with `ACTUAL_CLI_SUBPROCESS=1`), so the judge's own Stop hook can't rerun `impl-check` and recurse. Failures are silent by design, so if you need to see why briefing isn't appearing, set `ACTUAL_HOOK_DEBUG=1` and run `claude --debug`. Run `bash hooks/tests/run.sh` to test the hooks locally; it needs no network or CLI install. Governance relies on Claude Code hooks, so it isn't available in Codex, ChatGPT, Cursor, or OpenCode.
 
 ### Troubleshooting
 

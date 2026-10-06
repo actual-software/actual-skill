@@ -46,7 +46,7 @@ if ! have_actual; then
 fi
 
 # 5. Delegate. Do not probe `plan-check --help` here: SessionStart already did,
-#    and a second spawn is a cold Node boot on the plan boundary. An old CLI's
+#    and a second spawn is wasted work on the plan boundary. An old CLI's
 #    unknown-subcommand exit 2 is classified below as upgrade + fail-open, not deny.
 #    Pass --rules-dir so the CLI scores the same directory this hook just checked,
 #    including ACTUAL_RULES_DIR. Resolve that directory BEFORE the cd: root

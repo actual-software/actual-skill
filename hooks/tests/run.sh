@@ -1044,6 +1044,15 @@ else
   fail "rules-brief spawns git more than once" "status=$st git_calls=$GIT_CALLS calls=$(tr '\n' '; ' < "$GIT_LOG")"
 fi
 
+# Not briefing the same rules twice in a session is the CLI's job, but it can
+# only do it if the hook hands over the session identity -- which it does by
+# forwarding the envelope whole. That half of the contract is testable here.
+if [ "$(jq -r '.session_id' "$CAPTURE_RB")" = "test-session-read" ]; then
+  pass "session_id reaches the CLI, so it can dedupe briefs within a session"
+else
+  fail "session_id not forwarded" "captured=$(cat "$CAPTURE_RB" 2>/dev/null)"
+fi
+
 st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_PLAN_GATE=off)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
   pass "ACTUAL_PLAN_GATE=off: silent no-op"
@@ -1051,10 +1060,51 @@ else
   fail "opt-out did not disable the brief" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_RULES_BRIEF=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_RULES_BRIEF=off: briefing alone is disabled"
+else
+  fail "granular opt-out did not disable the brief" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# ...and it must disable ONLY briefing: the gates answer to ACTUAL_PLAN_GATE.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny ACTUAL_RULES_BRIEF=off)
+if [ "$(decision)" = "deny" ]; then
+  pass "ACTUAL_RULES_BRIEF=off leaves the plan gate blocking"
+else
+  fail "granular opt-out leaked into the plan gate" "decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
+# Every failure on this path is silent by contract, so ACTUAL_HOOK_DEBUG is the
+# only way to tell a working brief from one that is being dropped.
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-trailing-field ACTUAL_HOOK_DEBUG=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] \
+   && grep -q "dropped (content is not a single JSON string)" "${WORK}/err"; then
+  pass "ACTUAL_HOOK_DEBUG names the drop reason on stderr, stdout still silent"
+else
+  fail "debug switch did not explain the drop" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=crash ACTUAL_HOOK_DEBUG=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] \
+   && grep -q "cli-stderr:.*panicked" "${WORK}/err"; then
+  pass "ACTUAL_HOOK_DEBUG surfaces a CLI crash that is otherwise swallowed"
+else
+  fail "debug switch did not surface the crash" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
+# Without the switch, a crash leaves no trace at all -- the fail-open contract.
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=crash)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "without ACTUAL_HOOK_DEBUG the same crash stays completely silent"
+else
+  fail "debug output leaked without the switch" "stderr=$(cat "${WORK}/err")"
+fi
+
 if [ "$(jq -r '.hooks.PostToolUse[0].matcher' "${HOOKS_DIR}/hooks.json")" = "Read" ] \
    && [ "$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/rules-brief.sh' ] \
-   && [ "$(jq -r '.hooks.PostToolUse[0].hooks[0].timeout' "${HOOKS_DIR}/hooks.json")" -le 5 ]; then
-  pass "hooks.json registers PostToolUse:Read -> rules-brief.sh with a short timeout"
+   && [ "$(jq -r '.hooks.PostToolUse[0].hooks[0].timeout' "${HOOKS_DIR}/hooks.json")" = "2" ]; then
+  pass "hooks.json registers PostToolUse:Read -> rules-brief.sh with the 2s timeout"
 else
   fail "hooks.json PostToolUse registration wrong" "$(jq -c '.hooks.PostToolUse' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
 fi

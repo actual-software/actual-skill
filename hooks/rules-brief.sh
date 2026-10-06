@@ -28,7 +28,12 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
 
-if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ]; then
+# Two switches, because they answer different questions. ACTUAL_PLAN_GATE is the
+# master off switch every hook in this plugin honours. ACTUAL_RULES_BRIEF turns
+# off read-time briefing alone, leaving the plan and Stop gates running: briefing
+# is the only hook here that fires on every Read, so it is the only one whose
+# cost a user might want to drop without giving up the checks that block.
+if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || [ "${ACTUAL_RULES_BRIEF:-on}" = "off" ]; then
   exit 0
 fi
 
@@ -53,6 +58,21 @@ cd "$repo_root" 2>/dev/null || true
 
 reply=$(printf '%s' "$payload" | actual rules brief --claude-hook --rules-dir "$dir" 2>"$stderr_file")
 status=$?
+
+# Silence is the whole contract here, which also means a brief that never
+# arrives is indistinguishable from a file with no rules -- and a PostToolUse
+# hook that hits its timeout is cancelled with its output discarded and nothing
+# shown to anyone, so there is normally no thread to pull at all. ACTUAL_HOOK_DEBUG
+# is the thread: it echoes the CLI's exit status and stderr to this hook's own
+# stderr, which Claude Code surfaces under `claude --debug`. Diagnostic only --
+# it never touches stdout, never changes a forwarding decision, and never
+# changes the exit status, so a debugging session governs exactly as a normal
+# one does.
+if [ -n "${ACTUAL_HOOK_DEBUG:-}" ]; then
+  printf 'actual-rules-brief: exit=%s rules-dir=%s\n' "$status" "$dir" >&2
+  [ -s "$stderr_file" ] && sed 's/^/actual-rules-brief: cli-stderr: /' "$stderr_file" >&2
+  printf 'actual-rules-brief: cli-stdout: %s\n' "$reply" >&2
+fi
 
 # Any failure -- including an old CLI's unknown subcommand -- is silence.
 [ "$status" -eq 0 ] || exit 0
@@ -93,8 +113,13 @@ if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
   unescaped=${body//\\\\/}
   unescaped=${unescaped//\\\"/}
   case "$unescaped" in
-    *'"'*) exit 0 ;;
+    *'"'*)
+      [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
+        printf 'actual-rules-brief: dropped (content is not a single JSON string)\n' >&2
+      exit 0 ;;
   esac
   printf '%s\n' "$trimmed"
+elif [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && [ -n "$trimmed" ]; then
+  printf 'actual-rules-brief: dropped (reply is not the allowlisted shape)\n' >&2
 fi
 exit 0

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # bootstrap.sh - Shared preflight helpers for the actual plan-stage governance hooks.
 #
-# Sourced by hooks/plan-gate.sh (PreToolUse:ExitPlanMode) and hooks/preflight.sh
+# Sourced by all four hooks: plan-gate.sh (PreToolUse:ExitPlanMode),
+# impl-gate.sh (Stop), rules-brief.sh (PostToolUse:Read) and preflight.sh
 # (SessionStart). Read-only: never modifies files, config, or state.
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
