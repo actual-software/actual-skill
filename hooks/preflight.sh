@@ -12,6 +12,9 @@
 # subcommands shipped in different CLI releases (plan-check at AK-672,
 # impl-check later at AK-755), so a CLI can have one without the other.
 #
+# rules brief (the PostToolUse:Read rule briefing) is probed last, after the two
+# gates: it is the newest subcommand.
+#
 # Silent unless this repository actually has committed rules, so installing the
 # plugin is invisible in unrelated repositories. Registered for startup, resume,
 # clear, compact, and fork so the reminder is restored after compaction.
@@ -54,6 +57,11 @@ fi
 
 if ! have_impl_check; then
   emit_sessionstart_context "$(impl_upgrade_message)"
+  exit 0
+fi
+
+if ! have_rules_brief; then
+  emit_sessionstart_context "$(rules_brief_upgrade_message)"
   exit 0
 fi
 

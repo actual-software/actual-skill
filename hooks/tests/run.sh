@@ -694,6 +694,15 @@ else
   fail "impl-check-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-rules-brief)
+if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
+   && grep -q "Offer to upgrade it now" "${WORK}/out" \
+   && grep -q "no .rules brief. subcommand" "${WORK}/out"; then
+  pass "rules + CLI has both gates but not rules brief: its own upgrade guidance, framed as an offer"
+else
+  fail "rules-brief-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
 echo
 echo "=== fake CLI requires --claude-hook ==="
 env PATH="${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=allow \

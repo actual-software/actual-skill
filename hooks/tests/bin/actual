@@ -78,6 +78,10 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
     echo "error: unrecognized subcommand 'brief'" >&2
     exit 2
   fi
+  if [ "${1:-}" = "--help" ]; then
+    echo "Usage: actual rules brief [--claude-hook] [--rules-dir <dir>]"
+    exit 0
+  fi
   has_claude_hook=0
   for arg in "$@"; do [ "$arg" = "--claude-hook" ] && has_claude_hook=1; done
   if [ "$has_claude_hook" -eq 0 ]; then
