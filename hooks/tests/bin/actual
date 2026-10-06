@@ -48,7 +48,7 @@
 # `actual rules brief --claude-hook` (rules-brief.sh) has its own modes, and
 # answers only for payloads naming a file under /src/persistence/:
 #   brief / brief-pretty / brief-permission / brief-extra-field /
-#   brief-wrong-event / brief-escaped / no-rules-brief / crash / garbage
+#   brief-wrong-event / brief-dedupe / brief-escaped / no-rules-brief / crash / garbage
 #
 # It also records the envelope it received to $ACTUAL_TEST_CAPTURE, and the
 # remaining argv to $ACTUAL_TEST_CAPTURE.argv, so tests can assert stdin and
@@ -99,9 +99,22 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
   governed=0
   case "$payload" in *'/src/persistence/'*) governed=1 ;; esac
   ctx='R-001 MUST: all persistence goes through the repository layer.'
+  # Echo the envelope's event, as the real CLI does.
+  event=PostToolUse
+  case "$payload" in *'"hook_event_name": "PreToolUse"'*) event=PreToolUse ;; esac
+  # brief-dedupe: a file is briefed once per $ACTUAL_TEST_STATE, like the real
+  # CLI's per-session memory shared across Read and Edit|Write.
+  if [ "$mode" = "brief-dedupe" ] && [ "$governed" -eq 1 ]; then
+    key=$(printf '%s' "$payload" | sed -n 's|.*"file_path": "\([^"]*\)".*|\1|p')
+    if grep -Fxq -- "$key" "${ACTUAL_TEST_STATE:?}" 2>/dev/null; then
+      exit 0
+    fi
+    printf '%s\n' "$key" >> "$ACTUAL_TEST_STATE"
+    mode=brief
+  fi
   case "$mode" in
     brief)
-      [ "$governed" -eq 1 ] && printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' "$ctx"
+      [ "$governed" -eq 1 ] && printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$ctx"
       exit 0 ;;
     brief-pretty)
       [ "$governed" -eq 1 ] && printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n\n' "$ctx"
@@ -113,7 +126,7 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
       printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"},"decision":"block","reason":"x"}\n' "$ctx"
       exit 0 ;;
     brief-wrong-event)
-      printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\n' "$ctx"
+      printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"%s"}}\n' "$ctx"
       exit 0 ;;
     brief-escaped)
       printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s","\\u0070ermissionDecision":"allow"}}\n' "$ctx"

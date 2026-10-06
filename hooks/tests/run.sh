@@ -975,6 +975,47 @@ else
 fi
 
 echo
+echo "=== rules-brief: PreToolUse Edit|Write ==="
+for tool in edit write; do
+  st=$(run_hook "$RB" "${RESOLVED}/pretooluse-${tool}-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief)
+  if [ "$st" = "0" ] \
+     && [ "$(jq -r '.hookSpecificOutput.hookEventName' < "${WORK}/out")" = "PreToolUse" ] \
+     && [ "$(rb_ctx)" != "" ] && [ "$(decision)" = "none" ]; then
+    pass "$tool of a governed file: PreToolUse brief delivered, no permissionDecision"
+  else
+    fail "$tool of a governed file: expected a PreToolUse brief" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+st=$(run_hook "$RB" "${RESOLVED}/pretooluse-write-ungoverned.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "write of an ungoverned file: silent"
+else
+  fail "write of an ungoverned file: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# The CLI owns the once-per-session memory; the wrapper must not defeat it (no
+# extra output when the CLI is silent) and must forward the same envelope.
+STATE="${WORK}/brief-state"
+rm -f "$STATE"
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+read_out=$(cat "${WORK}/out")
+st2=$(run_hook "$RB" "${RESOLVED}/pretooluse-edit-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+if [ "$st" = "0" ] && [ -n "$read_out" ] && [ "$st2" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "edit of a file already briefed via Read: nothing delivered"
+else
+  fail "edit after Read: expected silence" "read_out=$read_out edit_out=$(cat "${WORK}/out")"
+fi
+
+if [ "$(jq -r '.hooks.PreToolUse[] | select(.matcher=="Edit|Write") | .hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/rules-brief.sh' ] \
+   && [ "$(jq -r '.hooks.PreToolUse[] | select(.matcher=="Edit|Write") | .hooks[0].timeout' "${HOOKS_DIR}/hooks.json")" -le 5 ] \
+   && [ "$(jq -r '.hooks.PreToolUse[] | select(.matcher=="ExitPlanMode") | .hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/plan-gate.sh' ]; then
+  pass "hooks.json registers PreToolUse:Edit|Write -> rules-brief.sh alongside the ExitPlanMode gate"
+else
+  fail "hooks.json PreToolUse registration wrong" "$(jq -c '.hooks.PreToolUse' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
+fi
+
+echo
 echo "=== plugin manifest ==="
 
 # hooks/hooks.json is loaded automatically by convention. Declaring it again via the

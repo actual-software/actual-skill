@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
-# rules-brief.sh - PostToolUse hook on Read: brief the agent on the rules that
-# govern the file it just read.
+# rules-brief.sh - brief the agent on the rules that govern a file it is working on.
+# One script, two registrations (hooks/hooks.json):
+#
+#   PostToolUse  Read        the main path (below).
+#   PreToolUse   Edit|Write  the reminder, for files that were never read -- mostly
+#                            new files from Write. Context from a PreToolUse hook
+#                            arrives with the tool result, after the edit ran, so
+#                            it is only the fallback. The CLI shares its
+#                            once-per-session memory across both events, so a file
+#                            already briefed via Read adds nothing here.
 #
 # Claude Code requires a Read before an Edit or an overwrite, and PostToolUse
 # context lands before the model's next step, so this is the delivery point that
@@ -16,8 +24,10 @@
 # Advisory by construction, and silent by default: no committed rules, no CLI, an
 # old CLI (preflight already prompts once per session), an ungoverned file, a
 # crash -- all exit 0 with no output. The only thing ever forwarded is a
-# hookSpecificOutput.additionalContext reply for PostToolUse; any other shape,
-# above all one carrying a permissionDecision, is dropped.
+# hookSpecificOutput.additionalContext reply for PostToolUse or PreToolUse; any
+# other shape, above all one carrying a permissionDecision, is dropped. A
+# PreToolUse hook that names no permissionDecision neither grants nor blocks the
+# tool call, so the normal permission flow is unchanged.
 
 set -uo pipefail
 
@@ -54,13 +64,15 @@ trimmed=${reply#"${reply%%[![:space:]]*}"}
 trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
 
 # Forward only the one allowlisted shape: a compact object whose sole content is
-# PostToolUse additionalContext. Matching the exact opening and closing bytes
+# additionalContext for one of those two events. Matching the exact opening and closing bytes
 # (rather than blocklisting fields) keeps every unrecognized shape -- an added
 # decision, updatedInput, a permissionDecision, garbage -- on the silent side.
 # The escape and duplicate-key guards are the same ones the gates use: they
 # defend the literal-bytes match against \uXXXX spellings.
-prefix='{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"'
-if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
+# The CLI echoes the event it was asked about, so either event name is valid here.
+post_prefix='{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"'
+pre_prefix='{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"'
+if { [ "${trimmed#"$post_prefix"}" != "$trimmed" ] || [ "${trimmed#"$pre_prefix"}" != "$trimmed" ]; } \
    && [ "${trimmed%\"\}\}}" != "$trimmed" ] \
    && ! has_permission_decision "$trimmed" \
    && ! has_unicode_escape "$trimmed" \
