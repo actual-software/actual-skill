@@ -1060,6 +1060,13 @@ else
   fail "opt-out did not disable the brief" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_CLI_SUBPROCESS=1 ACTUAL_TEST_CAPTURE="${WORK}/rb-subprocess-capture")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -f "${WORK}/rb-subprocess-capture" ]; then
+  pass "ACTUAL_CLI_SUBPROCESS=1: silent no-op that never invokes the CLI"
+else
+  fail "rules-brief ran inside an actual-cli subprocess" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
 st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_RULES_BRIEF=off)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
   pass "ACTUAL_RULES_BRIEF=off: briefing alone is disabled"

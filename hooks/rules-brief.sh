@@ -33,7 +33,15 @@ payload=$(cat)
 # off read-time briefing alone, leaving the plan and Stop gates running: briefing
 # is the only hook here that fires on every Read, so it is the only one whose
 # cost a user might want to drop without giving up the checks that block.
-if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || [ "${ACTUAL_RULES_BRIEF:-on}" = "off" ]; then
+# Also a no-op inside actual-cli's own subprocesses (see
+# inside_actual_subprocess). Briefing cannot recurse the way impl-gate.sh does
+# -- it spawns no judge -- but a judge subprocess reads files constantly, so
+# every one of those Reads would spawn a CLI this hook has no reason to run,
+# and each brief it forwarded would land in the judge's own context as
+# additionalContext. A conformance judge must weigh the rules it was given,
+# not rules a hook injected into it mid-prompt.
+if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || [ "${ACTUAL_RULES_BRIEF:-on}" = "off" ] \
+   || inside_actual_subprocess; then
   exit 0
 fi
 
