@@ -54,17 +54,40 @@ trimmed=${reply#"${reply%%[![:space:]]*}"}
 trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
 
 # Forward only the one allowlisted shape: a compact object whose sole content is
-# PostToolUse additionalContext. Matching the exact opening and closing bytes
-# (rather than blocklisting fields) keeps every unrecognized shape -- an added
-# decision, updatedInput, a permissionDecision, garbage -- on the silent side.
-# The escape and duplicate-key guards are the same ones the gates use: they
-# defend the literal-bytes match against \uXXXX spellings.
+# PostToolUse additionalContext. Matching the exact bytes (rather than
+# blocklisting fields) keeps every unrecognized shape -- an added decision,
+# updatedInput, a permissionDecision, garbage -- on the silent side. The escape
+# and duplicate-key guards are the same ones the gates use: they defend the
+# literal-bytes match against \uXXXX spellings.
+#
+# The opening and closing bytes alone are NOT enough to pin the shape, because
+# a reply can close hookSpecificOutput early, append whatever it likes, and
+# still end in "}} by finishing on a nested object:
+#
+#   {"hookSpecificOutput":{...,"additionalContext":"x"},"continue":false,"k":{"a":"b"}}
+#
+# That decodes to continue:false, which halts the agent outright -- worse than
+# the permissionDecision case the guards above target. So the span between the
+# prefix and the final "}} is also required to be a single JSON string: strip
+# the escape pairs a decoder would consume (backslash pairs first, then escaped
+# quotes, the same order json_escape writes them) and refuse anything with a
+# quote left over, since that quote can only be the string's own terminator and
+# therefore means structure follows it. Together with the \uXXXX guard -- which
+# rules out a quote spelled \u0022 that this scan cannot see -- the allowlist
+# admits exactly the one shape its name claims.
 prefix='{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"'
 if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
    && [ "${trimmed%\"\}\}}" != "$trimmed" ] \
    && ! has_permission_decision "$trimmed" \
    && ! has_unicode_escape "$trimmed" \
    && ! has_duplicate_permission_decision "$trimmed"; then
+  body=${trimmed#"$prefix"}
+  body=${body%\"\}\}}
+  unescaped=${body//\\\\/}
+  unescaped=${unescaped//\\\"/}
+  case "$unescaped" in
+    *'"'*) exit 0 ;;
+  esac
   printf '%s\n' "$trimmed"
 fi
 exit 0

@@ -950,7 +950,21 @@ else
   fail "trailing whitespace case" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
-for mode in brief-permission brief-extra-field brief-wrong-event brief-escaped garbage; do
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-quoted)
+if [ "$st" = "0" ] \
+   && [ "$(rb_ctx)" = 'R-001 MUST: no raw "SELECT" in handlers (see docs\\rules).' ]; then
+  pass "a brief quoting a rule (escaped quotes and backslashes) is still forwarded"
+else
+  fail "escaped-quote brief was dropped" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# brief-trailing-* and brief-inner-extra-field start and end with the
+# allowlisted bytes but decode to extra top-level or inner fields --
+# continue:false halts the agent outright. Matching only the opening and
+# closing bytes forwards all three.
+for mode in brief-permission brief-extra-field brief-trailing-field \
+            brief-trailing-decision brief-inner-extra-field brief-wrong-event \
+            brief-escaped garbage; do
   st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
   if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
     pass "$mode: not an allowlisted shape, dropped silently"
