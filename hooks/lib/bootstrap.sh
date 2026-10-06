@@ -184,6 +184,12 @@ is_cli_usage_error() {
   return 1
 }
 
+# `rules brief` (AK-789..AK-791) post-dates impl-check, so a CLI can have both
+# gates and still lack it. Probed separately, for the same reason as the others.
+have_rules_brief() {
+  actual rules brief --help >/dev/null 2>&1
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
@@ -280,6 +286,31 @@ If they agree, run one of these with the Bash tool:
   brew upgrade actual-software/actual/actual
 
 Then verify with: actual impl-check --help. If they decline, don't run anything --
+upgrading stays optional -- but only resume the original task once they have
+actually answered either way.
+EOF
+}
+
+# rules brief's own counterpart of upgrade_message, for a CLI build that has
+# the gates but predates the PostToolUse:Read brief.
+rules_brief_upgrade_message() {
+  cat <<'EOF'
+Actual rule briefing is configured for this repository (.actual/rules/ is
+present), but the installed `actual` CLI has no `rules brief` subcommand, so you
+are not being briefed on the rules that govern a file when you read it.
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to upgrade it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+If they agree, run one of these with the Bash tool:
+  npm install -g @actualai/actual@latest
+  brew upgrade actual-software/actual/actual
+
+Then verify with: actual rules brief --help. If they decline, don't run anything --
 upgrading stays optional -- but only resume the original task once they have
 actually answered either way.
 EOF
