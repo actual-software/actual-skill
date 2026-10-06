@@ -190,6 +190,24 @@ have_rules_brief() {
   actual rules brief --help >/dev/null 2>&1
 }
 
+# True when a SessionStart envelope says the session's context was emptied
+# (source compact or clear), so briefs already delivered are gone from the model's
+# context. A byte match, not a parse, whitespace-insensitive like the helpers
+# below. Mirrors the CLI's own rule (`rules brief --claude-session-start` forgets
+# on exactly these two sources); checking here just avoids spawning the CLI on the
+# common startup/resume/fork path.
+session_source_empties_context() {
+  local s="$1"
+  s=${s// /}
+  s=${s//$'\n'/}
+  s=${s//$'\t'/}
+  s=${s//$'\r'/}
+  case "$s" in
+    *'"source":"compact"'*|*'"source":"clear"'*) return 0 ;;
+  esac
+  return 1
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
