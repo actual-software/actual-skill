@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # bootstrap.sh - Shared preflight helpers for the actual plan-stage governance hooks.
 #
-# Sourced by hooks/plan-gate.sh (PreToolUse:ExitPlanMode) and hooks/preflight.sh
+# Sourced by all four hooks: plan-gate.sh (PreToolUse:ExitPlanMode),
+# impl-gate.sh (Stop), rules-brief.sh (PostToolUse:Read) and preflight.sh
 # (SessionStart). Read-only: never modifies files, config, or state.
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
@@ -95,12 +96,17 @@ resolve_repo_root() {
 # Directory holding the committed rule files. ACTUAL_RULES_DIR overrides it, which
 # is how a monorepo points the gate at a subproject's rules. plan-gate.sh passes
 # this path to the CLI as --rules-dir so scoring uses the same directory.
+#
+# $1 is an already-resolved repo root. Optional, and resolve_repo_root is called
+# when it is absent -- but that call spawns `git rev-parse`, so a caller that
+# needs the root anyway should resolve it once and pass it here rather than pay
+# for a second spawn. rules-brief.sh runs on every Read and does exactly that.
 rules_dir() {
   if [ -n "${ACTUAL_RULES_DIR:-}" ]; then
     printf '%s' "${ACTUAL_RULES_DIR}"
     return 0
   fi
-  printf '%s/.actual/rules' "$(resolve_repo_root)"
+  printf '%s/.actual/rules' "${1:-$(resolve_repo_root)}"
 }
 
 # Count the *.md rule files in a directory. Top level only -- the observed
@@ -120,8 +126,12 @@ rules_count() {
 # True when this repo has committed rules to govern against. When false every hook
 # must be a completely silent no-op, so installing the plugin never affects
 # unrelated repositories.
+#
+# $1 is an already-resolved rules directory, for the same reason rules_dir takes
+# a root: without it this re-resolves the directory, and therefore the repo root,
+# from scratch.
 rules_present() {
-  [ "$(rules_count "$(rules_dir)")" -gt 0 ]
+  [ "$(rules_count "${1:-$(rules_dir)}")" -gt 0 ]
 }
 
 # True inside a `claude` subprocess that actual-cli itself spawned (its
@@ -195,6 +205,12 @@ is_cli_usage_error() {
     'error: '*) return 0 ;;
   esac
   return 1
+}
+
+# `rules brief` (AK-789..AK-791) post-dates impl-check, so a CLI can have both
+# gates and still lack it. Probed separately, for the same reason as the others.
+have_rules_brief() {
+  actual rules brief --help >/dev/null 2>&1
 }
 
 # --- Operator-facing messages ---
@@ -296,6 +312,35 @@ Then verify with: actual impl-check --help. If they decline, don't run anything 
 upgrading stays optional -- but only resume the original task once they have
 actually answered either way.
 EOF
+}
+
+# rules brief's counterpart of the *_upgrade_message functions above -- and
+# deliberately NOT one of them. A sentence folded into preflight's success
+# message, not a message that replaces it.
+#
+# The escalation those three share ("interrupt the current task", "do not
+# continue until they respond", AskUserQuestion) is earned by what their
+# absence costs: a missing CLI, plan-check or impl-check means a gate that is
+# supposed to BLOCK is silently not blocking, so the user believes they are
+# governed when they are not. That false sense of safety is worth a turn.
+#
+# A missing `rules brief` costs none of it. Briefing is advisory by
+# construction -- it never blocks anything, so its absence cannot create a
+# false sense of safety; the gates keep working exactly as before. Reusing the
+# blocking wording for it would also land badly on cadence: SessionStart fires
+# on startup, resume, clear, compact AND fork, so a user one release behind
+# would face a blocking question after every compaction to enable a nicety.
+#
+# It must also never displace the success message. Briefing is the optional
+# feature here; the fact that plan and diff checking ARE running is the more
+# important thing the agent needs to know, and the advisory must not push it
+# out. Hence a suffix, chosen by have_rules_brief, rather than an early exit.
+rules_brief_note() {
+  if have_rules_brief; then
+    printf '%s' "Rules that govern a file are also surfaced to you when you read it."
+    return 0
+  fi
+  printf '%s' "Rule briefing -- surfacing the rules that govern a file when you read it -- needs a newer \`actual\` CLI than the one installed. It is advisory only and the checks above are unaffected, so do not interrupt anything for it: mention it in passing when convenient, and upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\` only if the user asks."
 }
 
 # User-facing counterparts of install_message and impl_upgrade_message, for
