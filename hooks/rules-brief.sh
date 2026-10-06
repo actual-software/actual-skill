@@ -32,16 +32,23 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ]; then
   exit 0
 fi
 
-if ! rules_present || ! have_actual; then
+# Resolve the repo root ONCE and derive everything else from it. The gates call
+# rules_present, rules_dir and resolve_repo_root separately and pay for three
+# `git rev-parse` spawns; on a 180-second plan or Stop boundary that is noise,
+# but this hook runs on every single Read inside a 2-second timeout, and a git
+# spawn measured ~12ms here against a warm checkout. Resolve before the cd, for
+# the reason plan-gate.sh gives: root resolution reads cwd, so moving first
+# would ask the question from a different place than rules_present answers it.
+repo_root=$(resolve_repo_root)
+dir=$(rules_dir "$repo_root")
+
+if ! rules_present "$dir" || ! have_actual; then
   exit 0
 fi
 
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-rules-brief.XXXXXX") || exit 0
 trap 'rm -f "$stderr_file"' EXIT
 
-# Resolve the rules directory BEFORE the cd (see plan-gate.sh).
-dir=$(rules_dir)
-repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 
 reply=$(printf '%s' "$payload" | actual rules brief --claude-hook --rules-dir "$dir" 2>"$stderr_file")

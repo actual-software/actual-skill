@@ -996,6 +996,29 @@ else
   fail "no committed rules: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+# This hook runs on every Read inside a 2-second timeout, so the repo root is
+# resolved once and reused. Each resolution spawns `git rev-parse`; calling
+# rules_present, rules_dir and resolve_repo_root separately (as the 180-second
+# gates do) spawns three. Counted with a shim ahead of the real git on PATH.
+GITSHIM="${WORK}/gitshim"
+mkdir -p "$GITSHIM"
+cat > "${GITSHIM}/git" <<'SHIM'
+#!/bin/sh
+echo "$@" >> "$GIT_CALL_LOG"
+exec /usr/bin/git "$@"
+SHIM
+chmod +x "${GITSHIM}/git"
+GIT_LOG="${WORK}/git-calls.log"
+: > "$GIT_LOG"
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief \
+     GIT_CALL_LOG="$GIT_LOG" PATH="${GITSHIM}:${TESTS_DIR}/bin:${PATH}")
+GIT_CALLS=$(grep -c . "$GIT_LOG" 2>/dev/null || echo 0)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ] && [ "$GIT_CALLS" -eq 1 ]; then
+  pass "repo root resolved once per Read: exactly 1 git spawn, not 3"
+else
+  fail "rules-brief spawns git more than once" "status=$st git_calls=$GIT_CALLS calls=$(tr '\n' '; ' < "$GIT_LOG")"
+fi
+
 st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_PLAN_GATE=off)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
   pass "ACTUAL_PLAN_GATE=off: silent no-op"

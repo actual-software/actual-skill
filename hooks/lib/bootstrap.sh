@@ -95,12 +95,17 @@ resolve_repo_root() {
 # Directory holding the committed rule files. ACTUAL_RULES_DIR overrides it, which
 # is how a monorepo points the gate at a subproject's rules. plan-gate.sh passes
 # this path to the CLI as --rules-dir so scoring uses the same directory.
+#
+# $1 is an already-resolved repo root. Optional, and resolve_repo_root is called
+# when it is absent -- but that call spawns `git rev-parse`, so a caller that
+# needs the root anyway should resolve it once and pass it here rather than pay
+# for a second spawn. rules-brief.sh runs on every Read and does exactly that.
 rules_dir() {
   if [ -n "${ACTUAL_RULES_DIR:-}" ]; then
     printf '%s' "${ACTUAL_RULES_DIR}"
     return 0
   fi
-  printf '%s/.actual/rules' "$(resolve_repo_root)"
+  printf '%s/.actual/rules' "${1:-$(resolve_repo_root)}"
 }
 
 # Count the *.md rule files in a directory. Top level only -- the observed
@@ -120,8 +125,12 @@ rules_count() {
 # True when this repo has committed rules to govern against. When false every hook
 # must be a completely silent no-op, so installing the plugin never affects
 # unrelated repositories.
+#
+# $1 is an already-resolved rules directory, for the same reason rules_dir takes
+# a root: without it this re-resolves the directory, and therefore the repo root,
+# from scratch.
 rules_present() {
-  [ "$(rules_count "$(rules_dir)")" -gt 0 ]
+  [ "$(rules_count "${1:-$(rules_dir)}")" -gt 0 ]
 }
 
 # True inside a `claude` subprocess that actual-cli itself spawned (its
