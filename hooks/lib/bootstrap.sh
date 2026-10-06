@@ -313,29 +313,33 @@ actually answered either way.
 EOF
 }
 
-# rules brief's own counterpart of upgrade_message, for a CLI build that has
-# the gates but predates the PostToolUse:Read brief.
-rules_brief_upgrade_message() {
-  cat <<'EOF'
-Actual rule briefing is configured for this repository (.actual/rules/ is
-present), but the installed `actual` CLI has no `rules brief` subcommand, so you
-are not being briefed on the rules that govern a file when you read it.
-
-This is worth interrupting the current task for: mention it in your very next reply,
-regardless of what else is in progress. Offer to upgrade it now rather than just
-describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
-so your turn actually pauses for the user's answer, and do not continue this task --
-exploring, planning, or implementing -- until they respond. Mentioning this and then
-carrying on anyway does not satisfy this; wait for the answer first.
-
-If they agree, run one of these with the Bash tool:
-  npm install -g @actualai/actual@latest
-  brew upgrade actual-software/actual/actual
-
-Then verify with: actual rules brief --help. If they decline, don't run anything --
-upgrading stays optional -- but only resume the original task once they have
-actually answered either way.
-EOF
+# rules brief's counterpart of the *_upgrade_message functions above -- and
+# deliberately NOT one of them. A sentence folded into preflight's success
+# message, not a message that replaces it.
+#
+# The escalation those three share ("interrupt the current task", "do not
+# continue until they respond", AskUserQuestion) is earned by what their
+# absence costs: a missing CLI, plan-check or impl-check means a gate that is
+# supposed to BLOCK is silently not blocking, so the user believes they are
+# governed when they are not. That false sense of safety is worth a turn.
+#
+# A missing `rules brief` costs none of it. Briefing is advisory by
+# construction -- it never blocks anything, so its absence cannot create a
+# false sense of safety; the gates keep working exactly as before. Reusing the
+# blocking wording for it would also land badly on cadence: SessionStart fires
+# on startup, resume, clear, compact AND fork, so a user one release behind
+# would face a blocking question after every compaction to enable a nicety.
+#
+# It must also never displace the success message. Briefing is the optional
+# feature here; the fact that plan and diff checking ARE running is the more
+# important thing the agent needs to know, and the advisory must not push it
+# out. Hence a suffix, chosen by have_rules_brief, rather than an early exit.
+rules_brief_note() {
+  if have_rules_brief; then
+    printf '%s' "Rules that govern a file are also surfaced to you when you read it."
+    return 0
+  fi
+  printf '%s' "Rule briefing -- surfacing the rules that govern a file when you read it -- needs a newer \`actual\` CLI than the one installed. It is advisory only and the checks above are unaffected, so do not interrupt anything for it: mention it in passing when convenient, and upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\` only if the user asks."
 }
 
 # User-facing counterparts of install_message and impl_upgrade_message, for

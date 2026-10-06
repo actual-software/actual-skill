@@ -694,13 +694,38 @@ else
   fail "impl-check-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+# `rules brief` is advisory, so a CLI that lacks only it must still be told the
+# two gates ARE running -- the upgrade note rides along as a suffix instead of
+# replacing the success message, and must not carry the gates' blocking wording.
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-rules-brief)
-if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
-   && grep -q "Offer to upgrade it now" "${WORK}/out" \
-   && grep -q "no .rules brief. subcommand" "${WORK}/out"; then
-  pass "rules + CLI has both gates but not rules brief: its own upgrade guidance, framed as an offer"
+ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -q "governance is active" \
+   && printf '%s' "$ctx" | grep -q "1 rule file" \
+   && printf '%s' "$ctx" | grep -q "brew upgrade" \
+   && printf '%s' "$ctx" | grep -q "advisory only"; then
+  pass "rules + CLI has both gates but not rules brief: success message kept, upgrade note appended"
 else
   fail "rules-brief-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+if ! printf '%s' "$ctx" | grep -qE "Offer to upgrade it now|do not continue this task|AskUserQuestion|worth interrupting"; then
+  pass "the rules-brief note carries none of the gates' blocking wording"
+else
+  fail "rules-brief note escalates like a gate" "$ctx"
+fi
+
+# The healthy case gets the positive counterpart of that sentence, so the agent
+# knows briefing is on rather than inferring it from silence.
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow)
+ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -q "governance is active" \
+   && printf '%s' "$ctx" | grep -q "surfaced to you when you read it" \
+   && ! printf '%s' "$ctx" | grep -q "brew upgrade"; then
+  pass "rules + full CLI: success message also reports briefing active, with no upgrade note"
+else
+  fail "healthy preflight missing the briefing sentence" "status=$st ctx=$ctx"
 fi
 
 echo

@@ -13,7 +13,9 @@
 # impl-check later at AK-755), so a CLI can have one without the other.
 #
 # rules brief (the PostToolUse:Read rule briefing) is probed last, after the two
-# gates: it is the newest subcommand.
+# gates: it is the newest subcommand, and unlike them it never short-circuits
+# this script -- it only decides which closing sentence the success message
+# carries.
 #
 # Silent unless this repository actually has committed rules, so installing the
 # plugin is invisible in unrelated repositories. Registered for startup, resume,
@@ -60,9 +62,8 @@ if ! have_impl_check; then
   exit 0
 fi
 
-if ! have_rules_brief; then
-  emit_sessionstart_context "$(rules_brief_upgrade_message)"
-  exit 0
-fi
-
-emit_sessionstart_context "Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."
+# Deliberately NOT a fourth early exit. The three above each report a gate that
+# is supposed to block and silently is not; `rules brief` is advisory, so its
+# absence is a sentence appended to the success message rather than a message
+# that replaces it. See rules_brief_note for the full reasoning.
+emit_sessionstart_context "Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable. $(rules_brief_note)"
