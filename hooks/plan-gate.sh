@@ -27,8 +27,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # 1. Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
 
-# 2. Explicit opt-out.
-if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ]; then
+# 2. Explicit opt-out, and a no-op inside actual-cli's own subprocesses (see
+#    inside_actual_subprocess).
+if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 

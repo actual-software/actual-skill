@@ -25,7 +25,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # Drain stdin before any early exit, so the caller never sees SIGPIPE.
 cat >/dev/null
 
-if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ]; then
+# A subprocess actual-cli spawned is not a session to brief (see
+# inside_actual_subprocess).
+if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
