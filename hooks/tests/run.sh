@@ -876,6 +876,96 @@ else
 fi
 
 echo
+echo "=== rules-brief: PostToolUse Read ==="
+RB="${HOOKS_DIR}/rules-brief.sh"
+GOV="${RESOLVED}/posttooluse-read-governed.json"
+UNGOV="${RESOLVED}/posttooluse-read-ungoverned.json"
+
+rb_ctx() { jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null; }
+
+CAPTURE_RB="${WORK}/captured-rb.json"
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="$CAPTURE_RB")
+if [ "$st" = "0" ] \
+   && [ "$(jq -r '.hookSpecificOutput.hookEventName' < "${WORK}/out")" = "PostToolUse" ] \
+   && [ "$(rb_ctx)" = "R-001 MUST: all persistence goes through the repository layer." ] \
+   && [ "$(decision)" = "none" ]; then
+  pass "governed file: PostToolUse additionalContext delivered, no permissionDecision"
+else
+  fail "governed file: expected a PostToolUse brief" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+if [ "$(jq -r '.tool_name' "$CAPTURE_RB")" = "Read" ] \
+   && grep -q "src/persistence/user_store.ts" "$CAPTURE_RB" \
+   && grep -Fxq -- '--claude-hook' "${CAPTURE_RB}.argv" \
+   && [ "$(argv_after --rules-dir "${CAPTURE_RB}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ] \
+   && [ "$(sed -n 1,2p "${CAPTURE_RB}.argv" | tr '\n' ' ')" = "--claude-hook --rules-dir " ]; then
+  pass "raw envelope, --claude-hook and --rules-dir reach 'actual rules brief'"
+else
+  fail "rules-brief invocation wrong" "argv=$(cat "${CAPTURE_RB}.argv" 2>/dev/null)"
+fi
+
+st=$(run_hook "$RB" "$UNGOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "ungoverned file: silent (exit 0, no stdout, no stderr)"
+else
+  fail "ungoverned file: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-pretty)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
+  pass "trailing whitespace on the CLI reply is tolerated"
+else
+  fail "trailing whitespace case" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+for mode in brief-permission brief-extra-field brief-wrong-event brief-escaped garbage; do
+  st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "$mode: not an allowlisted shape, dropped silently"
+  else
+    fail "$mode: expected the reply to be dropped" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+for mode in crash no-rules-brief; do
+  st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+    pass "$mode: fails open silently"
+  else
+    fail "$mode: expected silent exit 0" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+  fi
+done
+
+st=$(run_hook_no_cli "$RB" "$GOV" "$REPO_WITH_RULES")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "no CLI: silent (preflight owns the install prompt)"
+else
+  fail "no CLI: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_NO_RULES" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "no committed rules: silent no-op"
+else
+  fail "no committed rules: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_PLAN_GATE=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_PLAN_GATE=off: silent no-op"
+else
+  fail "opt-out did not disable the brief" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+if [ "$(jq -r '.hooks.PostToolUse[0].matcher' "${HOOKS_DIR}/hooks.json")" = "Read" ] \
+   && [ "$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/rules-brief.sh' ] \
+   && [ "$(jq -r '.hooks.PostToolUse[0].hooks[0].timeout' "${HOOKS_DIR}/hooks.json")" -le 5 ]; then
+  pass "hooks.json registers PostToolUse:Read -> rules-brief.sh with a short timeout"
+else
+  fail "hooks.json PostToolUse registration wrong" "$(jq -c '.hooks.PostToolUse' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
+fi
+
+echo
 echo "=== plugin manifest ==="
 
 # hooks/hooks.json is loaded automatically by convention. Declaring it again via the
@@ -905,14 +995,14 @@ fi
 echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
-     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
+     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' > "${WORK}/deps" 2>/dev/null; then
   fail "shipped hooks reference a JSON/runtime dependency" "$(cat "${WORK}/deps")"
 else
   pass "shipped hooks reference no jq/python/node"
 fi
 
-for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh"; do
+for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh"; do
   if [ -x "$f" ]; then pass "$(basename "$f") is executable"; else fail "$(basename "$f") is not executable" ""; fi
 done
 
