@@ -680,6 +680,48 @@ else
   fail "rules-brief-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+# Compaction empties the model's context; the brief memory must follow it.
+STATE="${WORK}/brief-state-compact"
+rm -f "$STATE"
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+first=$(cat "${WORK}/out")
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+second=$(cat "${WORK}/out")
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+after_startup=$(cat "${WORK}/out")
+
+CAPTURE_RESET="${WORK}/captured-reset.json"
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-compact.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE" ACTUAL_TEST_CAPTURE="$CAPTURE_RESET")
+preflight_out=$(cat "${WORK}/out")
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+after_compact=$(cat "${WORK}/out")
+
+if [ -n "$first" ] && [ -z "$second" ] && [ -z "$after_startup" ] && [ -n "$after_compact" ]; then
+  pass "after a compaction the next read of a governed file re-delivers its brief (startup does not reset)"
+else
+  fail "brief memory not reset by compaction" "first=[$first] second=[$second] after_startup=[$after_startup] after_compact=[$after_compact]"
+fi
+
+if grep -Fxq -- '--claude-session-start' "${CAPTURE_RESET}.argv" \
+   && [ "$(argv_after --rules-dir "${CAPTURE_RESET}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ] \
+   && [ "$(jq -r '.source' "$CAPTURE_RESET")" = "compact" ] \
+   && [ "$(printf '%s' "$preflight_out" | jq -r '.hookSpecificOutput.hookEventName')" = "SessionStart" ]; then
+  pass "compact: envelope and --rules-dir reach 'rules brief --claude-session-start'; preflight context still emitted"
+else
+  fail "compact reset invocation wrong" "argv=$(cat "${CAPTURE_RESET}.argv" 2>/dev/null) out=$preflight_out"
+fi
+
+for mode in crash no-rules-brief; do
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-compact.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/err" ]; then
+    pass "compact with $mode: preflight still exits 0 and stays quiet on stderr"
+  else
+    fail "compact with $mode: expected a clean exit" "status=$st stderr=$(cat "${WORK}/err")"
+  fi
+done
+
 echo
 echo "=== fake CLI requires --claude-hook ==="
 env PATH="${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=allow \

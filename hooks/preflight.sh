@@ -15,6 +15,8 @@
 # rules brief (the PostToolUse:Read rule briefing) is probed last, after the two
 # gates: it is the newest subcommand.
 #
+# On a compact or clear it also resets the CLI's rule-briefing memory (see below).
+#
 # Silent unless this repository actually has committed rules, so installing the
 # plugin is invisible in unrelated repositories. Registered for startup, resume,
 # clear, compact, and fork so the reminder is restored after compaction.
@@ -25,8 +27,9 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/bootstrap.sh
 . "${SCRIPT_DIR}/lib/bootstrap.sh"
 
-# Drain stdin before any early exit, so the caller never sees SIGPIPE.
-cat >/dev/null
+# Drain stdin before any early exit, so the caller never sees SIGPIPE. Kept: the
+# envelope's `source` decides whether the brief memory must be reset below.
+payload=$(cat)
 
 if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ]; then
   exit 0
@@ -61,6 +64,17 @@ fi
 if ! have_rules_brief; then
   emit_sessionstart_context "$(rules_brief_upgrade_message)"
   exit 0
+fi
+
+# After a compaction (or /clear) the briefs already delivered are gone from the
+# model's context, but the CLI's once-per-session memory still says they were
+# shown, so they would never be re-sent. Reset it. This lives here, behind the
+# probe above, so a session has one capability probe, and a CLI without
+# `rules brief` never reaches it. Silent and fail-open: the reset is
+# housekeeping, and a failure only means a brief is not repeated.
+if session_source_empties_context "$payload"; then
+  cd "$(resolve_repo_root)" 2>/dev/null || true
+  printf '%s' "$payload" | actual rules brief --claude-session-start --rules-dir "$dir" >/dev/null 2>&1 || true
 fi
 
 emit_sessionstart_context "Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."

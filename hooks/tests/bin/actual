@@ -48,7 +48,7 @@
 # `actual rules brief --claude-hook` (rules-brief.sh) has its own modes, and
 # answers only for payloads naming a file under /src/persistence/:
 #   brief / brief-pretty / brief-permission / brief-extra-field /
-#   brief-wrong-event / brief-dedupe / brief-escaped / no-rules-brief / crash / garbage
+#   brief-wrong-event / brief-dedupe (+ --claude-session-start, which clears the state on compact/clear) / brief-escaped / no-rules-brief / crash / garbage
 #
 # It also records the envelope it received to $ACTUAL_TEST_CAPTURE, and the
 # remaining argv to $ACTUAL_TEST_CAPTURE.argv, so tests can assert stdin and
@@ -82,6 +82,20 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
     echo "Usage: actual rules brief [--claude-hook] [--rules-dir <dir>]"
     exit 0
   fi
+  # SessionStart reset: forget what was briefed when the context was emptied.
+  for arg in "$@"; do
+    if [ "$arg" = "--claude-session-start" ]; then
+      payload=$(cat)
+      if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
+        printf '%s\n' "$@" > "${ACTUAL_TEST_CAPTURE}.argv"
+        printf '%s' "$payload" > "$ACTUAL_TEST_CAPTURE"
+      fi
+      case "$(printf '%s' "$payload" | tr -d ' \n')" in
+        *'"source":"compact"'*|*'"source":"clear"'*) rm -f "${ACTUAL_TEST_STATE:-/nonexistent}" ;;
+      esac
+      exit 0
+    fi
+  done
   has_claude_hook=0
   for arg in "$@"; do [ "$arg" = "--claude-hook" ] && has_claude_hook=1; done
   if [ "$has_claude_hook" -eq 0 ]; then
