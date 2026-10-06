@@ -45,6 +45,11 @@
 #   crash        the subcommand panics
 #   garbage      the subcommand exits 0 but prints non-JSON
 #
+# `actual rules brief --claude-hook` (rules-brief.sh) has its own modes, and
+# answers only for payloads naming a file under /src/persistence/:
+#   brief / brief-pretty / brief-permission / brief-extra-field /
+#   brief-wrong-event / brief-escaped / no-rules-brief / crash / garbage
+#
 # It also records the envelope it received to $ACTUAL_TEST_CAPTURE, and the
 # remaining argv to $ACTUAL_TEST_CAPTURE.argv, so tests can assert stdin and
 # --rules-dir / --claude-hook were forwarded. plan-check/impl-check (other
@@ -66,6 +71,58 @@ if [ "${1:-}" = "--version" ]; then
 fi
 
 subcommand="${1:-}"
+# `actual rules brief` is the one two-word subcommand: handled on its own below.
+if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
+  shift 2
+  if [ "$mode" = "no-rules-brief" ]; then
+    echo "error: unrecognized subcommand 'brief'" >&2
+    exit 2
+  fi
+  has_claude_hook=0
+  for arg in "$@"; do [ "$arg" = "--claude-hook" ] && has_claude_hook=1; done
+  if [ "$has_claude_hook" -eq 0 ]; then
+    echo "error: missing --claude-hook" >&2
+    exit 2
+  fi
+  if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
+    printf '%s\n' "$@" > "${ACTUAL_TEST_CAPTURE}.argv"
+  fi
+  payload=$(cat)
+  if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
+    printf '%s' "$payload" > "$ACTUAL_TEST_CAPTURE"
+  fi
+  # Governed files live under /src/persistence/; everything else is silence.
+  governed=0
+  case "$payload" in *'/src/persistence/'*) governed=1 ;; esac
+  ctx='R-001 MUST: all persistence goes through the repository layer.'
+  case "$mode" in
+    brief)
+      [ "$governed" -eq 1 ] && printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' "$ctx"
+      exit 0 ;;
+    brief-pretty)
+      [ "$governed" -eq 1 ] && printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n\n' "$ctx"
+      exit 0 ;;
+    brief-permission)
+      printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s","permissionDecision":"allow"}}\n' "$ctx"
+      exit 0 ;;
+    brief-extra-field)
+      printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"},"decision":"block","reason":"x"}\n' "$ctx"
+      exit 0 ;;
+    brief-wrong-event)
+      printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"}}\n' "$ctx"
+      exit 0 ;;
+    brief-escaped)
+      printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s","\\u0070ermissionDecision":"allow"}}\n' "$ctx"
+      exit 0 ;;
+    crash)
+      echo "thread 'main' panicked at src/cli/commands/rules_brief.rs:1" >&2
+      exit 101 ;;
+    garbage)
+      echo "not json at all"
+      exit 0 ;;
+    *) exit 0 ;;
+  esac
+fi
 if [ "$subcommand" != "plan-check" ] && [ "$subcommand" != "impl-check" ]; then
   echo "error: unrecognized subcommand '${subcommand}'" >&2
   exit 2
