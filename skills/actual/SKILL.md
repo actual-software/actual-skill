@@ -153,6 +153,8 @@ repository. They are registered automatically on install — there is no manual 
 | `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough for `plan-check` and `impl-check`. Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes vs `HEAD`, plus untracked, non-ignored files) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
+| `hooks/rules-brief.sh` | `PostToolUse` on `Read` | Read-time briefing (AK-793). Hands the envelope to `actual rules brief --claude-hook` and forwards only an allowlisted `additionalContext` reply. Advisory: never denies, never decides, silent on any failure |
+| `hooks/register.js` | Claude mod, `tool.call` on `Bash` | The same briefing for reads that bypass the Read tool. Measured across 212 local sessions, 80% of file reads went through `cat`/`head`/`sed -n`/`grep`, which fires no Read hook. Briefs only a command Claude Code reports as `isReadOnly`, and appends to the command's output. Requires Claude Code 2.1.287+, or 2.1.285/2.1.286 with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
 
 `PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
 user's plan-approval dialog, so a blocked plan is revised by the agent rather than
@@ -319,6 +321,15 @@ place that distinction is applied.
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). Each hook forwards the resolved path to the CLI as `--rules-dir`; `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_IMPL_CHECK_MAX_ROUNDS` | Override `impl-check --claude-hook`'s round limit (default 3) |
+| `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the Bash mod — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
+| `ACTUAL_CLI_SUBPROCESS=1` | Set by actual-cli on the nested `claude -p` it runs as its conformance judge. Every hook and the mod exit silently when it is set: without it the judge's own `Stop` hook reruns `impl-check` and recurses, and briefing would inject rules into the judge's prompt that it was never asked to weigh |
+| `ACTUAL_HOOK_DEBUG=1` | Report what briefing did, on stderr for the hook and in the transcript plus the brief for the mod: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |
+| `ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS` | Characters of rule context briefing may inject in one session before it stops and says so (default 48000). Measured basis: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is ~2.5x an ordinary session. `0` disables briefing |
+| `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE` | Forwarded to `actual rules brief` as `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`, and only when set, so the CLI keeps owning its own defaults. `_MIN_SCORE` especially: unset it defers to the repository's `rules_min_score`, and a score measures how narrowly a rule's `verify` glob is written rather than how relevant the rule is, so no cross-repository default is correct |
+
+Each variable above also appears as a labelled `userConfig` row under `/plugin`.
+An environment variable wins over the row: the row is the durable preference,
+the variable is the override for one session.
 
 ### `--claude-hook` plan resolution
 
@@ -351,6 +362,39 @@ Fixtures under `hooks/tests/fixtures/` encode the three envelopes:
 | `pretooluse-plan-injected.json` | Current: `tool_input.plan` and `tool_input.planFilePath` |
 | `pretooluse-plan-inline.json` | Legacy: plan in `tool_input.plan` only |
 | `pretooluse-plan-file.json` | Legacy: empty `tool_input`; plan only via transcript |
+
+### Briefing: two paths, one dedup store
+
+Briefing is delivered twice over, by `hooks/rules-brief.sh` on `Read` and by the
+mod on `Bash`, and they are split by matcher so neither sees the other's tool
+call. Both call `actual rules brief --claude-hook` rather than the simpler
+`--file` direct mode, because only `--claude-hook` consults brief memory —
+direct mode is stateless and returns the full brief every time. That is what
+keeps a file read with the Read tool and then `cat` from being briefed twice.
+
+Brief memory is keyed on **`(session_id, agent_id, rules_dir)`**, which makes
+that key an interface between the two paths rather than an implementation
+detail. Any component the two compute differently splits the key, and the
+symptom is always the same: one read briefs twice, silently, and in a monorepo
+the second brief is against the wrong rule set.
+
+Two instances of that have already been fixed, both invisible at runtime:
+
+- The mod did not forward `--rules-dir` at all. On a fixture whose root and
+  subproject rule sets both match one file, the hook briefed the subproject's
+  rule and the mod, same session, briefed the root's.
+- The mod derived the rules directory from `$.session.root()`. No single mods
+  API call matches `resolve_repo_root`: `$.session.root()` tracks the session's
+  working directory, so it is right inside a worktree and wrong one directory
+  below the repo root, where briefing pointed at a `.actual/rules` that does not
+  exist and went silently dead; `$.session.repo().root` is the main checkout, so
+  it is wrong in exactly the opposite cases. The mod now runs
+  `git rev-parse --show-toplevel` and applies the same deeper-of-the-two rule as
+  `bootstrap.sh`, cached per session.
+
+So when changing either path, change both, and check all four layouts: a
+worktree with and without `CLAUDE_PROJECT_DIR`, a monorepo subproject named by
+`CLAUDE_PROJECT_DIR`, and a session launched in a subdirectory.
 
 ### `--claude-hook` diff resolution
 
