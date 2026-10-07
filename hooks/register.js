@@ -203,7 +203,21 @@ function candidatePaths(command, cwd) {
 // how many it left out, and a brief cut mid-rule is worse than no brief -- a
 // half-printed MUST can read as permission.
 
-const DEFAULT_MAX_SESSION_CHARS = 20000;
+// Measured, not guessed. Against the 425-rule corpus with dedup active, 40
+// governed files injected 18,751 characters -- and only 8 of those 40 reads
+// produced a brief at all, the other 32 being decisions already delivered.
+// Accumulation over that run: 9,039 chars at 10 files, 10,841 at 20, 12,573 at
+// 30, 18,751 at 40.
+//
+// A first guess of 20,000 was wrong: it sits at 94% of the 40-file figure, so
+// it would have started dropping briefs in ordinary sessions rather than
+// catching runaway ones. This cap exists for pathology -- a session crossing
+// hundreds of governed files in many rule areas -- not for tuning relevance,
+// which is what dedup and the CLI's own limits are for. 48,000 is about 2.5x
+// the measured normal case: roughly 12,000 tokens, or 6% of a 200k context
+// window, which is a defensible ceiling for governance context and still stops
+// an unbounded climb.
+const DEFAULT_MAX_SESSION_CHARS = 48000;
 
 // Per-session totals, keyed by session id so a reload or a second session in
 // one process starts clean rather than inheriting a spent budget.

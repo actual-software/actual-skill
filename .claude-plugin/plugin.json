@@ -20,8 +20,8 @@
     "maxSessionChars": {
       "type": "number",
       "title": "Rule brief: per-session character budget",
-      "default": 20000,
-      "description": "Stop briefing once this many characters of rule context have been injected in one session. Provisional: measured sessions accumulate 20-30 KB over 40 governed files. Set 0 to turn briefing off entirely."
+      "default": 48000,
+      "description": "Stop briefing once this many characters of rule context have been injected in one session. Measured: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is about 2.5x an ordinary session and exists to catch runaway accumulation, not to tune relevance. Set 0 to turn briefing off entirely."
     },
     "maxChars": {
       "type": "number",
