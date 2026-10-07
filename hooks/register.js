@@ -261,16 +261,31 @@ function briefFrom(stdout) {
 // hook_event_name is load-bearing: an envelope without it returns nothing at
 // all. session_id is load-bearing differently -- without it the CLI still
 // briefs, but silently stops consulting brief memory, so every read of a
-// governed file would brief again. Both are asserted in the tests.
-function envelopeFor({ sessionId, cwd, filePath }) {
-  return JSON.stringify({
+// governed file would brief again.
+//
+// agent_id is the third component of brief memory's key, and omitting it is
+// worse than a duplicate brief. A subagent runs with its own context, so a
+// decision briefed to the parent has not been shown to it -- which is exactly
+// why the CLI keys on it (see brief_memory.rs). Probed in a real subagent, the
+// Read hook's envelope carries `agent_id` and this mod's event carries the
+// same value as `e.agentId`. Leaving it out filed the subagent's reads under
+// the parent's slot, so the subagent would be denied a brief the parent had
+// already seen, and the parent would later miss one it never saw. All three
+// fields are asserted in the tests.
+function envelopeFor({ sessionId, agentId, cwd, filePath }) {
+  const envelope = {
     session_id: sessionId,
     cwd,
     hook_event_name: 'PostToolUse',
     tool_name: 'Read',
     tool_input: { file_path: filePath },
     tool_response: { type: 'text' },
-  });
+  };
+  // Omitted rather than sent empty for the main agent, matching the hook: the
+  // CLI treats an absent and an empty agent_id the same, but an envelope that
+  // mirrors the real one is easier to reason about.
+  if (agentId) envelope.agent_id = agentId;
+  return JSON.stringify(envelope);
 }
 
 // Every tunable is readable two ways: a `userConfig` field, which gives the
@@ -513,7 +528,7 @@ export function register(on, options = {}) {
             '--rules-dir', rulesDir,
             ...cliLimits(resolved),
           ],
-          { stdin: envelopeFor({ sessionId, cwd, filePath }), cwd }
+          { stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }), cwd }
         );
         if (run.exitCode !== 0) continue;
         const brief = briefFrom(run.stdout);

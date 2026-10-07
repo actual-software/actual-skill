@@ -550,3 +550,24 @@ test('the mod never fires for a Read tool call: that is the hook’s job', async
   await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
   expect(runs.length).toBe(0);
 });
+
+test('a subagent read is filed under its own agent id', async (fire: any, on: any) => {
+  // Brief memory's third key component. Probed in a real subagent: the Read
+  // hook's envelope carries agent_id and this mod's event carries the same
+  // value as e.agentId. Omitting it filed the subagent's reads under the
+  // parent's slot, which both suppresses briefs the subagent never saw and
+  // pollutes the parent's record -- missed briefs, not just duplicates.
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', agentId: 'sub-1' });
+
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).agent_id).toBe('sub-1');
+});
+
+test('a main-agent read carries no agent id, as the hook envelope does not', async (fire: any, on: any) => {
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+
+  expect(runs.length).toBe(1);
+  expect('agent_id' in JSON.parse(runs[0].init.stdin)).toBe(false);
+});

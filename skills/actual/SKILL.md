@@ -392,9 +392,18 @@ Two instances of that have already been fixed, both invisible at runtime:
   `git rev-parse --show-toplevel` and applies the same deeper-of-the-two rule as
   `bootstrap.sh`, cached per session.
 
-So when changing either path, change both, and check all four layouts: a
-worktree with and without `CLAUDE_PROJECT_DIR`, a monorepo subproject named by
-`CLAUDE_PROJECT_DIR`, and a session launched in a subdirectory.
+- The mod did not forward `agent_id`, the third component of the key. The Read
+  hook's envelope carries it inside a subagent and the mod's event carries the
+  same value as `e.agentId`, so the mod filed a subagent's reads under the
+  parent's slot. This one causes *missed* briefs rather than duplicates: the
+  subagent is denied a brief the parent already saw — which is precisely what
+  keying on `agent_id` exists to prevent — and the parent's record is polluted
+  with reads it never made.
+
+So when changing either path, change both. Check all four repository layouts —
+a worktree with and without `CLAUDE_PROJECT_DIR`, a monorepo subproject named
+by `CLAUDE_PROJECT_DIR`, and a session launched in a subdirectory — and check
+both inside and outside a subagent.
 
 ### `--claude-hook` diff resolution
 
