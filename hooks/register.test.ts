@@ -612,3 +612,187 @@ test('reading the rule documents themselves briefs nothing', async (fire: any, o
   });
   expect(runs.length).toBe(0);
 });
+
+// --- Phase 7: what the user sees ----------------------------------------
+//
+// A drawn tree never reaches Claude, so none of this spends the context
+// budget. Nothing draws in `claude -p` either, which is why these are tested
+// through the harness rather than a live headless session.
+
+// drawn() resolves to the element tree, not a string, so flatten it to the
+// text a person would read.
+function textOf(node: any): string {
+  if (node === null || node === undefined) return '';
+  if (typeof node === 'string') return node;
+  if (Array.isArray(node)) return node.map(textOf).join(' ');
+  if (typeof node === 'object') return textOf(node.children);
+  return String(node);
+}
+
+// Mount a site, read what it drew, and unmount -- an un-unmounted drawing
+// rejects at the end of the file.
+async function drawnText(fire: any, component: string, requestId: string, props: any = {}) {
+  const view = await fire.ui.mount({
+    plugin: 'actual-cli',
+    surface: 'terminal',
+    component,
+    requestId,
+    props,
+  });
+  try {
+    return textOf(await view.drawn());
+  } finally {
+    await view.unmount();
+  }
+}
+
+test('a delivered brief draws a line under the tool result', async (fire: any, on: any) => {
+  harness(on);
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_1' });
+  const drawn = await drawnText(fire, 'ToolResult', 'tu_1');
+
+  expect(drawn).toContain('actual: briefed');
+  expect(drawn).toContain('a.ts');
+});
+
+test('the drawn summary reports the decision and rule counts', async (fire: any, on: any) => {
+  // Parsed out of the CLI's own text, which is not a contract -- hence a
+  // summary that degrades rather than throws. This brief shows 2 of 35.
+  const brief = [
+    "This repository's own rules that apply to `src/a.ts`:",
+    '',
+    '## Adopt JWT with RS256 for OAuth Access Token Signing',
+    '- [doc-a/R-JWT-001] MUST one.',
+    '- [doc-a/R-JWT-002] MUST two.',
+    '- (2 of 35 rules shown)',
+  ].join('\n');
+  harness(on, { cli: { exitCode: 0, stdout: reply(brief), stderr: '' } });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_2' });
+  const drawn = await drawnText(fire, 'ToolResult', 'tu_2');
+
+  expect(drawn).toContain('1 ADR');
+  expect(drawn).toContain('2 of 35 rules');
+});
+
+test('a governed file already briefed says so rather than nothing', async (fire: any, on: any) => {
+  // The one case where silence is correct, and therefore the one most worth
+  // making visible: every bug in this mod looked exactly like this.
+  harness(on, { cli: { exitCode: 0, stdout: '', stderr: '' } });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_3' });
+  const drawn = await drawnText(fire, 'ToolResult', 'tu_3');
+
+  expect(drawn).toContain('already briefed this session');
+});
+
+test('a CLI failure is shown, not swallowed', async (fire: any, on: any) => {
+  harness(on, { cli: { exitCode: 2, stdout: '', stderr: 'boom' } });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_4' });
+  const drawn = await drawnText(fire, 'ToolResult', 'tu_4');
+
+  expect(drawn).toContain('brief unavailable');
+  expect(drawn).toContain('exit 2');
+});
+
+test('a command that read no governed file draws nothing extra', async (fire: any, on: any) => {
+  // A line on every tool call would be noise. The engine's own drawing stands.
+  harness(on);
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'npx tsc --noEmit', tool_use_id: 'tu_5' });
+  const drawn = await drawnText(fire, 'ToolResult', 'tu_5');
+
+  expect(drawn).not.toContain('actual:');
+});
+
+test('a tool result from another call is left alone', async (fire: any, on: any) => {
+  harness(on);
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_6' });
+  const drawn = await drawnText(fire, 'ToolResult', 'tu_other');
+
+  expect(drawn).not.toContain('actual:');
+});
+
+test('the drawing never reaches Claude', async (fire: any, on: any) => {
+  // The whole reason this is free: the line is drawn, not injected.
+  const runs = harness(on);
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_7' });
+  expect(runs.length).toBe(1);
+  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+  expect(r.result.stdout).not.toContain('actual: briefed');
+});
+
+test('/rules-brief lists what briefing did, including where it stayed quiet', async (fire: any, on: any) => {
+  harness(on);
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'p_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'npx tsc --noEmit', tool_use_id: 'p_2' });
+
+  const drawn = await drawnText(fire, 'Pane', 'rules-brief', {
+    title: 'Rule briefing',
+    bodyColumns: 80,
+  });
+
+  expect(drawn).toContain('Rule briefing this session');
+  expect(drawn).toContain('briefed');
+  expect(drawn).toContain('a.ts');
+  // The call that briefed nothing is listed too, with its reason.
+  expect(drawn).toContain('no path');
+});
+
+test('exhausting the budget toasts the user and still tells Claude', async (fire: any, on: any) => {
+  // Two audiences, two channels. Claude needs to know briefing stopped or it
+  // is back to not telling silence from an ungoverned file; the user needs to
+  // know without it costing context.
+  const toasts: string[] = [];
+  const runs = harness(on, {
+    cli: { exitCode: 0, stdout: reply(LONG), stderr: '' },
+    config: { maxSessionChars: 4000 },
+  });
+  on('ui.toast', async (_$: any, e: any) => {
+    toasts.push(typeof e === 'string' ? e : (e?.message ?? e?.text ?? JSON.stringify(e)));
+    return { value: undefined };
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'b_1' });
+  const crossing = await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts', tool_use_id: 'b_2' });
+
+  expect(runs.length).toBe(2);
+  expect(crossing.result.stdout).toContain('per-session context budget');
+  expect(toasts.join(' ')).toContain('per-session context budget');
+});
+
+test('rule counts are summed per decision, not mixed across them', async (fire: any, on: any) => {
+  // The CLI's truncation note is per decision. One decision truncated at 35
+  // and one shown in full must report 9 of 36, not 9 of 35.
+  const brief = [
+    "This repository's own rules that apply to `src/a.ts`:",
+    '',
+    '## Truncated decision',
+    ...Array.from({ length: 8 }, (_, i) => `- [doc-a/R-${i}] MUST x.`),
+    '- (8 of 35 rules shown)',
+    '',
+    '## Complete decision',
+    '- [doc-b/R-1] MUST y.',
+  ].join('\n');
+  harness(on, { cli: { exitCode: 0, stdout: reply(brief), stderr: '' } });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_sum' });
+  const drawn = await drawnText(fire, 'ToolResult', 'tu_sum');
+
+  expect(drawn).toContain('2 ADRs');
+  expect(drawn).toContain('9 of 36 rules');
+});

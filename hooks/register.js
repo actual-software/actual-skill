@@ -192,6 +192,94 @@ function candidateTokens(command) {
   return { cdTarget: split.base, tokens };
 }
 
+// --- What the user sees ---------------------------------------------------
+//
+// The brief itself has to reach Claude, so it rides in the tool result and
+// costs context -- which is why there is a session budget at all. What a
+// *person* needs is different: whether a brief happened, what it covered, and
+// when one did not, why. A drawn tree costs nothing, because `ui.render`
+// output goes to the terminal and the Desktop app and Claude never reads it.
+// So everything below is free, and none of it is in the budget.
+//
+// It is also not a substitute for the brief: nothing draws in `claude -p`, the
+// SDK, the VS Code chat panel or a cloud session (hooks still run there). A
+// drawing is for the person watching, and there is no person watching those.
+
+// One record per Bash tool call, keyed by its tool_use_id so the ToolResult
+// drawing can find the call it belongs to. Bounded: a long session makes
+// thousands of tool calls and this is a convenience, not a log.
+const MAX_OUTCOMES = 200;
+const outcomes = new Map();
+
+function recordOutcome(toolUseId, record) {
+  if (!toolUseId) return;
+  outcomes.set(toolUseId, { at: Date.now(), ...record });
+  while (outcomes.size > MAX_OUTCOMES) {
+    const oldest = outcomes.keys().next().value;
+    outcomes.delete(oldest);
+  }
+}
+
+// Read the shape back out of a brief for the one-line summary. Best effort by
+// construction: this parses the CLI's human-readable text, which is not a
+// contract, so every field is optional and a parse that finds nothing yields a
+// character count instead. A summary is cosmetic -- it must never be able to
+// affect whether the brief itself was delivered.
+function summarize(brief) {
+  const decisions = [];
+  let current = null;
+  for (const line of brief.split('\n')) {
+    if (line.startsWith('## ')) {
+      current = { title: line.slice(3).trim(), shown: 0, total: 0 };
+      decisions.push(current);
+    } else if (/^- \[/.test(line)) {
+      if (current) current.shown += 1;
+    } else {
+      // The CLI's own truncation note, which is per decision: the rules listed
+      // above it are `shown`, and `total` is how many that decision really has.
+      const more = /^- \((\d+) of (\d+) rules shown\)/.exec(line);
+      if (more && current) current.total = Number(more[2]);
+    }
+  }
+  // A decision with no note is shown in full, so its total is what it listed.
+  for (const d of decisions) if (!d.total) d.total = d.shown;
+  return {
+    decisions: decisions.map((d) => d.title),
+    shown: decisions.reduce((n, d) => n + d.shown, 0),
+    total: decisions.reduce((n, d) => n + d.total, 0),
+    chars: brief.length,
+  };
+}
+
+// The line drawn under a tool result. Null for the calls worth saying nothing
+// about -- a command that read no governed file is the overwhelming majority,
+// and a line on every one of them would be noise rather than information.
+function drawnLine(record) {
+  if (!record) return null;
+  const files = (record.files ?? []).map((f) => f.split('/').pop()).join(', ');
+  switch (record.outcome) {
+    case 'delivered': {
+      const s = record.summary ?? {};
+      const n = s.decisions?.length ?? 0;
+      const rules =
+        s.total && s.total > s.shown
+          ? `${s.shown} of ${s.total} rules`
+          : `${s.shown ?? 0} rules`;
+      return `actual: briefed ${n} ADR${n === 1 ? '' : 's'}, ${rules} — ${files}`;
+    }
+    case 'deduped':
+      return `actual: ${files} governed, already briefed this session`;
+    case 'budget':
+      return 'actual: briefing budget spent for this session, staying quiet';
+    case 'cli-error':
+      return `actual: brief unavailable (${record.detail ?? 'CLI error'}) — ${files}`;
+    default:
+      // 'unresolved', 'no-paths' and 'not-read-only' are recorded for the pane
+      // and deliberately not drawn.
+      return null;
+  }
+}
+
 // --- Session budget -----------------------------------------------------
 //
 // Dedup (shared with the hook, via brief memory) stops the same decision being
@@ -479,7 +567,91 @@ async function optedOut($) {
   return planGate === 'off' || briefSwitch === 'off' || subprocess === '1';
 }
 
+const PANE = 'rules-brief';
+
+// Rows for the pane, newest first: what each recent Bash call did about
+// briefing, including the calls that did nothing and why.
+function paneRows(elements) {
+  const { Box, Text } = elements;
+  const rows = [...outcomes.entries()].reverse();
+  if (rows.length === 0) {
+    return [Text({ dimColor: true, children: ['No reads yet in this session.'] })];
+  }
+  return rows.slice(0, 40).map(([id, record], i) => {
+    const files = (record.files ?? []).map((f) => f.split('/').pop()).join(', ');
+    const label =
+      {
+        delivered: 'briefed  ',
+        deduped: 'already  ',
+        budget: 'budget   ',
+        'cli-error': 'error    ',
+        unresolved: 'no match ',
+        'no-paths': 'no path  ',
+        'not-read-only': 'writes   ',
+      }[record.outcome] ?? record.outcome;
+    const detail =
+      record.outcome === 'delivered'
+        ? `${record.summary?.decisions?.length ?? 0} ADR(s), ${record.summary?.shown ?? 0} of ${record.summary?.total || record.summary?.shown || 0} rules, ${record.summary?.chars ?? 0} chars`
+        : record.detail ?? files ?? '';
+    return Box({
+      key: `row-${i}-${id}`,
+      flexDirection: 'row',
+      columnGap: 1,
+      children: [
+        Text({ dimColor: record.outcome !== 'delivered', children: [label] }),
+        Text({ children: [files || '—'] }),
+        Text({ dimColor: true, children: [detail && detail !== files ? `· ${detail}` : ''] }),
+      ],
+    });
+  });
+}
+
 export function register(on, options = {}) {
+  on('session.start', async ($, e, next) => {
+    try {
+      await $.command.register({
+        name: 'rules-brief',
+        description: 'What rule briefing has done this session, and where it stayed quiet',
+      });
+    } catch {
+      // A mod that cannot register its command still has to brief.
+    }
+    return next(e);
+  });
+
+  on('command.run', { command: 'rules-brief' }, async ($) => {
+    await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
+    return {};
+  });
+
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== PANE) return next(e);
+    const elements = $.ui.resolve(e);
+    const { Box, Text } = elements;
+    return Box({
+      flexDirection: 'column',
+      children: [
+        Text({ bold: true, children: ['Rule briefing this session'] }),
+        Text({ children: [' '] }),
+        ...paneRows(elements),
+      ],
+    });
+  });
+
+  // One dim line under the tool result that caused a brief. Keeps Claude
+  // Code's own drawing and adds to it, rather than replacing it -- the command
+  // output is the point and this is a footnote to it.
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    const theirs = await next(e);
+    const line = drawnLine(outcomes.get(e.requestId));
+    if (!line) return theirs;
+    const { Box, Text } = $.ui.resolve(e);
+    return Box({
+      flexDirection: 'column',
+      children: [theirs, Text({ dimColor: true, children: [`  ⊢ ${line}`] })],
+    });
+  });
+
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     // Let the command run first. Briefing is advisory, so it must never delay
     // or gate the tool, and a command that fails has nothing worth briefing.
@@ -490,7 +662,10 @@ export function register(on, options = {}) {
       if (result?.deny || result?.isError) return result;
       // Claude Code's own read/write verdict. Absent (not false) for a write,
       // and absent for anything it could not classify -- both mean no brief.
-      if (result?.isReadOnly !== true) return result;
+      if (result?.isReadOnly !== true) {
+        recordOutcome(e.tool_use_id, { outcome: 'not-read-only' });
+        return result;
+      }
       // result.stdout is the string Claude reads. Verified by appending a
       // marker to each candidate field in a live session: only the one in
       // result.stdout came back.
@@ -520,7 +695,10 @@ export function register(on, options = {}) {
           normalizePath(joinPath(shellCwds.get(sessionId) ?? cwd, found.cdTarget))
         );
       }
-      if (!found || found.tokens.length === 0) return result;
+      if (!found || found.tokens.length === 0) {
+        recordOutcome(e.tool_use_id, { outcome: 'no-paths' });
+        return result;
+      }
       const shellCwd = shellCwds.get(sessionId) ?? cwd;
 
       // Resolve each token against the bases it could plausibly be relative
@@ -563,7 +741,12 @@ export function register(on, options = {}) {
           break;
         }
       }
-      if (paths.length === 0) return result;
+      if (paths.length === 0) {
+        // Tokens that looked like paths but resolved to nothing inside the
+        // repository. Common and uninteresting on its own; the pane shows it.
+        recordOutcome(e.tool_use_id, { outcome: 'unresolved', tokens: found.tokens });
+        return result;
+      }
 
       const resolved = mergeSettings(await readEnvSettings($), options);
       const cap = Number.isFinite(resolved.maxSessionChars)
@@ -571,10 +754,15 @@ export function register(on, options = {}) {
         : DEFAULT_MAX_SESSION_CHARS;
 
       let remaining = spendable(sessionId, cap);
-      if (remaining <= 0) return result;
+      if (remaining <= 0) {
+        recordOutcome(e.tool_use_id, { outcome: 'budget', files: paths });
+        return result;
+      }
 
       let appended = '';
       let exhausted = false;
+      let cliError = null;
+      const summaries = [];
       for (const filePath of paths) {
         const run = await $.process.run(
           [
@@ -584,7 +772,10 @@ export function register(on, options = {}) {
           ],
           { stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }), cwd }
         );
-        if (run.exitCode !== 0) continue;
+        if (run.exitCode !== 0) {
+          cliError = `exit ${run.exitCode}`;
+          continue;
+        }
         const brief = briefFrom(run.stdout);
         if (!brief) continue;
 
@@ -598,15 +789,43 @@ export function register(on, options = {}) {
         }
         appended += (appended ? '\n\n' : '') + brief;
         remaining -= brief.length;
+        summaries.push(summarize(brief));
       }
 
       if (exhausted) {
         // Spend the rest of the budget so the notice is emitted once, not on
         // every subsequent read.
         spend(sessionId, cap);
+        // Claude is told as well as the user, deliberately. The drawn toast is
+        // for the person watching; Claude still needs to know that briefing has
+        // stopped, or it is back to not being able to tell silence from a file
+        // no rule governs.
         appended += (appended ? '\n\n' : '') + EXHAUSTED_NOTICE;
+        $.ui.toast('Actual rule briefing has reached its per-session context budget.');
       } else if (appended) {
         spend(sessionId, appended.length);
+      }
+
+      if (appended) {
+        // One record for the call, merging what each file contributed.
+        recordOutcome(e.tool_use_id, {
+          outcome: exhausted ? 'budget' : 'delivered',
+          files: paths,
+          summary: {
+            decisions: summaries.flatMap((x) => x.decisions),
+            shown: summaries.reduce((n, x) => n + x.shown, 0),
+            total: summaries.reduce((n, x) => n + x.total, 0),
+            chars: appended.length,
+          },
+        });
+      } else if (cliError) {
+        recordOutcome(e.tool_use_id, { outcome: 'cli-error', files: paths, detail: cliError });
+      } else {
+        // Resolved a governed file and the CLI said nothing: every applicable
+        // decision has already been briefed this session. The single most
+        // useful thing to be able to see, because it is the one case where
+        // silence is correct.
+        recordOutcome(e.tool_use_id, { outcome: 'deduped', files: paths });
       }
 
       if (options.debug || (await $.env.get('ACTUAL_HOOK_DEBUG'))) {
