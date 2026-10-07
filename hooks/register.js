@@ -579,6 +579,12 @@ function paneRows(elements) {
   }
   return rows.slice(0, 40).map(([id, record], i) => {
     const files = (record.files ?? []).map((f) => f.split('/').pop()).join(', ');
+    // Files that resolved but contributed nothing, so a read that looks
+    // unbriefed can be told from one that had nothing left to say.
+    const quiet = (record.resolved ?? [])
+      .filter((f) => !(record.files ?? []).includes(f))
+      .map((f) => f.split('/').pop())
+      .join(', ');
     const label =
       {
         delivered: 'briefed  ',
@@ -601,6 +607,7 @@ function paneRows(elements) {
         Text({ dimColor: record.outcome !== 'delivered', children: [label] }),
         Text({ children: [files || '—'] }),
         Text({ dimColor: true, children: [detail && detail !== files ? `· ${detail}` : ''] }),
+        Text({ dimColor: true, children: [quiet ? `· nothing new for ${quiet}` : ''] }),
       ],
     });
   });
@@ -763,6 +770,13 @@ export function register(on, options = {}) {
       let exhausted = false;
       let cliError = null;
       const summaries = [];
+      // Which files actually contributed, as opposed to which resolved. A
+      // command naming two governed files where only one has anything new to
+      // say must not be reported as having briefed both: `package.json,
+      // pnpm-lock.yaml` read as two sources when the lockfile contributed
+      // nothing, which is exactly the kind of thing this line exists to make
+      // visible and so must not itself misstate.
+      const briefedFiles = [];
       for (const filePath of paths) {
         const run = await $.process.run(
           [
@@ -790,6 +804,7 @@ export function register(on, options = {}) {
         appended += (appended ? '\n\n' : '') + brief;
         remaining -= brief.length;
         summaries.push(summarize(brief));
+        briefedFiles.push(filePath);
       }
 
       if (exhausted) {
@@ -810,7 +825,9 @@ export function register(on, options = {}) {
         // One record for the call, merging what each file contributed.
         recordOutcome(e.tool_use_id, {
           outcome: exhausted ? 'budget' : 'delivered',
-          files: paths,
+          files: briefedFiles,
+          // Kept so the pane can still show what resolved but said nothing.
+          resolved: paths,
           summary: {
             decisions: summaries.flatMap((x) => x.decisions),
             shown: summaries.reduce((n, x) => n + x.shown, 0),

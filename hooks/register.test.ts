@@ -796,3 +796,36 @@ test('rule counts are summed per decision, not mixed across them', async (fire: 
   expect(drawn).toContain('2 ADRs');
   expect(drawn).toContain('9 of 36 rules');
 });
+
+test('the drawn line names only the files that contributed a brief', async (fire: any, on: any) => {
+  // Observed live: `briefed 2 ADRs, 16 of 33 rules — package.json,
+  // pnpm-lock.yaml`, where package.json produced all 16 rules and the lockfile
+  // produced nothing. A line that exists to make briefing legible must not
+  // itself overstate what was briefed.
+  let call = 0;
+  const runs = harness(on, {
+    cli: () => (++call === 1 ? { exitCode: 0, stdout: reply(BRIEF), stderr: '' } : { exitCode: 0, stdout: '', stderr: '' }),
+  });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts src/b.ts', tool_use_id: 'tu_files' });
+  const drawn = await drawnText(fire, 'ToolResult', 'tu_files');
+
+  expect(runs.length).toBe(2);
+  expect(drawn).toContain('a.ts');
+  expect(drawn).not.toContain('b.ts');
+});
+
+test('the pane distinguishes a file that contributed from one that was quiet', async (fire: any, on: any) => {
+  let call = 0;
+  harness(on, {
+    cli: () => (++call === 1 ? { exitCode: 0, stdout: reply(BRIEF), stderr: '' } : { exitCode: 0, stdout: '', stderr: '' }),
+  });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/one.ts src/two.ts', tool_use_id: 'pq_1' });
+  const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+
+  expect(drawn).toContain('one.ts');
+  expect(drawn).toContain('nothing new for two.ts');
+});
