@@ -180,6 +180,53 @@ function candidatePaths(command, cwd) {
   return out.slice(0, MAX_PATHS_PER_COMMAND);
 }
 
+// --- Session budget -----------------------------------------------------
+//
+// Dedup (shared with the hook, via brief memory) stops the same decision being
+// briefed twice. What it cannot bound is accumulation: a session that touches
+// many governed files collects many distinct decisions. Measured over three
+// real rule sets -- 425, 183 and 219 documents -- a 40-file session accumulates
+// 12 to 18 distinct decisions, so roughly 20-30 KB of injected context, and
+// 87-100% of sampled files were governed by at least one rule.
+//
+// `--min-score` cannot substitute for a cap. Its scores form a fixed lattice
+// of 0.75 x {1, 1.5, 2, 3, 4} -- five rungs, identical in all three corpora --
+// and the score measures how narrowly a rule's `verify` glob was written
+// (`ai/**` scores 0.75, `ai/src/mastra/workflows/**/*.ts` scores 3.00), not how
+// relevant the rule is. So one threshold behaves differently everywhere: a
+// 1.50 floor cuts 70% in one repo, 23% in another and 0% in a third. It stays
+// a per-repo escape hatch (`config set --repo rules_min_score`), not a lever
+// this mod can set on anyone's behalf.
+//
+// Hence a hard per-session character cap. It stops rather than truncates: the
+// CLI's own --max-chars already drops whole rules from a single brief and says
+// how many it left out, and a brief cut mid-rule is worse than no brief -- a
+// half-printed MUST can read as permission.
+
+const DEFAULT_MAX_SESSION_CHARS = 20000;
+
+// Per-session totals, keyed by session id so a reload or a second session in
+// one process starts clean rather than inheriting a spent budget.
+const spent = new Map();
+
+function spendable(sessionId, cap) {
+  const used = spent.get(sessionId) ?? 0;
+  return Math.max(0, cap - used);
+}
+
+function spend(sessionId, chars) {
+  spent.set(sessionId, (spent.get(sessionId) ?? 0) + chars);
+}
+
+// Said once, on the call that exhausts the budget. Briefing that simply stops
+// is the silent-degradation failure this plugin already has one of too many:
+// a brief that never arrives is indistinguishable from a file no rule governs.
+// One short line makes the difference legible and tells the agent what to do.
+const EXHAUSTED_NOTICE =
+  'Actual rule briefing has reached its per-session context budget and will ' +
+  'stay quiet from here. Run `actual rules brief --file <path>` if you need ' +
+  'the rules for a specific file.';
+
 // The one allowlisted shape, as a parse rather than a byte match. The hook has
 // to do this with shell parameter expansion and needs five guards to pin the
 // shape (see rules-brief.sh); here it is a property read, and every other
@@ -212,6 +259,86 @@ function envelopeFor({ sessionId, cwd, filePath }) {
   });
 }
 
+// Every tunable is readable two ways: a `userConfig` field, which gives the
+// operator a labelled row in the plugin's settings, and an environment
+// variable, which an operator can set for one session without editing
+// settings. Env wins, the same precedence the three switches above use.
+//
+// Two reasons it is not userConfig alone. The plugin already established the
+// ACTUAL_* convention for exactly this, and `userConfig` values arrive in
+// register()'s `options` at load time, which no test harness in this build can
+// inject -- a tunable nothing can test is a tunable that quietly stops working.
+// Each env name is written as a literal at its call site, not composed from a
+// prefix, and the reads sit in one plain function rather than behind a table of
+// closures. Claude Code enforces both: `$.env.get` refuses a template with a
+// substitution, and `$` may only be passed to a function declared at the top of
+// the file. The point is that the variables a mod reads can be listed without
+// running it -- `claude plugin validate` prints them, which is the whole reason
+// that output is worth showing a security reviewer.
+async function readEnvSettings($) {
+  const [maxSessionChars, limit, rulesPerDecision, maxChars, minScore] = await Promise.all([
+    $.env.get('ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS'),
+    $.env.get('ACTUAL_RULES_BRIEF_LIMIT'),
+    $.env.get('ACTUAL_RULES_BRIEF_RULES_PER_DECISION'),
+    $.env.get('ACTUAL_RULES_BRIEF_MAX_CHARS'),
+    $.env.get('ACTUAL_RULES_BRIEF_MIN_SCORE'),
+  ]);
+  return { maxSessionChars, limit, rulesPerDecision, maxChars, minScore };
+}
+
+// Which keys exist, and the CLI flag each one forwards to. maxSessionChars has
+// no flag: it is this mod's own budget, enforced here, not something the CLI
+// knows about.
+const CLI_FLAGS = {
+  limit: '--limit',
+  rulesPerDecision: '--rules-per-decision',
+  maxChars: '--max-chars',
+  minScore: '--min-score',
+};
+
+// Env wins over userConfig, the same precedence the three switches above use:
+// a settings row is the durable preference, an environment variable is the
+// override for one session.
+function mergeSettings(fromEnv, options) {
+  const resolved = {};
+  for (const key of ['maxSessionChars', ...Object.keys(CLI_FLAGS)]) {
+    const raw = fromEnv[key];
+    const parsed = raw === undefined || raw === null || raw === '' ? NaN : Number(raw);
+    if (Number.isFinite(parsed)) resolved[key] = parsed;
+    else if (Number.isFinite(options[key])) resolved[key] = options[key];
+  }
+  return resolved;
+}
+
+// Pass a limit through to the CLI only when the operator set one, so the CLI's
+// own defaults (2 decisions, 8 rules each, 4000 chars, no score floor) stay in
+// one place rather than being restated here. --min-score especially: its
+// default is the repository's own `rules_min_score`, then the user-wide key,
+// and overriding that from here would silently ignore a repo's setting.
+function cliLimits(resolved) {
+  const argv = [];
+  for (const [key, flag] of Object.entries(CLI_FLAGS)) {
+    if (Number.isFinite(resolved[key])) argv.push(flag, String(resolved[key]));
+  }
+  return argv;
+}
+
+// What Phase 3 of the plan actually asked for: the numbers needed to choose a
+// cap, rather than a cap chosen from unease. $.ui.log writes a dim transcript
+// line the model does not read, so measuring cannot itself change what the
+// session sees.
+async function reportBudget($, sessionId, cap) {
+  try {
+    const used = spent.get(sessionId) ?? 0;
+    const usage = await $.session.usage();
+    const ctx = usage?.context;
+    const pct = ctx ? ` context ${ctx.tokens}/${ctx.window} (${ctx.percent}%)` : '';
+    $.ui.log(`actual rules brief: injected ${used}/${cap} chars this session;${pct}`);
+  } catch {
+    // Instrumentation must never be the reason a brief fails.
+  }
+}
+
 // Same three switches the shell hooks honour, read through $.env so a test can
 // set them. ACTUAL_CLI_SUBPROCESS is not an opt-out but a recursion guard:
 // actual-cli runs its conformance judge as a nested `claude -p`, and a judge
@@ -231,7 +358,7 @@ async function optedOut($) {
   return planGate === 'off' || briefSwitch === 'off' || subprocess === '1';
 }
 
-export function register(on) {
+export function register(on, options = {}) {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     // Let the command run first. Briefing is advisory, so it must never delay
     // or gate the tool, and a command that fails has nothing worth briefing.
@@ -272,15 +399,48 @@ export function register(on) {
       }
       if (paths.length === 0) return result;
 
+      const resolved = mergeSettings(await readEnvSettings($), options);
+      const cap = Number.isFinite(resolved.maxSessionChars)
+        ? resolved.maxSessionChars
+        : DEFAULT_MAX_SESSION_CHARS;
+
+      let remaining = spendable(sessionId, cap);
+      if (remaining <= 0) return result;
+
       let appended = '';
+      let exhausted = false;
       for (const filePath of paths) {
         const run = await $.process.run(
-          ['actual', 'rules', 'brief', '--claude-hook'],
+          ['actual', 'rules', 'brief', '--claude-hook', ...cliLimits(resolved)],
           { stdin: envelopeFor({ sessionId, cwd, filePath }), cwd }
         );
         if (run.exitCode !== 0) continue;
         const brief = briefFrom(run.stdout);
-        if (brief) appended += (appended ? '\n\n' : '') + brief;
+        if (!brief) continue;
+
+        // A brief that does not fit is dropped whole, and the budget is
+        // declared spent. Taking the next, smaller brief instead would make
+        // which rules an agent sees depend on the order it happened to read
+        // files in.
+        if (brief.length > remaining) {
+          exhausted = true;
+          break;
+        }
+        appended += (appended ? '\n\n' : '') + brief;
+        remaining -= brief.length;
+      }
+
+      if (exhausted) {
+        // Spend the rest of the budget so the notice is emitted once, not on
+        // every subsequent read.
+        spend(sessionId, cap);
+        appended += (appended ? '\n\n' : '') + EXHAUSTED_NOTICE;
+      } else if (appended) {
+        spend(sessionId, appended.length);
+      }
+
+      if (options.debug || (await $.env.get('ACTUAL_HOOK_DEBUG'))) {
+        await reportBudget($, sessionId, cap);
       }
 
       if (!appended) return result;

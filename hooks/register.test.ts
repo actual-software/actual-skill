@@ -28,13 +28,29 @@ function harness(
     // Paths $.fs.exists should answer true for. Default: everything under the
     // root, so a test only opts in to the stricter behaviour when it needs it.
     existing?: string[] | null | (() => string[] | null);
+    config?: Record<string, number>;
   } = {}
 ) {
   const runs: any[] = [];
-  mock.env(on, opts.env ?? {});
+  // Tunables are read from ACTUAL_RULES_BRIEF_* so a test can set them; see
+  // SETTINGS in register.js for why they are not userConfig alone.
+  const cfgEnv: Record<string, string> = {};
+  const envName: Record<string, string> = {
+    maxSessionChars: 'ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS',
+    limit: 'ACTUAL_RULES_BRIEF_LIMIT',
+    rulesPerDecision: 'ACTUAL_RULES_BRIEF_RULES_PER_DECISION',
+    maxChars: 'ACTUAL_RULES_BRIEF_MAX_CHARS',
+    minScore: 'ACTUAL_RULES_BRIEF_MIN_SCORE',
+  };
+  for (const [k, v] of Object.entries(opts.config ?? {})) cfgEnv[envName[k]] = String(v);
+  mock.env(on, { ...cfgEnv, ...(opts.env ?? {}) });
   on('session.cwd', async () => ({ value: opts.cwd ?? '/repo' }));
   on('session.root', async () => ({ value: opts.root ?? '/repo' }));
   on('session.id', async () => ({ value: 'sess-1' }));
+  on('session.usage', async () => ({
+    value: { context: { tokens: 1000, window: 200000, percent: 1 } },
+  }));
+  on('ui.log', async () => ({ value: undefined }));
   on('fs.exists', async (_$: any, e: any) => {
     const existing = typeof opts.existing === 'function' ? opts.existing() : opts.existing;
     return { value: existing ? existing.includes(e.path) : true };
@@ -329,4 +345,82 @@ test('the frozen real-session corpus extracts the same paths', async (fire: any,
     const got = runs.slice(before).map((r: any) => JSON.parse(r.init.stdin).tool_input.file_path);
     expect(got).toEqual(want);
   }
+});
+
+// --- Phase 3: the per-session budget ------------------------------------
+
+const LONG = 'R-001 MUST: '.padEnd(3400, 'x');
+
+test('a brief that does not fit the remaining budget is dropped whole', async (fire: any, on: any) => {
+  // Not truncated: the CLI's own --max-chars drops whole rules from one brief,
+  // and a brief cut mid-rule is worse than none -- a half-printed MUST can
+  // read as permission.
+  const runs = harness(on, {
+    cli: { exitCode: 0, stdout: reply(LONG), stderr: '' },
+    config: { maxSessionChars: 4000 },
+  });
+
+  const first = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(first.result.stdout).toContain(LONG);
+
+  const second = await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts' });
+  expect(second.result.stdout).not.toContain(LONG);
+  // Two spawns: the budget is spent on what came back, not guessed beforehand.
+  expect(runs.length).toBe(2);
+});
+
+test('exhausting the budget says so once, not on every later read', async (fire: any, on: any) => {
+  // Briefing that merely stops is the silent-degradation failure this plugin
+  // already has one of too many.
+  const runs = harness(on, {
+    cli: { exitCode: 0, stdout: reply(LONG), stderr: '' },
+    config: { maxSessionChars: 4000 },
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  const crossing = await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts' });
+  expect(crossing.result.stdout).toContain('per-session context budget');
+
+  const after = await fire.tool.call({ tool: 'Bash', command: 'cat src/c.ts' });
+  expect(after.result.stdout).toBe('TOOL OUTPUT');
+  // And no further spawns once the budget is gone.
+  expect(runs.length).toBe(2);
+});
+
+test('maxSessionChars: 0 turns briefing off without touching the gates', async (fire: any, on: any) => {
+  const runs = harness(on, { config: { maxSessionChars: 0 } });
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(runs.length).toBe(0);
+  expect(r.result.stdout).toBe('TOOL OUTPUT');
+});
+
+test('the default budget leaves an ordinary brief untouched', async (fire: any, on: any) => {
+  const runs = harness(on);
+  for (const f of ['a', 'b', 'c', 'd']) {
+    const r = await fire.tool.call({ tool: 'Bash', command: `cat src/${f}.ts` });
+    expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+  }
+  expect(runs.length).toBe(4);
+});
+
+test('only the limits an operator set are passed to the CLI', async (fire: any, on: any) => {
+  // The CLI owns its own defaults. --min-score especially: unset, it defers to
+  // the repository's own rules_min_score, which restating here would override.
+  const bare = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(bare[0].argv).toEqual(['actual', 'rules', 'brief', '--claude-hook']);
+});
+
+test('configured limits reach the CLI as flags', async (fire: any, on: any) => {
+  const runs = harness(on, {
+    config: { limit: 1, rulesPerDecision: 3, maxChars: 1500, minScore: 2.25 },
+  });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(runs[0].argv).toEqual([
+    'actual', 'rules', 'brief', '--claude-hook',
+    '--limit', '1',
+    '--rules-per-decision', '3',
+    '--max-chars', '1500',
+    '--min-score', '2.25',
+  ]);
 });
