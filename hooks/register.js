@@ -323,19 +323,33 @@ function cliLimits(resolved) {
   return argv;
 }
 
-// What Phase 3 of the plan actually asked for: the numbers needed to choose a
-// cap, rather than a cap chosen from unease. $.ui.log writes a dim transcript
-// line the model does not read, so measuring cannot itself change what the
-// session sees.
-async function reportBudget($, sessionId, cap) {
+// What Phase 3 of the plan asked for: the numbers needed to choose a cap,
+// rather than a cap chosen from unease.
+//
+// Two channels, because one is not enough. $.ui.log writes a dim transcript
+// line the model does not read, which is the right thing in an interactive
+// session -- measuring must not itself change what the session sees. But it
+// does not reach `claude -p` stdout, and headless is exactly where a scripted
+// measurement over many files would run, so the first attempt at this produced
+// nothing at all. The second channel appends the same line to the brief, where
+// it rides out on the tool result and is visible anywhere. That one does enter
+// the model's context, so it is strictly debug-only.
+//
+// Neither channel writes a file. A durable log would mean declaring $.fs.write
+// on a governance plugin whose audit surface is the thing that makes it
+// reviewable, and a debug counter is not worth that.
+async function budgetLine($, sessionId, cap) {
   try {
     const used = spent.get(sessionId) ?? 0;
     const usage = await $.session.usage();
     const ctx = usage?.context;
-    const pct = ctx ? ` context ${ctx.tokens}/${ctx.window} (${ctx.percent}%)` : '';
-    $.ui.log(`actual rules brief: injected ${used}/${cap} chars this session;${pct}`);
+    const where = ctx ? ` context ${ctx.tokens}/${ctx.window} (${ctx.percent}%)` : '';
+    const line = `actual rules brief: injected ${used}/${cap} chars this session;${where}`;
+    $.ui.log(line);
+    return line;
   } catch {
     // Instrumentation must never be the reason a brief fails.
+    return '';
   }
 }
 
@@ -440,7 +454,8 @@ export function register(on, options = {}) {
       }
 
       if (options.debug || (await $.env.get('ACTUAL_HOOK_DEBUG'))) {
-        await reportBudget($, sessionId, cap);
+        const line = await budgetLine($, sessionId, cap);
+        if (line) appended += (appended ? '\n\n' : '') + line;
       }
 
       if (!appended) return result;

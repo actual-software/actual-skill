@@ -424,3 +424,22 @@ test('configured limits reach the CLI as flags', async (fire: any, on: any) => {
     '--min-score', '2.25',
   ]);
 });
+
+test('ACTUAL_HOOK_DEBUG reports the budget where a headless run can see it', async (fire: any, on: any) => {
+  // $.ui.log alone was unmeasurable: it writes a transcript line that never
+  // reaches `claude -p` stdout, so the first measurement run produced nothing.
+  const runs = harness(on, { env: { ACTUAL_HOOK_DEBUG: '1' } });
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+
+  expect(runs.length).toBe(1);
+  expect(r.result.stdout).toContain(BRIEF);
+  expect(r.result.stdout).toMatch(/injected \d+\/\d+ chars this session/);
+  expect(r.result.stdout).toContain('context 1000/200000 (1%)');
+});
+
+test('without the debug switch no budget line is injected', async (fire: any, on: any) => {
+  const runs = harness(on);
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(runs.length).toBe(1);
+  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+});
