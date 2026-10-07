@@ -64,23 +64,120 @@
 // What Phase 2 still owes: better *path* extraction -- heredoc bodies, more
 // than one path per command -- not classification.
 
-// A token that looks like a path with an extension. Deliberately narrow:
-// over-extraction costs a wasted ~20ms CLI call, and the CLI answers nothing
-// for a file no rule governs, so a false candidate is cheap and a false
-// negative is a missed brief.
-const PATH_TOKEN = /^[\w.][\w./-]*\.[A-Za-z0-9]{1,6}$/;
+// --- Path extraction ---------------------------------------------------
+//
+// What this has to get right, measured against the 35 Bash calls of one real
+// session (sprintreview fb5061e2) and a live probe of isReadOnly:
+//
+//   cat a.ts                              one path
+//   cat a.ts b.ts                         read-only, TWO paths
+//   cat a.ts | head -3                    read-only, pipe
+//   cd /abs/dir && cat rel/a.ts           read-only, path relative to /abs/dir
+//   grep -n class a.ts                    read-only
+//   sed -n 1,2p a.ts                      read-only
+//
+// 11 of those 35 calls (31%) began with `cd <dir> &&`, every one of them with
+// an absolute target, and the targets were not all the repo root -- one was
+// apps/actual. A path in such a command resolves against the cd target, not
+// the session's cwd, so ignoring the prefix means either missing the file or,
+// worse, resolving to a different file that happens to exist at the same
+// relative path.
 
-// First path-shaped token in the command. One path per call in Phase 1: the
-// common read is a single file, and briefing several at once is exactly the
-// volume question Phase 3 has to answer first.
-function candidatePaths(command) {
-  if (typeof command !== 'string' || command.length === 0) return [];
-  const out = [];
-  for (const token of command.trim().split(/\s+/).slice(1)) {
-    if (token.startsWith('-')) continue;
-    if (PATH_TOKEN.test(token)) out.push(token);
+// A token that could be a path with an extension. No `*`, so a glob such as
+// `src/*.ts` is not mistaken for a file. No quotes, so `sed -n '1,2p'` and a
+// quoted path with a space are both passed over -- the latter is a known and
+// accepted miss.
+//
+// The extension must begin with a letter. Running this over 35 real Bash
+// commands, the version string in `echo "=== jwt 9.0.3 API evidence ==="`
+// matched a digits-allowed pattern and became a candidate path; `.ts`, `.md`,
+// `.json`, `.cjs`, `.tf`, `.yaml` and `.d.ts` all still match.
+const PATH_TOKEN = /^[\w.][\w./-]*\.[A-Za-z][A-Za-z0-9]{0,5}$/;
+
+// How many files one command may brief. A command reading six files would
+// otherwise inject six briefs at once, which is the volume question Phase 3
+// still owes an answer to; until then, cap it low.
+const MAX_PATHS_PER_COMMAND = 2;
+
+// Peel any leading `cd <dir> &&` chain off the front and report the directory
+// the rest of the command actually runs in. Only a leading chain counts: a
+// `cd` later in the pipeline changes the base partway through, and guessing
+// which half a path belongs to is worse than declining, so that returns null.
+function resolveBase(command) {
+  let rest = command.trim();
+  let base = null;
+  for (;;) {
+    const m = /^cd\s+("[^"]+"|'[^']+'|[^\s&|;]+)\s*&&\s*/.exec(rest);
+    if (!m) break;
+    base = m[1].replace(/^["']|["']$/g, '');
+    rest = rest.slice(m[0].length);
   }
-  return out.slice(0, 1);
+  // A `cd` anywhere in what is left makes the base ambiguous.
+  if (/(^|[\s&|;])cd\s/.test(rest)) return null;
+  // Everything from a heredoc marker on is the body of a document, not argv.
+  // Scanning it finds property accessors -- `jwk.kid`, `claims.jti` -- that
+  // look exactly like dotted paths. Those commands are never briefed anyway,
+  // because Claude Code does not mark a heredoc read-only (probed live, even
+  // for one that only reads and prints), but the extractor should not be
+  // inventing candidates it would then have to filter.
+  const heredoc = rest.indexOf('<<');
+  if (heredoc !== -1) rest = rest.slice(0, heredoc);
+  return { base, rest };
+}
+
+// Join a possibly-relative token onto a base directory, without importing
+// path: a mod's whole dependency surface is the mods API, same hygiene rule
+// the shell hooks follow for jq and python.
+function joinPath(base, token) {
+  if (token.startsWith('/')) return token;
+  return `${base.replace(/\/+$/, '')}/${token}`;
+}
+
+// Collapse `.` and `..` segments so containment can be checked as a string
+// prefix. A token that climbs above its base is left with leading `..`, which
+// no absolute root prefixes, so it is rejected by the containment test rather
+// than needing its own branch.
+function normalizePath(p) {
+  const out = [];
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return (p.startsWith('/') ? '/' : '') + out.join('/');
+}
+
+function isWithin(root, candidate) {
+  const r = normalizePath(root).replace(/\/+$/, '');
+  if (r === '' || r === '/') return true;
+  return candidate === r || candidate.startsWith(`${r}/`);
+}
+
+// Candidate absolute paths named by a read-only command. Returns at most
+// MAX_PATHS_PER_COMMAND, in the order they appear.
+function candidatePaths(command, cwd) {
+  if (typeof command !== 'string' || command.length === 0) return [];
+  const split = resolveBase(command);
+  if (!split) return [];
+
+  const base = split.base ?? cwd;
+  if (!base) return [];
+
+  const out = [];
+  const seen = new Set();
+  // Skip argv[0] of each pipeline stage: `cat`, `head`, `grep` are not paths,
+  // and a tool name with a dot (`a.out`) would otherwise look like one.
+  for (const stage of split.rest.split(/\||&&|;/)) {
+    for (const token of stage.trim().split(/\s+/).slice(1)) {
+      if (token.startsWith('-')) continue;
+      if (!PATH_TOKEN.test(token)) continue;
+      const abs = normalizePath(joinPath(base, token));
+      if (seen.has(abs)) continue;
+      seen.add(abs);
+      out.push(abs);
+    }
+  }
+  return out.slice(0, MAX_PATHS_PER_COMMAND);
 }
 
 // The one allowlisted shape, as a parse rather than a byte match. The hook has
@@ -151,12 +248,29 @@ export function register(on) {
       // result.stdout came back.
       if (typeof result?.result?.stdout !== 'string') return result;
 
-      const paths = candidatePaths(e.command);
-      if (paths.length === 0) return result;
-
-      const cwd = await $.session.cwd();
-      const sessionId = await $.session.id();
+      const [cwd, root, sessionId] = await Promise.all([
+        $.session.cwd(),
+        $.session.root(),
+        $.session.id(),
+      ]);
       if (!cwd || !sessionId) return result;
+
+      // Two filters before any spawn. Containment keeps the brief inside the
+      // checkout the session is governing -- `cat /etc/hosts` and a scratchpad
+      // file under TMPDIR both name real files that no rule governs. Existence
+      // catches a token that merely looks like a path. Both are cheap next to
+      // a process spawn, and the CLI answering "no rules" is not a substitute:
+      // it would still cost the spawn, once per Bash call, forever.
+      const within = candidatePaths(e.command, cwd).filter((p) =>
+        isWithin(root ?? cwd, p)
+      );
+      if (within.length === 0) return result;
+
+      const paths = [];
+      for (const candidate of within) {
+        if (await $.fs.exists(candidate)) paths.push(candidate);
+      }
+      if (paths.length === 0) return result;
 
       let appended = '';
       for (const filePath of paths) {

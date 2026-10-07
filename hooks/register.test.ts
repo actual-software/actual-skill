@@ -19,12 +19,26 @@ function reply(context: string) {
 // CLI appears to return, and `tool` is the tool result the mod sees from next().
 function harness(
   on: any,
-  opts: { env?: Record<string, string>; cli?: any | (() => any); tool?: any } = {}
+  opts: {
+    env?: Record<string, string>;
+    cli?: any | (() => any);
+    tool?: any;
+    cwd?: string;
+    root?: string;
+    // Paths $.fs.exists should answer true for. Default: everything under the
+    // root, so a test only opts in to the stricter behaviour when it needs it.
+    existing?: string[] | null | (() => string[] | null);
+  } = {}
 ) {
   const runs: any[] = [];
   mock.env(on, opts.env ?? {});
-  on('session.cwd', async () => ({ value: '/repo' }));
+  on('session.cwd', async () => ({ value: opts.cwd ?? '/repo' }));
+  on('session.root', async () => ({ value: opts.root ?? '/repo' }));
   on('session.id', async () => ({ value: 'sess-1' }));
+  on('fs.exists', async (_$: any, e: any) => {
+    const existing = typeof opts.existing === 'function' ? opts.existing() : opts.existing;
+    return { value: existing ? existing.includes(e.path) : true };
+  });
   // Shaped like a real Bash tool result, probed from a live session: `text`
   // is the string Claude reads, `result` is a structured object, and
   // `isReadOnly` is Claude Code's own read/write verdict.
@@ -62,7 +76,9 @@ test('the synthesized envelope carries the two load-bearing fields', async (fire
   expect(sent.hook_event_name).toBe('PostToolUse');
   expect(sent.session_id).toBe('sess-1');
   expect(sent.tool_name).toBe('Read');
-  expect(sent.tool_input.file_path).toBe('src/persistence/user_store.ts');
+  // Resolved to an absolute path: a relative token is only meaningful next to
+  // the directory the command actually ran in, which a `cd` prefix can change.
+  expect(sent.tool_input.file_path).toBe('/repo/src/persistence/user_store.ts');
   // The CLI resolves a relative file_path against the envelope's cwd, so cwd
   // has to be right for an extracted path to resolve at all.
   expect(sent.cwd).toBe('/repo');
@@ -185,4 +201,132 @@ test('a mods API that throws fails open: the tool result is unchanged', async (f
   on('tool.call', async () => ({ ref: 1, result: { stdout: 'TOOL OUTPUT' }, text: 'TOOL OUTPUT', isReadOnly: true }));
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/user_store.ts' });
   expect(r.result.stdout).toBe('TOOL OUTPUT');
+});
+
+// --- Phase 2: path extraction -------------------------------------------
+//
+// Every shape below was taken from a live isReadOnly probe or from the 35 Bash
+// calls of sprintreview session fb5061e2, not invented.
+
+test('a command reading two files briefs both', async (fire: any, on: any) => {
+  // `cat a.ts b.ts` comes back isReadOnly, verified live.
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts src/b.ts' });
+
+  expect(runs.length).toBe(2);
+  const sent = runs.map((r: any) => JSON.parse(r.init.stdin).tool_input.file_path);
+  expect(sent).toEqual(['/repo/src/a.ts', '/repo/src/b.ts']);
+});
+
+test('a pipeline briefs the file, not the downstream tool name', async (fire: any, on: any) => {
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts | head -3' });
+
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/src/a.ts');
+});
+
+test('a leading `cd` sets the base a relative path resolves against', async (fire: any, on: any) => {
+  // 11 of 35 real Bash calls began with `cd <abs dir> &&`, and the targets
+  // were not all the repo root. Resolving against cwd instead would name a
+  // file that does not exist -- or one that does, and is the wrong file.
+  const runs = harness(on, { existing: ['/repo/apps/web/src/a.ts'] });
+  await fire.tool.call({ tool: 'Bash', command: 'cd /repo/apps/web && cat src/a.ts' });
+
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/apps/web/src/a.ts');
+});
+
+test('a `cd` partway through the command is declined, not guessed', async (fire: any, on: any) => {
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts && cd apps && cat src/b.ts' });
+  expect(runs.length).toBe(0);
+});
+
+test('a path outside the session root is never briefed', async (fire: any, on: any) => {
+  const runs = harness(on);
+  for (const command of [
+    'cat /etc/hosts',
+    'cat /tmp/scratch/jwk-roundtrip.cjs',
+    'cat ../outside/secrets.ts',
+    'cd /elsewhere && cat a.ts',
+  ]) {
+    await fire.tool.call({ tool: 'Bash', command });
+  }
+  expect(runs.length).toBe(0);
+});
+
+test('a token that is not a file on disk is never briefed', async (fire: any, on: any) => {
+  // Existence is checked before spawning. Leaving it to the CLI to answer
+  // "no rules" would still cost a spawn, on every Bash call, forever.
+  const runs = harness(on, { existing: [] });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(runs.length).toBe(0);
+});
+
+test('globs and sed line ranges are not mistaken for paths', async (fire: any, on: any) => {
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: "sed -n '188,350p' src/a.ts" });
+  await fire.tool.call({ tool: 'Bash', command: 'grep -rn warn packages/logger/src/*.ts' });
+
+  // The quoted range is skipped, so only the real file briefs; the glob names
+  // no single file and is skipped entirely.
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/src/a.ts');
+});
+
+test('the same file named twice in one command briefs once', async (fire: any, on: any) => {
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts | grep -n class src/a.ts' });
+  expect(runs.length).toBe(1);
+});
+
+test('a command naming many files is capped', async (fire: any, on: any) => {
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cat a.ts b.ts c.ts d.ts e.ts' });
+  expect(runs.length).toBe(2);
+});
+
+test('two briefs from one command are joined, with the output kept', async (fire: any, on: any) => {
+  const runs = harness(on);
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts src/b.ts' });
+  expect(runs.length).toBe(2);
+  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}\n\n${BRIEF}`);
+});
+
+// Commands lifted verbatim from sprintreview session fb5061e2, which
+// implemented a feature in 35 Bash calls and was never briefed once. Frozen
+// here so the extractor keeps answering them the same way. Run against the
+// whole 35, the extractor names a real repo file for 22 and nothing for the
+// rest -- heredocs, `ls`, `find`, in-place edits and a scratchpad write.
+const CORPUS: Array<[string, string[]]> = [
+  ['cat apps/actual/lib/oauth/tokens.ts', ['/repo/apps/actual/lib/oauth/tokens.ts']],
+  ["sed -n '595,605p;236,245p' pnpm-lock.yaml && echo '=== resolved'", ['/repo/pnpm-lock.yaml']],
+  ['grep -n "revok" apps/actual/lib/oauth/verify-token.ts', ['/repo/apps/actual/lib/oauth/verify-token.ts']],
+  [
+    'cd /repo/apps/actual && npx tsc --noEmit -p tsconfig.json',
+    ['/repo/apps/actual/tsconfig.json'],
+  ],
+  // A version string in an echo matched a digits-allowed extension pattern and
+  // became a candidate path. The extension must now begin with a letter.
+  ['echo "=== jwt 9.0.3 API evidence ===" && grep -n keyid apps/actual/lib/jwks.ts', ['/repo/apps/actual/lib/jwks.ts']],
+  // Heredoc bodies hold dotted property accessors that look like paths.
+  ["python3 - <<'PY'\np = 'apps/actual/lib/oauth/tokens.ts'\nprint(jwk.kid, claims.jti)\nPY", []],
+  // Directories, no extension.
+  ['ls .actual/rules/ | wc -l && ls .actual/rules/', []],
+];
+
+test('the frozen real-session corpus extracts the same paths', async (fire: any, on: any) => {
+  // One harness per test: a mod registers its hooks before the first $ call,
+  // so `existing` has to vary through a closure rather than a second harness.
+  let expected: string[] = [];
+  const runs = harness(on, { existing: () => expected });
+
+  for (const [command, want] of CORPUS) {
+    expected = want;
+    const before = runs.length;
+    await fire.tool.call({ tool: 'Bash', command });
+    const got = runs.slice(before).map((r: any) => JSON.parse(r.init.stdin).tool_input.file_path);
+    expect(got).toEqual(want);
+  }
 });
