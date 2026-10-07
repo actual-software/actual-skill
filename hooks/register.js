@@ -300,6 +300,24 @@ async function readEnvSettings($) {
   return { maxSessionChars, limit, rulesPerDecision, maxChars, minScore };
 }
 
+// The rules directory to govern against, resolved the way bootstrap.sh's
+// rules_dir() resolves it: ACTUAL_RULES_DIR when set, otherwise
+// <repo>/.actual/rules.
+//
+// Not optional, and not something to leave to the CLI's own default. Brief
+// memory is keyed on session_id + agent_id + RULES_DIR, so a mod that omits
+// --rules-dir while the hook forwards it lands on a different key -- and in a
+// monorepo it also governs against the wrong rules. Measured on a fixture with
+// root and subproject rule sets that both match one file: the hook briefed
+// R-API-001 from the subproject, and the mod, same session, briefed
+// R-ROOT-001 from the root. Two briefs for one read, the second one wrong.
+async function resolveRulesDir($, root) {
+  const override = await $.env.get('ACTUAL_RULES_DIR');
+  if (override) return override;
+  if (!root) return null;
+  return `${root.replace(/\/+$/, '')}/.actual/rules`;
+}
+
 // Which keys exist, and the CLI flag each one forwards to. maxSessionChars has
 // no flag: it is this mod's own budget, enforced here, not something the CLI
 // knows about.
@@ -410,6 +428,9 @@ export function register(on, options = {}) {
       ]);
       if (!cwd || !sessionId) return result;
 
+      const rulesDir = await resolveRulesDir($, root ?? cwd);
+      if (!rulesDir) return result;
+
       // Two filters before any spawn. Containment keeps the brief inside the
       // checkout the session is governing -- `cat /etc/hosts` and a scratchpad
       // file under TMPDIR both name real files that no rule governs. Existence
@@ -439,7 +460,11 @@ export function register(on, options = {}) {
       let exhausted = false;
       for (const filePath of paths) {
         const run = await $.process.run(
-          ['actual', 'rules', 'brief', '--claude-hook', ...cliLimits(resolved)],
+          [
+            'actual', 'rules', 'brief', '--claude-hook',
+            '--rules-dir', rulesDir,
+            ...cliLimits(resolved),
+          ],
           { stdin: envelopeFor({ sessionId, cwd, filePath }), cwd }
         );
         if (run.exitCode !== 0) continue;

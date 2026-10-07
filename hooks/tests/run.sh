@@ -1153,6 +1153,35 @@ else
   pass "shipped hooks reference no jq/python/node"
 fi
 
+# The mod is not shell, so the jq/python/node rule does not apply to it -- it
+# runs inside Claude Code and adds no system dependency. The invariant that
+# does apply is narrower: the only process it may spawn is the `actual` CLI.
+# `claude plugin validate` reports that it calls $.process.run at all; this
+# pins what it runs. Comment lines are stripped first, or the file's own
+# prose about $.process.run would count as a call site.
+MOD_CODE="${WORK}/register.nocomments.js"
+grep -vE '^[[:space:]]*(//|\*|/\*)' "${HOOKS_DIR}/register.js" > "$MOD_CODE"
+SPAWNS=$(grep -c '\$\.process\.run(' "$MOD_CODE" || true)
+ACTUAL_SPAWNS=$(grep -c "'actual', 'rules', 'brief'" "$MOD_CODE" || true)
+if [ "$SPAWNS" = "1" ] && [ "$ACTUAL_SPAWNS" = "1" ]; then
+  pass "the mod spawns nothing but the actual CLI"
+else
+  fail "the mod spawns a process other than the actual CLI" \
+       "process.run sites=$SPAWNS actual-cli sites=$ACTUAL_SPAWNS"
+fi
+
+# Both briefing paths must forward --rules-dir, or they land on different
+# brief-memory keys (session_id + agent_id + rules_dir) and one read briefs
+# twice -- and in a monorepo the mod governs against the wrong rule set.
+for f in "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/register.js"; do
+  if grep -q -- "--rules-dir" "$f" && grep -q "ACTUAL_RULES_DIR" "$f" \
+     || { [ "$(basename "$f")" = "rules-brief.sh" ] && grep -q -- "--rules-dir" "$f"; }; then
+    pass "$(basename "$f") forwards --rules-dir"
+  else
+    fail "$(basename "$f") does not forward --rules-dir" ""
+  fi
+done
+
 for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh"; do
   if [ -x "$f" ]; then pass "$(basename "$f") is executable"; else fail "$(basename "$f") is not executable" ""; fi
 done

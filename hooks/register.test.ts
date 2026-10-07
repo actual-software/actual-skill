@@ -84,7 +84,9 @@ test('the synthesized envelope carries the two load-bearing fields', async (fire
   const runs = harness(on);
   await fire.tool.call({ tool: 'Bash', command: 'sed -n 1,40p src/persistence/user_store.ts' });
 
-  expect(runs[0].argv).toEqual(['actual', 'rules', 'brief', '--claude-hook']);
+  expect(runs[0].argv.slice(0, 6)).toEqual([
+    'actual', 'rules', 'brief', '--claude-hook', '--rules-dir', '/repo/.actual/rules',
+  ]);
   const sent = JSON.parse(runs[0].init.stdin);
   // Without hook_event_name the CLI returns nothing at all; without session_id
   // it still briefs but silently stops consulting brief memory, so every read
@@ -408,7 +410,10 @@ test('only the limits an operator set are passed to the CLI', async (fire: any, 
   // the repository's own rules_min_score, which restating here would override.
   const bare = harness(on);
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
-  expect(bare[0].argv).toEqual(['actual', 'rules', 'brief', '--claude-hook']);
+  expect(bare[0].argv).toEqual([
+    'actual', 'rules', 'brief', '--claude-hook',
+    '--rules-dir', '/repo/.actual/rules',
+  ]);
 });
 
 test('configured limits reach the CLI as flags', async (fire: any, on: any) => {
@@ -418,6 +423,7 @@ test('configured limits reach the CLI as flags', async (fire: any, on: any) => {
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(runs[0].argv).toEqual([
     'actual', 'rules', 'brief', '--claude-hook',
+    '--rules-dir', '/repo/.actual/rules',
     '--limit', '1',
     '--rules-per-decision', '3',
     '--max-chars', '1500',
@@ -442,4 +448,43 @@ test('without the debug switch no budget line is injected', async (fire: any, on
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(runs.length).toBe(1);
   expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+});
+
+// --- Phase 4: coexistence with the Read hook ----------------------------
+
+test('ACTUAL_RULES_DIR is honoured, as the Read hook honours it', async (fire: any, on: any) => {
+  // The hook forwards --rules-dir from bootstrap.sh's rules_dir(). A mod that
+  // omitted it governed against <repo>/.actual/rules instead: on a fixture
+  // with root and subproject rule sets both matching one file, the hook
+  // briefed the subproject's R-API-001 and the mod briefed the root's
+  // R-ROOT-001 -- the wrong rules, and a second brief for one read.
+  const runs = harness(on, { env: { ACTUAL_RULES_DIR: '/repo/pkg/api/.actual/rules' } });
+  await fire.tool.call({ tool: 'Bash', command: 'cat pkg/api/src/a.ts' });
+
+  expect(runs.length).toBe(1);
+  expect(runs[0].argv).toEqual([
+    'actual', 'rules', 'brief', '--claude-hook',
+    '--rules-dir', '/repo/pkg/api/.actual/rules',
+  ]);
+});
+
+test('the rules dir is derived from the session root, not the cwd', async (fire: any, on: any) => {
+  // Brief memory is keyed on session_id + agent_id + rules_dir, so the mod and
+  // the hook must agree on this path or every read briefs twice. Deriving it
+  // from the cwd would diverge the moment a command runs in a subdirectory.
+  const runs = harness(on, { cwd: '/repo/pkg/api', root: '/repo' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+
+  expect(runs.length).toBe(1);
+  expect(runs[0].argv).toContain('/repo/.actual/rules');
+  // The file still resolves against the cwd the command ran in.
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/pkg/api/src/a.ts');
+});
+
+test('the mod never fires for a Read tool call: that is the hook’s job', async (fire: any, on: any) => {
+  // The two paths are split by matcher, which is what makes the double-brief
+  // suppression Phase 4 was originally scoped around unnecessary.
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
+  expect(runs.length).toBe(0);
 });
