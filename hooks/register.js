@@ -153,17 +153,30 @@ function isWithin(root, candidate) {
   return candidate === r || candidate.startsWith(`${r}/`);
 }
 
-// Candidate absolute paths named by a read-only command. Returns at most
-// MAX_PATHS_PER_COMMAND, in the order they appear.
-function candidatePaths(command, cwd) {
-  if (typeof command !== 'string' || command.length === 0) return [];
+// The Bash tool runs every command in ONE persistent shell, so a `cd` in any
+// call changes the directory every later call runs in -- while
+// $.session.cwd() keeps reporting the session's own directory, which does not
+// move. Observed in session 9dc24b52: one call did
+// `cd <repo>/apps/actual && ...`, and two later calls read
+// `lib/oauth/verify-token.ts`, a governed file. Resolved against the session
+// cwd those became <repo>/lib/oauth/verify-token.ts, which does not exist, so
+// the existence filter dropped them and two briefs were silently lost.
+//
+// Tracked per session, updated from a leading `cd` chain. Perfect shell
+// emulation is not the goal and not achievable -- a `cd` buried in a pipeline,
+// a shell variable, a subshell -- so the resolver below treats this as the
+// first guess among several rather than the truth.
+const shellCwds = new Map();
+
+// Candidate path tokens, plus the directory a leading `cd` chain moved to.
+// Resolution is left to the caller, which can check what exists; this stays a
+// pure function so the corpus of real commands can be replayed against it.
+function candidateTokens(command) {
+  if (typeof command !== 'string' || command.length === 0) return null;
   const split = resolveBase(command);
-  if (!split) return [];
+  if (!split) return null;
 
-  const base = split.base ?? cwd;
-  if (!base) return [];
-
-  const out = [];
+  const tokens = [];
   const seen = new Set();
   // Skip argv[0] of each pipeline stage: `cat`, `head`, `grep` are not paths,
   // and a tool name with a dot (`a.out`) would otherwise look like one.
@@ -171,13 +184,12 @@ function candidatePaths(command, cwd) {
     for (const token of stage.trim().split(/\s+/).slice(1)) {
       if (token.startsWith('-')) continue;
       if (!PATH_TOKEN.test(token)) continue;
-      const abs = normalizePath(joinPath(base, token));
-      if (seen.has(abs)) continue;
-      seen.add(abs);
-      out.push(abs);
+      if (seen.has(token)) continue;
+      seen.add(token);
+      tokens.push(token);
     }
   }
-  return out.slice(0, MAX_PATHS_PER_COMMAND);
+  return { cdTarget: split.base, tokens };
 }
 
 // --- Session budget -----------------------------------------------------
@@ -493,21 +505,63 @@ export function register(on, options = {}) {
 
       const rulesDir = await resolveRulesDir($, sessionId, cwd);
       if (!rulesDir) return result;
+      const repoRoot = await resolveRepoRoot($, sessionId, cwd);
 
-      // Two filters before any spawn. Containment keeps the brief inside the
-      // checkout the session is governing -- `cat /etc/hosts` and a scratchpad
-      // file under TMPDIR both name real files that no rule governs. Existence
-      // catches a token that merely looks like a path. Both are cheap next to
-      // a process spawn, and the CLI answering "no rules" is not a substitute:
-      // it would still cost the spawn, once per Bash call, forever.
-      const within = candidatePaths(e.command, cwd).filter((p) =>
-        isWithin(root ?? cwd, p)
-      );
-      if (within.length === 0) return result;
+      const found = candidateTokens(e.command);
 
+      // Record the `cd` before deciding whether there is anything to brief.
+      // The command that moves the shell usually names no file of its own --
+      // `cd <repo>/apps/actual && ls lib/oauth/` was the real one -- so
+      // returning early on "no candidates" would drop the directory and every
+      // later relative path would resolve against the wrong base.
+      if (found?.cdTarget) {
+        shellCwds.set(
+          sessionId,
+          normalizePath(joinPath(shellCwds.get(sessionId) ?? cwd, found.cdTarget))
+        );
+      }
+      if (!found || found.tokens.length === 0) return result;
+      const shellCwd = shellCwds.get(sessionId) ?? cwd;
+
+      // Resolve each token against the bases it could plausibly be relative
+      // to, nearest first, and let the filesystem decide. The shell's own
+      // directory comes first because that is what the command actually used;
+      // the session cwd and the repo root follow, because a tracked directory
+      // can be stale (a `cd` the parser declined to follow) and a path is
+      // often written from the repo root regardless of where the shell is.
+      //
+      // Two filters still gate every spawn. Containment keeps the brief inside
+      // the checkout being governed -- `cat /etc/hosts` and a scratchpad file
+      // under TMPDIR both name real files no rule governs. Existence settles
+      // which base was meant. Letting the CLI answer "no rules" instead would
+      // still cost a spawn, once per Bash call, forever.
+      // An explicit `cd` in this command names the base, so it is authoritative:
+      // `cd /elsewhere && cat a.ts` must not fall back to resolving a.ts inside
+      // the repository, which would brief a different file of the same name.
+      // Without a `cd` the base is a guess, and these are the candidates worth
+      // guessing between -- the shell's tracked directory first, because that is
+      // where the command actually ran.
+      const bases = found.cdTarget
+        ? [shellCwd]
+        : [...new Set([shellCwd, cwd, repoRoot].filter(Boolean))];
       const paths = [];
-      for (const candidate of within) {
-        if (await $.fs.exists(candidate)) paths.push(candidate);
+      for (const token of found.tokens) {
+        if (paths.length >= MAX_PATHS_PER_COMMAND) break;
+        for (const base of bases) {
+          const candidate = normalizePath(joinPath(base, token));
+          if (!isWithin(repoRoot ?? cwd, candidate)) continue;
+          // A rule document is not governed by itself, and agents read their
+          // own rules unprompted -- session 9dc24b52 did it in its second Bash
+          // call, `cat .actual/rules/cross-cutting-*.md`, which spawned the CLI
+          // twice for nothing. Cheap to skip, and it keeps the brief about the
+          // code rather than about the rules.
+          if (isWithin(rulesDir, candidate)) continue;
+          const ex = await $.fs.exists(candidate);
+          $.ui.log('EX=' + JSON.stringify(ex) + ' type=' + typeof ex);
+          if (!ex) continue;
+          if (!paths.includes(candidate)) paths.push(candidate);
+          break;
+        }
       }
       if (paths.length === 0) return result;
 

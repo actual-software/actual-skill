@@ -400,6 +400,19 @@ Two instances of that have already been fixed, both invisible at runtime:
   keying on `agent_id` exists to prevent — and the parent's record is polluted
   with reads it never made.
 
+A fourth divergence is not about the key but about the same question — which
+directory a relative path belongs to. The Bash tool runs every command in one
+persistent shell, so a `cd` in any call changes where every later call runs,
+while `$.session.cwd()` keeps reporting the session's own directory, which does
+not move. Session 9dc24b52 did `cd <repo>/apps/actual && ls lib/oauth/` and then
+read `lib/oauth/verify-token.ts` twice; resolved against the session cwd those
+became `<repo>/lib/oauth/...`, which does not exist, so the existence filter
+dropped them and two briefs were lost. The mod now tracks the shell's directory
+across calls, and where no `cd` states a base it tries the tracked directory,
+the session cwd and the repo root in that order, letting the filesystem decide.
+A `cd` the command *does* state is authoritative and gets no fallback, or
+`cd /elsewhere && cat a.ts` would brief a same-named file inside the repository.
+
 So when changing either path, change both. Check all four repository layouts —
 a worktree with and without `CLAUDE_PROJECT_DIR`, a monorepo subproject named
 by `CLAUDE_PROJECT_DIR`, and a session launched in a subdirectory — and check

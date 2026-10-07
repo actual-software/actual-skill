@@ -571,3 +571,44 @@ test('a main-agent read carries no agent id, as the hook envelope does not', asy
   expect(runs.length).toBe(1);
   expect('agent_id' in JSON.parse(runs[0].init.stdin)).toBe(false);
 });
+
+// --- From session 9dc24b52, the first real session to run the mod ----------
+
+test('a path relative to a cd from an EARLIER call still resolves', async (fire: any, on: any) => {
+  // The Bash tool runs one persistent shell, so a `cd` changes where every
+  // later call runs -- while $.session.cwd() keeps reporting the session's own
+  // directory. In 9dc24b52 one call did `cd <repo>/apps/actual && ...` and two
+  // later calls read `lib/oauth/verify-token.ts`, a governed file. Resolved
+  // against the session cwd those became <repo>/lib/oauth/..., which does not
+  // exist, so the existence filter dropped them and two briefs were lost.
+  const runs = harness(on, {
+    existing: ['/repo/apps/actual/lib/oauth/verify-token.ts'],
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cd /repo/apps/actual && ls lib/oauth/' });
+  await fire.tool.call({ tool: 'Bash', command: 'grep -n logger lib/oauth/verify-token.ts' });
+
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe(
+    '/repo/apps/actual/lib/oauth/verify-token.ts'
+  );
+});
+
+test('an explicit cd outside the repo does not fall back to inside it', async (fire: any, on: any) => {
+  // The multi-base fallback must not override a base the command stated.
+  const runs = harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'cd /elsewhere && cat a.ts' });
+  expect(runs.length).toBe(0);
+});
+
+test('reading the rule documents themselves briefs nothing', async (fire: any, on: any) => {
+  // Agents read their own rules unprompted; 9dc24b52 did it in its second Bash
+  // call. A rule document is not governed by itself, so this was two CLI
+  // spawns for an empty answer.
+  const runs = harness(on);
+  await fire.tool.call({
+    tool: 'Bash',
+    command: 'cd /repo/.actual/rules && cat cross-cutting-a.md cross-cutting-b.md',
+  });
+  expect(runs.length).toBe(0);
+});
