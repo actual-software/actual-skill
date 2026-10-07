@@ -300,20 +300,68 @@ async function readEnvSettings($) {
   return { maxSessionChars, limit, rulesPerDecision, maxChars, minScore };
 }
 
-// The rules directory to govern against, resolved the way bootstrap.sh's
-// rules_dir() resolves it: ACTUAL_RULES_DIR when set, otherwise
-// <repo>/.actual/rules.
+// The rules directory to govern against. This has to agree with
+// bootstrap.sh's rules_dir() exactly, not approximately: brief memory is keyed
+// on session_id + agent_id + rules_dir, so any divergence means one read
+// briefs twice -- and in a monorepo the mod also governs against the wrong
+// rule set. Measured on a fixture whose root and subproject rule sets both
+// match one file, before this was forwarded at all: the hook briefed the
+// subproject's R-API-001 and the mod, same session, briefed the root's
+// R-ROOT-001.
 //
-// Not optional, and not something to leave to the CLI's own default. Brief
-// memory is keyed on session_id + agent_id + RULES_DIR, so a mod that omits
-// --rules-dir while the hook forwards it lands on a different key -- and in a
-// monorepo it also governs against the wrong rules. Measured on a fixture with
-// root and subproject rule sets that both match one file: the hook briefed
-// R-API-001 from the subproject, and the mod, same session, briefed
-// R-ROOT-001 from the root. Two briefs for one read, the second one wrong.
-async function resolveRulesDir($, root) {
+// No single mods API call gives that agreement, which four probed layouts
+// settled:
+//
+//   layout                           hook        $.session.root()  repo().root
+//   worktree under the project root  worktree    worktree   OK     main repo  X
+//   worktree + CLAUDE_PROJECT_DIR    worktree    worktree   OK     main repo  X
+//   monorepo subproject as project   subproject  subproject OK     outer repo X
+//   launched in a subdirectory       git root    that subdir X      git root   OK
+//
+// $.session.root() tracks the session's working directory, so it is right for
+// a worktree and wrong one directory down; repo().root is the main checkout,
+// so it is the reverse. The last row is not academic -- running `claude` from
+// a subdirectory pointed the mod at a .actual/rules that does not exist, and
+// briefing went silently dead while the hook kept working.
+//
+// So the mod asks git the same question the hook asks, and applies the same
+// rule: when CLAUDE_PROJECT_DIR and the git toplevel are nested, the deeper
+// path is the more specific context and wins; otherwise the active checkout
+// does. See resolve_repo_root in bootstrap.sh for why each case is that way.
+// One git spawn per session, cached, because a session does not change repo.
+
+const repoRoots = new Map();
+
+function deeperOf(projectDir, gitRoot) {
+  if (!projectDir) return gitRoot;
+  if (!gitRoot) return projectDir;
+  const p = projectDir.replace(/\/+$/, '');
+  const g = gitRoot.replace(/\/+$/, '');
+  if (g === p) return g;
+  if (g.startsWith(`${p}/`)) return g; // worktree: nested under the project
+  if (p.startsWith(`${g}/`)) return p; // monorepo: subproject inside the repo
+  return g; // unrelated: the active checkout wins
+}
+
+async function resolveRepoRoot($, sessionId, cwd) {
+  if (repoRoots.has(sessionId)) return repoRoots.get(sessionId);
+  let gitRoot = null;
+  try {
+    const run = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd });
+    if (run.exitCode === 0) gitRoot = (run.stdout ?? '').trim() || null;
+  } catch {
+    // Not a repository, or no git. Fall through to the project dir.
+  }
+  const projectDir = await $.env.get('CLAUDE_PROJECT_DIR');
+  const root = deeperOf(projectDir || null, gitRoot) ?? cwd;
+  repoRoots.set(sessionId, root);
+  return root;
+}
+
+async function resolveRulesDir($, sessionId, cwd) {
   const override = await $.env.get('ACTUAL_RULES_DIR');
   if (override) return override;
+  const root = await resolveRepoRoot($, sessionId, cwd);
   if (!root) return null;
   return `${root.replace(/\/+$/, '')}/.actual/rules`;
 }
@@ -428,7 +476,7 @@ export function register(on, options = {}) {
       ]);
       if (!cwd || !sessionId) return result;
 
-      const rulesDir = await resolveRulesDir($, root ?? cwd);
+      const rulesDir = await resolveRulesDir($, sessionId, cwd);
       if (!rulesDir) return result;
 
       // Two filters before any spawn. Containment keeps the brief inside the

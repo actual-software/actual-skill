@@ -1162,12 +1162,12 @@ fi
 MOD_CODE="${WORK}/register.nocomments.js"
 grep -vE '^[[:space:]]*(//|\*|/\*)' "${HOOKS_DIR}/register.js" > "$MOD_CODE"
 SPAWNS=$(grep -c '\$\.process\.run(' "$MOD_CODE" || true)
-ACTUAL_SPAWNS=$(grep -c "'actual', 'rules', 'brief'" "$MOD_CODE" || true)
-if [ "$SPAWNS" = "1" ] && [ "$ACTUAL_SPAWNS" = "1" ]; then
-  pass "the mod spawns nothing but the actual CLI"
+ALLOWED=$(grep -cE "'actual', 'rules', 'brief'|'git', 'rev-parse'" "$MOD_CODE" || true)
+if [ "$SPAWNS" = "2" ] && [ "$ALLOWED" = "2" ]; then
+  pass "the mod spawns nothing but the actual CLI and git rev-parse"
 else
-  fail "the mod spawns a process other than the actual CLI" \
-       "process.run sites=$SPAWNS actual-cli sites=$ACTUAL_SPAWNS"
+  fail "the mod spawns an unexpected process" \
+       "process.run sites=$SPAWNS allowed=$ALLOWED"
 fi
 
 # Both briefing paths must forward --rules-dir, or they land on different

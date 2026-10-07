@@ -29,6 +29,7 @@ function harness(
     // root, so a test only opts in to the stricter behaviour when it needs it.
     existing?: string[] | null | (() => string[] | null);
     config?: Record<string, number>;
+    gitRoot?: string;
   } = {}
 ) {
   const runs: any[] = [];
@@ -65,6 +66,10 @@ function harness(
     isReadOnly: true,
   });
   on('process.run', async (_$: any, e: any) => {
+    // The repo-root probe is not a brief; answer it without recording a run.
+    if (e.argv?.[0] === 'git') {
+      return { value: { exitCode: 0, stdout: `${opts.gitRoot ?? opts.root ?? '/repo'}\n`, stderr: '' } };
+    }
     runs.push(e);
     const cli = typeof opts.cli === 'function' ? opts.cli() : opts.cli;
     return { value: cli ?? { exitCode: 0, stdout: reply(BRIEF), stderr: '' } };
@@ -468,17 +473,74 @@ test('ACTUAL_RULES_DIR is honoured, as the Read hook honours it', async (fire: a
   ]);
 });
 
-test('the rules dir is derived from the session root, not the cwd', async (fire: any, on: any) => {
-  // Brief memory is keyed on session_id + agent_id + rules_dir, so the mod and
-  // the hook must agree on this path or every read briefs twice. Deriving it
-  // from the cwd would diverge the moment a command runs in a subdirectory.
-  const runs = harness(on, { cwd: '/repo/pkg/api', root: '/repo' });
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+test('launched in a subdirectory, the rules dir is the git root', async (fire: any, on: any) => {
+  // The case that caught this: $.session.root() tracks the session's working
+  // directory, so one directory down it named a .actual/rules that does not
+  // exist and briefing went silently dead, while the hook -- which falls back
+  // to the git toplevel -- kept working.
+  const runs = harness(on, {
+    cwd: '/repo/pkg/api/src',
+    root: '/repo/pkg/api/src',
+    gitRoot: '/repo',
+  });
+  await fire.tool.call({ tool: 'Bash', command: 'cat a.ts' });
 
   expect(runs.length).toBe(1);
   expect(runs[0].argv).toContain('/repo/.actual/rules');
-  // The file still resolves against the cwd the command ran in.
+  // The file still resolves against the directory the command ran in.
   expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/pkg/api/src/a.ts');
+});
+
+test('a worktree nested under CLAUDE_PROJECT_DIR wins over it', async (fire: any, on: any) => {
+  // Claude Code puts worktrees under the project root and CLAUDE_PROJECT_DIR
+  // keeps naming the original checkout, so the deeper path is the active one.
+  const runs = harness(on, {
+    cwd: '/repo/.claude/worktrees/x',
+    gitRoot: '/repo/.claude/worktrees/x',
+    env: { CLAUDE_PROJECT_DIR: '/repo' },
+  });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+
+  expect(runs.length).toBe(1);
+  expect(runs[0].argv).toContain('/repo/.claude/worktrees/x/.actual/rules');
+});
+
+test('a subproject named by CLAUDE_PROJECT_DIR wins over the outer repo', async (fire: any, on: any) => {
+  const runs = harness(on, {
+    cwd: '/repo/pkg/api',
+    gitRoot: '/repo',
+    env: { CLAUDE_PROJECT_DIR: '/repo/pkg/api' },
+  });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+
+  expect(runs.length).toBe(1);
+  expect(runs[0].argv).toContain('/repo/pkg/api/.actual/rules');
+});
+
+test('the repo root is probed once per session, not once per command', async (fire: any, on: any) => {
+  let gitCalls = 0;
+  mock.env(on, {});
+  on('session.cwd', async () => ({ value: '/repo' }));
+  on('session.root', async () => ({ value: '/repo' }));
+  on('session.id', async () => ({ value: 'sess-1' }));
+  on('session.usage', async () => ({ value: { context: { tokens: 1, window: 2, percent: 1 } } }));
+  on('ui.log', async () => ({ value: undefined }));
+  on('fs.exists', async () => ({ value: true }));
+  on('tool.call', async () => ({
+    ref: 1, result: { stdout: 'OUT', stderr: '' }, text: 'OUT', isReadOnly: true,
+  }));
+  on('process.run', async (_$: any, e: any) => {
+    if (e.argv?.[0] === 'git') {
+      gitCalls += 1;
+      return { value: { exitCode: 0, stdout: '/repo\n', stderr: '' } };
+    }
+    return { value: { exitCode: 0, stdout: reply(BRIEF), stderr: '' } };
+  });
+
+  for (const f of ['a', 'b', 'c']) {
+    await fire.tool.call({ tool: 'Bash', command: `cat src/${f}.ts` });
+  }
+  expect(gitCalls).toBe(1);
 });
 
 test('the mod never fires for a Read tool call: that is the hook’s job', async (fire: any, on: any) => {
