@@ -1,5 +1,6 @@
 {
   "description": "Actual plan- and implementation-stage ADR governance: checks implementation plans and accumulated diffs against the rules committed in .actual/rules/.",
+  "modules": ["./session-summary.ts"],
   "hooks": {
     "SessionStart": [
       {
