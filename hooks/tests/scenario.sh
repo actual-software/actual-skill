@@ -43,33 +43,33 @@ cmd_doctor() {
     printf '  FAIL  no rule documents in .actual/rules\n'; fail=1
   fi
 
+  # Ask the real question rather than a proxy for it: does the selector
+  # actually return a decision for a file in this repo?
+  #
+  # This used to check how many documents name a path in their `Verify` block,
+  # because selection was path-only and a rule set written without paths
+  # governed nothing. `rules brief` now passes the file's path as query text as
+  # well, so the title and scope-prose fields match too and a pathless corpus
+  # briefs normally. The proxy would now fail a repo that works.
   if [ "$count" -gt 0 ]; then
-    local withpath
-    withpath=$(python3 - "$rules" <<'PY'
-import glob,re,sys,os
-n=0
-for f in glob.glob(os.path.join(sys.argv[1],'*.md')):
-    m=re.search(r'^### Verify(.*?)(^## |\Z)', open(f).read(), re.S|re.M)
-    block=m.group(1) if m else ''
-    paths=[p for p in re.findall(r'[\w.][\w./*-]*/[\w./*-]*(?:\*|\.\w{1,5})', block)
-           if not p.startswith(('http','npm','//'))]
-    if paths: n+=1
-print(n)
-PY
-)
-    # A proportion, not a count. One path-bearing document in 155 is
-    # indistinguishable from none in practice: observed on more-later, where
-    # `rules select` returned 0 decisions for every file sampled.
-    local pct=$(( withpath * 100 / count ))
-    if [ "$pct" -ge 10 ]; then
-      printf '  ok    %s of %s documents (%s%%) name a path or glob in Verify\n' \
-        "$withpath" "$count" "$pct"
+    local sample selected=0
+    sample=$(git -C "$repo" ls-files '*.ts' '*.tsx' '*.py' '*.go' '*.rs' '*.rb' '*.java' 2>/dev/null \
+      | grep -v -e node_modules -e '\.test\.' -e '_test\.' | head -1)
+    if [ -z "$sample" ]; then
+      printf '  warn  found no source file to probe selection with\n'
     else
-      printf '  FAIL  only %s of %s documents (%s%%) name a path in Verify, so\n' \
-        "$withpath" "$count" "$pct"
-      printf '        almost nothing is governed and briefing will not fire.\n'
-      printf '        Check with: %s rules select --file <a source file> --no-rank\n' "$CLI"
-      fail=1
+      # `rules brief`, not `rules select`: only brief passes the file's path as
+      # query text, so `rules select --file` alone still answers the old,
+      # path-only question and would fail a repository that briefs fine.
+      selected=$("$CLI" rules brief --file "$repo/$sample" --repo "$repo" 2>/dev/null | wc -c | tr -d ' ')
+      selected=${selected:-0}
+      if [ "$selected" -gt 1 ]; then
+        printf '  ok    briefing answers for %s (%s chars)\n' "$sample" "$selected"
+      else
+        printf '  FAIL  briefing answers nothing for %s.\n' "$sample"
+        printf '        Check the rules parse: %s rules ls\n' "$CLI"
+        fail=1
+      fi
     fi
   fi
 
