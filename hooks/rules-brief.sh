@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# rules-brief.sh - PostToolUse hook on Read: brief the agent on the rules that
+# govern the file it just read.
+#
+# Claude Code requires a Read before an Edit or an overwrite, and PostToolUse
+# context lands before the model's next step, so this is the delivery point that
+# reaches the agent ahead of its first edit (PreToolUse Edit|Write context only
+# arrives with the tool result, after the edit ran). Observed on Claude Code
+# 2.1.231; the model applied the context in every test run.
+#
+# This wrapper does only cheap shell checks and then hands the raw hook envelope
+# to `actual rules brief --claude-hook`, which resolves the file, ranks the
+# governing decisions, and keeps what it has already briefed this session. It
+# never parses JSON (see hooks/lib/bootstrap.sh for why).
+#
+# Advisory by construction, and silent by default: no committed rules, no CLI, an
+# old CLI (preflight already prompts once per session), an ungoverned file, a
+# crash -- all exit 0 with no output. The only thing ever forwarded is a
+# hookSpecificOutput.additionalContext reply for PostToolUse; any other shape,
+# above all one carrying a permissionDecision, is dropped.
+
+set -uo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/bootstrap.sh
+. "${SCRIPT_DIR}/lib/bootstrap.sh"
+
+# Drain stdin before any early exit, so the caller never sees SIGPIPE.
+payload=$(cat)
+
+# Two switches, because they answer different questions. ACTUAL_PLAN_GATE is the
+# master off switch every hook in this plugin honours. ACTUAL_RULES_BRIEF turns
+# off read-time briefing alone, leaving the plan and Stop gates running: briefing
+# is the only hook here that fires on every Read, so it is the only one whose
+# cost a user might want to drop without giving up the checks that block.
+# Also a no-op inside actual-cli's own subprocesses (see
+# inside_actual_subprocess). Briefing cannot recurse the way impl-gate.sh does
+# -- it spawns no judge -- but a judge subprocess reads files constantly, so
+# every one of those Reads would spawn a CLI this hook has no reason to run,
+# and each brief it forwarded would land in the judge's own context as
+# additionalContext. A conformance judge must weigh the rules it was given,
+# not rules a hook injected into it mid-prompt.
+if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || [ "${ACTUAL_RULES_BRIEF:-on}" = "off" ] \
+   || inside_actual_subprocess; then
+  exit 0
+fi
+
+# Resolve the repo root ONCE and derive everything else from it. The gates call
+# rules_present, rules_dir and resolve_repo_root separately and pay for three
+# `git rev-parse` spawns; on a 180-second plan or Stop boundary that is noise,
+# but this hook runs on every single Read inside a 2-second timeout, and a git
+# spawn measured ~12ms here against a warm checkout. Resolve before the cd, for
+# the reason plan-gate.sh gives: root resolution reads cwd, so moving first
+# would ask the question from a different place than rules_present answers it.
+repo_root=$(resolve_repo_root)
+dir=$(rules_dir "$repo_root")
+
+if ! rules_present "$dir" || ! have_actual; then
+  exit 0
+fi
+
+stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-rules-brief.XXXXXX") || exit 0
+trap 'rm -f "$stderr_file"' EXIT
+
+cd "$repo_root" 2>/dev/null || true
+
+reply=$(printf '%s' "$payload" | actual rules brief --claude-hook --rules-dir "$dir" 2>"$stderr_file")
+status=$?
+
+# Silence is the whole contract here, which also means a brief that never
+# arrives is indistinguishable from a file with no rules -- and a PostToolUse
+# hook that hits its timeout is cancelled with its output discarded and nothing
+# shown to anyone, so there is normally no thread to pull at all. ACTUAL_HOOK_DEBUG
+# is the thread: it echoes the CLI's exit status and stderr to this hook's own
+# stderr, which Claude Code surfaces under `claude --debug`. Diagnostic only --
+# it never touches stdout, never changes a forwarding decision, and never
+# changes the exit status, so a debugging session governs exactly as a normal
+# one does.
+if [ -n "${ACTUAL_HOOK_DEBUG:-}" ]; then
+  printf 'actual-rules-brief: exit=%s rules-dir=%s\n' "$status" "$dir" >&2
+  [ -s "$stderr_file" ] && sed 's/^/actual-rules-brief: cli-stderr: /' "$stderr_file" >&2
+  printf 'actual-rules-brief: cli-stdout: %s\n' "$reply" >&2
+fi
+
+# Any failure -- including an old CLI's unknown subcommand -- is silence.
+[ "$status" -eq 0 ] || exit 0
+
+trimmed=${reply#"${reply%%[![:space:]]*}"}
+trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
+
+# Forward only the one allowlisted shape: a compact object whose sole content is
+# PostToolUse additionalContext. Matching the exact bytes (rather than
+# blocklisting fields) keeps every unrecognized shape -- an added decision,
+# updatedInput, a permissionDecision, garbage -- on the silent side. The escape
+# and duplicate-key guards are the same ones the gates use: they defend the
+# literal-bytes match against \uXXXX spellings.
+#
+# The opening and closing bytes alone are NOT enough to pin the shape, because
+# a reply can close hookSpecificOutput early, append whatever it likes, and
+# still end in "}} by finishing on a nested object:
+#
+#   {"hookSpecificOutput":{...,"additionalContext":"x"},"continue":false,"k":{"a":"b"}}
+#
+# That decodes to continue:false, which halts the agent outright -- worse than
+# the permissionDecision case the guards above target. So the span between the
+# prefix and the final "}} is also required to be a single JSON string: strip
+# the escape pairs a decoder would consume (backslash pairs first, then escaped
+# quotes, the same order json_escape writes them) and refuse anything with a
+# quote left over, since that quote can only be the string's own terminator and
+# therefore means structure follows it. Together with the \uXXXX guard -- which
+# rules out a quote spelled \u0022 that this scan cannot see -- the allowlist
+# admits exactly the one shape its name claims.
+prefix='{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"'
+if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
+   && [ "${trimmed%\"\}\}}" != "$trimmed" ] \
+   && ! has_permission_decision "$trimmed" \
+   && ! has_unicode_escape "$trimmed" \
+   && ! has_duplicate_permission_decision "$trimmed"; then
+  body=${trimmed#"$prefix"}
+  body=${body%\"\}\}}
+  unescaped=${body//\\\\/}
+  unescaped=${unescaped//\\\"/}
+  case "$unescaped" in
+    *'"'*)
+      [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
+        printf 'actual-rules-brief: dropped (content is not a single JSON string)\n' >&2
+      exit 0 ;;
+  esac
+  printf '%s\n' "$trimmed"
+elif [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && [ -n "$trimmed" ]; then
+  printf 'actual-rules-brief: dropped (reply is not the allowlisted shape)\n' >&2
+fi
+exit 0

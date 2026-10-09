@@ -1,6 +1,6 @@
 {
   "name": "actual-cli",
-  "description": "Feature-complete companion for the actual CLI — runs and troubleshoots sync, status, auth, config, runners, and models across all 5 runners and 3 output formats, and gates both implementation plans and the diffs agents produce against the ADR rules committed in .actual/rules/",
+  "description": "Feature-complete companion for the actual CLI \u2014 runs and troubleshoots sync, status, auth, config, runners, and models across all 5 runners and 3 output formats, and gates both implementation plans and the diffs agents produce against the ADR rules committed in .actual/rules/",
   "version": "1.3.0",
   "author": {
     "name": "actual-software"
@@ -8,5 +8,46 @@
   "homepage": "https://cli.actual.ai",
   "repository": "https://github.com/actual-software/actual-skill",
   "license": "Apache-2.0",
-  "keywords": ["actual", "cli", "adr", "claude-md", "agents-md", "cursor-rules"]
+  "keywords": [
+    "actual",
+    "cli",
+    "adr",
+    "claude-md",
+    "agents-md",
+    "cursor-rules"
+  ],
+  "userConfig": {
+    "maxSessionChars": {
+      "type": "number",
+      "title": "Rule brief: per-session character budget",
+      "default": 48000,
+      "description": "Stop briefing once this many characters of rule context have been injected in one session. Measured: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is about 2.5x an ordinary session and exists to catch runaway accumulation, not to tune relevance. Set 0 to turn briefing off entirely."
+    },
+    "maxChars": {
+      "type": "number",
+      "title": "Rule brief: maximum characters per brief",
+      "description": "Passed to `actual rules brief --max-chars`. Rules are dropped whole, lowest-ranked first. Unset uses the CLI default (4000)."
+    },
+    "limit": {
+      "type": "number",
+      "title": "Rule brief: decisions per brief",
+      "description": "Passed to `actual rules brief --limit`. Unset uses the CLI default (2)."
+    },
+    "rulesPerDecision": {
+      "type": "number",
+      "title": "Rule brief: rules per decision",
+      "description": "Passed to `actual rules brief --rules-per-decision`. Unset uses the CLI default (8)."
+    },
+    "minScore": {
+      "type": "number",
+      "title": "Rule brief: minimum rule score",
+      "description": "Passed to `actual rules brief --min-score`. A per-repo tuning knob: scores measure how narrowly a rule's verify glob is written, so the useful value differs per repository. Unset defers to the repo's own `rules_min_score` config."
+    },
+    "debug": {
+      "type": "boolean",
+      "title": "Rule brief: log the budget each call",
+      "default": false,
+      "description": "Write a dim transcript line with the characters injected so far and the session's context usage. Equivalent to ACTUAL_HOOK_DEBUG=1."
+    }
+  }
 }

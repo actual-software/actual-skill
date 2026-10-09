@@ -694,6 +694,40 @@ else
   fail "impl-check-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
+# `rules brief` is advisory, so a CLI that lacks only it must still be told the
+# two gates ARE running -- the upgrade note rides along as a suffix instead of
+# replacing the success message, and must not carry the gates' blocking wording.
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-rules-brief)
+ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -q "governance is active" \
+   && printf '%s' "$ctx" | grep -q "1 rule file" \
+   && printf '%s' "$ctx" | grep -q "brew upgrade" \
+   && printf '%s' "$ctx" | grep -q "advisory only"; then
+  pass "rules + CLI has both gates but not rules brief: success message kept, upgrade note appended"
+else
+  fail "rules-brief-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+if ! printf '%s' "$ctx" | grep -qE "Offer to upgrade it now|do not continue this task|AskUserQuestion|worth interrupting"; then
+  pass "the rules-brief note carries none of the gates' blocking wording"
+else
+  fail "rules-brief note escalates like a gate" "$ctx"
+fi
+
+# The healthy case gets the positive counterpart of that sentence, so the agent
+# knows briefing is on rather than inferring it from silence.
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow)
+ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -q "governance is active" \
+   && printf '%s' "$ctx" | grep -q "surfaced to you when you read it" \
+   && ! printf '%s' "$ctx" | grep -q "brew upgrade"; then
+  pass "rules + full CLI: success message also reports briefing active, with no upgrade note"
+else
+  fail "healthy preflight missing the briefing sentence" "status=$st ctx=$ctx"
+fi
+
 echo
 echo "=== fake CLI requires --claude-hook ==="
 env PATH="${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=allow \
@@ -899,6 +933,190 @@ else
 fi
 
 echo
+echo "=== rules-brief: PostToolUse Read ==="
+RB="${HOOKS_DIR}/rules-brief.sh"
+GOV="${RESOLVED}/posttooluse-read-governed.json"
+UNGOV="${RESOLVED}/posttooluse-read-ungoverned.json"
+
+rb_ctx() { jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null; }
+
+CAPTURE_RB="${WORK}/captured-rb.json"
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="$CAPTURE_RB")
+if [ "$st" = "0" ] \
+   && [ "$(jq -r '.hookSpecificOutput.hookEventName' < "${WORK}/out")" = "PostToolUse" ] \
+   && [ "$(rb_ctx)" = "R-001 MUST: all persistence goes through the repository layer." ] \
+   && [ "$(decision)" = "none" ]; then
+  pass "governed file: PostToolUse additionalContext delivered, no permissionDecision"
+else
+  fail "governed file: expected a PostToolUse brief" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+if [ "$(jq -r '.tool_name' "$CAPTURE_RB")" = "Read" ] \
+   && grep -q "src/persistence/user_store.ts" "$CAPTURE_RB" \
+   && grep -Fxq -- '--claude-hook' "${CAPTURE_RB}.argv" \
+   && [ "$(argv_after --rules-dir "${CAPTURE_RB}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ] \
+   && [ "$(sed -n 1,2p "${CAPTURE_RB}.argv" | tr '\n' ' ')" = "--claude-hook --rules-dir " ]; then
+  pass "raw envelope, --claude-hook and --rules-dir reach 'actual rules brief'"
+else
+  fail "rules-brief invocation wrong" "argv=$(cat "${CAPTURE_RB}.argv" 2>/dev/null)"
+fi
+
+st=$(run_hook "$RB" "$UNGOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "ungoverned file: silent (exit 0, no stdout, no stderr)"
+else
+  fail "ungoverned file: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-pretty)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
+  pass "trailing whitespace on the CLI reply is tolerated"
+else
+  fail "trailing whitespace case" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-quoted)
+if [ "$st" = "0" ] \
+   && [ "$(rb_ctx)" = 'R-001 MUST: no raw "SELECT" in handlers (see docs\\rules).' ]; then
+  pass "a brief quoting a rule (escaped quotes and backslashes) is still forwarded"
+else
+  fail "escaped-quote brief was dropped" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# brief-trailing-* and brief-inner-extra-field start and end with the
+# allowlisted bytes but decode to extra top-level or inner fields --
+# continue:false halts the agent outright. Matching only the opening and
+# closing bytes forwards all three.
+for mode in brief-permission brief-extra-field brief-trailing-field \
+            brief-trailing-decision brief-inner-extra-field brief-wrong-event \
+            brief-escaped garbage; do
+  st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "$mode: not an allowlisted shape, dropped silently"
+  else
+    fail "$mode: expected the reply to be dropped" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+for mode in crash no-rules-brief; do
+  st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+    pass "$mode: fails open silently"
+  else
+    fail "$mode: expected silent exit 0" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+  fi
+done
+
+st=$(run_hook_no_cli "$RB" "$GOV" "$REPO_WITH_RULES")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "no CLI: silent (preflight owns the install prompt)"
+else
+  fail "no CLI: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_NO_RULES" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "no committed rules: silent no-op"
+else
+  fail "no committed rules: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# This hook runs on every Read inside a 2-second timeout, so the repo root is
+# resolved once and reused. Each resolution spawns `git rev-parse`; calling
+# rules_present, rules_dir and resolve_repo_root separately (as the 180-second
+# gates do) spawns three. Counted with a shim ahead of the real git on PATH.
+GITSHIM="${WORK}/gitshim"
+mkdir -p "$GITSHIM"
+cat > "${GITSHIM}/git" <<'SHIM'
+#!/bin/sh
+echo "$@" >> "$GIT_CALL_LOG"
+exec /usr/bin/git "$@"
+SHIM
+chmod +x "${GITSHIM}/git"
+GIT_LOG="${WORK}/git-calls.log"
+: > "$GIT_LOG"
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief \
+     GIT_CALL_LOG="$GIT_LOG" PATH="${GITSHIM}:${TESTS_DIR}/bin:${PATH}")
+GIT_CALLS=$(grep -c . "$GIT_LOG" 2>/dev/null || echo 0)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ] && [ "$GIT_CALLS" -eq 1 ]; then
+  pass "repo root resolved once per Read: exactly 1 git spawn, not 3"
+else
+  fail "rules-brief spawns git more than once" "status=$st git_calls=$GIT_CALLS calls=$(tr '\n' '; ' < "$GIT_LOG")"
+fi
+
+# Not briefing the same rules twice in a session is the CLI's job, but it can
+# only do it if the hook hands over the session identity -- which it does by
+# forwarding the envelope whole. That half of the contract is testable here.
+if [ "$(jq -r '.session_id' "$CAPTURE_RB")" = "test-session-read" ]; then
+  pass "session_id reaches the CLI, so it can dedupe briefs within a session"
+else
+  fail "session_id not forwarded" "captured=$(cat "$CAPTURE_RB" 2>/dev/null)"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_PLAN_GATE=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_PLAN_GATE=off: silent no-op"
+else
+  fail "opt-out did not disable the brief" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_CLI_SUBPROCESS=1 ACTUAL_TEST_CAPTURE="${WORK}/rb-subprocess-capture")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -f "${WORK}/rb-subprocess-capture" ]; then
+  pass "ACTUAL_CLI_SUBPROCESS=1: silent no-op that never invokes the CLI"
+else
+  fail "rules-brief ran inside an actual-cli subprocess" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_RULES_BRIEF=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_RULES_BRIEF=off: briefing alone is disabled"
+else
+  fail "granular opt-out did not disable the brief" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# ...and it must disable ONLY briefing: the gates answer to ACTUAL_PLAN_GATE.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny ACTUAL_RULES_BRIEF=off)
+if [ "$(decision)" = "deny" ]; then
+  pass "ACTUAL_RULES_BRIEF=off leaves the plan gate blocking"
+else
+  fail "granular opt-out leaked into the plan gate" "decision=$(decision) stdout=$(cat "${WORK}/out")"
+fi
+
+# Every failure on this path is silent by contract, so ACTUAL_HOOK_DEBUG is the
+# only way to tell a working brief from one that is being dropped.
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-trailing-field ACTUAL_HOOK_DEBUG=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] \
+   && grep -q "dropped (content is not a single JSON string)" "${WORK}/err"; then
+  pass "ACTUAL_HOOK_DEBUG names the drop reason on stderr, stdout still silent"
+else
+  fail "debug switch did not explain the drop" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=crash ACTUAL_HOOK_DEBUG=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] \
+   && grep -q "cli-stderr:.*panicked" "${WORK}/err"; then
+  pass "ACTUAL_HOOK_DEBUG surfaces a CLI crash that is otherwise swallowed"
+else
+  fail "debug switch did not surface the crash" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
+# Without the switch, a crash leaves no trace at all -- the fail-open contract.
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=crash)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "without ACTUAL_HOOK_DEBUG the same crash stays completely silent"
+else
+  fail "debug output leaked without the switch" "stderr=$(cat "${WORK}/err")"
+fi
+
+if [ "$(jq -r '.hooks.PostToolUse[0].matcher' "${HOOKS_DIR}/hooks.json")" = "Read" ] \
+   && [ "$(jq -r '.hooks.PostToolUse[0].hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/rules-brief.sh' ] \
+   && [ "$(jq -r '.hooks.PostToolUse[0].hooks[0].timeout' "${HOOKS_DIR}/hooks.json")" = "2" ]; then
+  pass "hooks.json registers PostToolUse:Read -> rules-brief.sh with the 2s timeout"
+else
+  fail "hooks.json PostToolUse registration wrong" "$(jq -c '.hooks.PostToolUse' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
+fi
+
+echo
 echo "=== plugin manifest ==="
 
 # hooks/hooks.json is loaded automatically by convention. Declaring it again via the
@@ -928,14 +1146,43 @@ fi
 echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
-     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
+     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' > "${WORK}/deps" 2>/dev/null; then
   fail "shipped hooks reference a JSON/runtime dependency" "$(cat "${WORK}/deps")"
 else
   pass "shipped hooks reference no jq/python/node"
 fi
 
-for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh"; do
+# The mod is not shell, so the jq/python/node rule does not apply to it -- it
+# runs inside Claude Code and adds no system dependency. The invariant that
+# does apply is narrower: the only process it may spawn is the `actual` CLI.
+# `claude plugin validate` reports that it calls $.process.run at all; this
+# pins what it runs. Comment lines are stripped first, or the file's own
+# prose about $.process.run would count as a call site.
+MOD_CODE="${WORK}/register.nocomments.js"
+grep -vE '^[[:space:]]*(//|\*|/\*)' "${HOOKS_DIR}/register.js" > "$MOD_CODE"
+SPAWNS=$(grep -c '\$\.process\.run(' "$MOD_CODE" || true)
+ALLOWED=$(grep -cE "'actual', 'rules', 'brief'|'git', 'rev-parse'" "$MOD_CODE" || true)
+if [ "$SPAWNS" = "2" ] && [ "$ALLOWED" = "2" ]; then
+  pass "the mod spawns nothing but the actual CLI and git rev-parse"
+else
+  fail "the mod spawns an unexpected process" \
+       "process.run sites=$SPAWNS allowed=$ALLOWED"
+fi
+
+# Both briefing paths must forward --rules-dir, or they land on different
+# brief-memory keys (session_id + agent_id + rules_dir) and one read briefs
+# twice -- and in a monorepo the mod governs against the wrong rule set.
+for f in "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/register.js"; do
+  if grep -q -- "--rules-dir" "$f" && grep -q "ACTUAL_RULES_DIR" "$f" \
+     || { [ "$(basename "$f")" = "rules-brief.sh" ] && grep -q -- "--rules-dir" "$f"; }; then
+    pass "$(basename "$f") forwards --rules-dir"
+  else
+    fail "$(basename "$f") does not forward --rules-dir" ""
+  fi
+done
+
+for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh"; do
   if [ -x "$f" ]; then pass "$(basename "$f") is executable"; else fail "$(basename "$f") is not executable" ""; fi
 done
 
