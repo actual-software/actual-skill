@@ -19,6 +19,7 @@ names = {}
 briefs = []          # (tool name, files, decision titles, slugs, shown/total)
 conflicts = Counter()
 conflict_rules = []
+briefed_pairs = set()   # (doc slug, rule id) pairs that reached the agent
 rounds = 0
 
 
@@ -76,6 +77,8 @@ for line in lines:
         )
         via = sorted({names.get(i, ("?",))[0] for i in ids}) or ["?"]
         briefs.append((via, files, titles, slugs, shown, total or shown))
+        for pair in re.findall(r"\[([a-z0-9-]+)/(R-[A-Z0-9]+-\d+)\]", text):
+            briefed_pairs.add(pair)
         break
 
 # De-duplicate: one delivery is recorded two or three times in a transcript.
@@ -107,14 +110,28 @@ for via, files, titles, slugs, shown, total in unique:
 
 print(f"\nStop gate: {rounds} round(s), {len(conflicts)} distinct rule(s)")
 if conflict_rules:
-    print("  a blocking rule whose DOCUMENT never appeared in any brief is the")
-    print("  gap worth watching -- the agent was judged on a rule it never saw:")
+    # Cross-referenced, not asserted. A conflict naming a rule the agent was
+    # briefed on means briefing worked and was not enough; one naming a rule it
+    # never saw means the gate judged it on something briefing withheld. Those
+    # are opposite conclusions and the difference has to be checked.
+    #
+    # A conflict message gives only the bare rule id, and rule ids are not
+    # unique across documents -- 46% of them collide in one measured corpus --
+    # so a match on the id alone is reported as such rather than as proof.
+    briefed_ids = {rid for _, rid in briefed_pairs}
     shown_once = set()
     for rid, level, reason in conflict_rules:
         if rid in shown_once:
             continue
         shown_once.add(rid)
-        print(f"    {rid} ({level}): {reason}")
+        if rid in briefed_ids:
+            docs = sorted(d for d, r in briefed_pairs if r == rid)
+            where = f"BRIEFED (in {', '.join(docs)})" if len(docs) == 1 else \
+                f"BRIEFED under {len(docs)} documents, so this id is ambiguous"
+        else:
+            where = "NOT briefed -- the agent was judged on a rule it never saw"
+        print(f"    {rid} ({level}): {where}")
+        print(f"      {reason}")
 if briefed_slugs:
     print(f"\n  documents briefed this session: {len(briefed_slugs)}")
     for s in sorted(briefed_slugs):
