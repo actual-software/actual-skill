@@ -149,6 +149,12 @@ Governance never gets in the way of unrelated work. Outside a repository with `.
 
 Set `ACTUAL_PLAN_GATE=off` to turn governance off, or `ACTUAL_RULES_DIR` to use a different rules directory. The hooks also stay silent inside the `claude` subprocesses `actual` itself spawns (marked with `ACTUAL_CLI_SUBPROCESS=1`), so the judge's own Stop hook can't rerun `impl-check` and recurse. Run `bash hooks/tests/run.sh` to test the hooks locally; it needs no network or CLI install. Governance relies on Claude Code hooks, so it isn't available in Codex, ChatGPT, Cursor, or OpenCode.
 
+### Session summary
+
+In Claude Code, a status line shows how many of your repository's ADRs have been added to your agent's context this session: `Actual AI: 3 of 12 ADRs added to context`. It reads `0 of 12` from the start of the session and updates after each of your agent's replies, in the background, so no reply waits on it. In the terminal it sits under the prompt as `⚠ actual-cli: Actual AI: …`; the ⚠ is how Claude Code marks a plugin's status line, not a warning.
+
+It counts against the same rules directory as the checks, `ACTUAL_RULES_DIR` included, and shows nothing outside a repository with `.actual/rules/`, when the rules hold no decision, or when the CLI is missing or predates `actual session summary`. `ACTUAL_PLAN_GATE=off` leaves it on. The line is a Claude Code mod, `hooks/session-summary.ts`, so it needs Claude Code 2.1.287 or later; older releases run the checks as before and skip the line. Run `claude plugin test .` to test it.
+
 ### Troubleshooting
 
 When something fails, the skill diagnoses it for you. It knows every error the CLI can return, all five runners (`claude-cli`, `anthropic-api`, `openai-api`, `codex-cli`, `cursor-cli`), and all three output formats, so it can find the cause and retry without you reading logs.
