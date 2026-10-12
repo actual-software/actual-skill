@@ -339,7 +339,12 @@ function reportLine(record) {
       return `actual: briefed ${n} ADR${n === 1 ? '' : 's'}, ${rules} — ${files}`;
     }
     case 'deduped':
-      return `actual: ${files} governed, already briefed this session`;
+      // Not "already briefed", which reads as a claim about the files and is
+      // false: dedup is per decision, so a file never briefed by name is
+      // suppressed once the ADRs governing it have been stated through some
+      // other file. A user reading `already database.types.ts` looked for that
+      // file in the delivered rows and did not find it.
+      return `actual: ${files} governed, no rules left to brief this session`;
     case 'budget':
       return 'actual: briefing budget spent for this session, staying quiet';
     case 'cli-error':
@@ -771,15 +776,20 @@ async function deliverBrief($, e, result, paths, ctx) {
 
 const PANE = 'rules-brief';
 
-// Rows for the pane, newest first: what each recent Bash call did about
-// briefing, including the calls that did nothing and why.
+// Rows for the pane, oldest first: what each Bash call did about briefing,
+// including the calls that did nothing and why.
+//
+// In session order, because the rows explain each other -- a `no new` row only
+// makes sense once the delivered row above it has stated the rules it is
+// suppressing. Newest first put every explanation below the thing it
+// explained.
 function paneRows(elements) {
   const { Box, Text } = elements;
-  const rows = [...outcomes.entries()].reverse();
+  const rows = [...outcomes.entries()];
   if (rows.length === 0) {
     return [Text({ dimColor: true, children: ['No reads yet in this session.'] })];
   }
-  return rows.slice(0, 40).map(([id, record], i) => {
+  return rows.slice(-40).map(([id, record], i) => {
     const files = (record.files ?? []).map((f) => f.split('/').pop()).join(', ');
     // Files that resolved but contributed nothing, so a read that looks
     // unbriefed can be told from one that had nothing left to say.
@@ -790,7 +800,7 @@ function paneRows(elements) {
     const label =
       {
         delivered: 'briefed  ',
-        deduped: 'already  ',
+        deduped: 'no new   ',
         budget: 'budget   ',
         'cli-error': 'error    ',
         unresolved: 'no match ',

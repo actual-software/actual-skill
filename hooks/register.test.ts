@@ -717,7 +717,7 @@ test('a governed file already briefed says so rather than nothing', async (fire:
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_3' });
   const drawn = reported(logs);
 
-  expect(drawn).toContain('already briefed this session');
+  expect(drawn).toContain('no rules left to brief this session');
 });
 
 test('a CLI failure is shown, not swallowed', async (fire: any, on: any) => {
@@ -1028,5 +1028,36 @@ test('a suppressed brief reports its reason, not silence', async (fire: any, on:
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(logs.length).toBe(1);
-  expect(logs[0]).toContain('already briefed this session');
+  expect(logs[0]).toContain('no rules left to brief this session');
+});
+
+test('the pane lists calls in the order they happened', async (fire: any, on: any) => {
+  // Session order, because the rows explain each other: a `no new` row means
+  // nothing until the delivered row it refers to has been read.
+  //
+  // Relative positions, not absolute: `outcomes` is module state shared by
+  // every test in this file, so the pane also holds rows from earlier ones.
+  harness(on);
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/first-call.ts', tool_use_id: 'ord_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/second-call.ts', tool_use_id: 'ord_2' });
+
+  const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  expect(drawn.indexOf('first-call.ts')).toBeGreaterThan(-1);
+  expect(drawn.indexOf('first-call.ts')).toBeLessThan(drawn.indexOf('second-call.ts'));
+});
+
+test('a suppressed row says no rules are left, not that the file was briefed', async (fire: any, on: any) => {
+  // `already database.types.ts` was read as a claim about that file, and the
+  // reader went looking for it among the delivered rows. Dedup is per
+  // decision: the file itself may never have been briefed by name.
+  harness(on, { cli: { exitCode: 0, stdout: '', stderr: '' } });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/suppressed.ts', tool_use_id: 'sup_1' });
+
+  const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  expect(drawn).toContain('no new');
+  expect(drawn).not.toContain('already');
 });
