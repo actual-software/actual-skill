@@ -30,6 +30,9 @@ function harness(
     existing?: string[] | null | (() => string[] | null);
     config?: Record<string, number>;
     gitRoot?: string;
+    // Collects every $.ui.log line, so a test can assert the mod writes
+    // nothing to the user's transcript except what it means to.
+    logs?: string[];
   } = {}
 ) {
   const runs: any[] = [];
@@ -51,7 +54,10 @@ function harness(
   on('session.usage', async () => ({
     value: { context: { tokens: 1000, window: 200000, percent: 1 } },
   }));
-  on('ui.log', async () => ({ value: undefined }));
+  on('ui.log', async (_$: any, e: any) => {
+    opts.logs?.push(typeof e === 'string' ? e : (e?.text ?? JSON.stringify(e)));
+    return { value: undefined };
+  });
   on('fs.exists', async (_$: any, e: any) => {
     const existing = typeof opts.existing === 'function' ? opts.existing() : opts.existing;
     return { value: existing ? existing.includes(e.path) : true };
@@ -524,7 +530,10 @@ test('the repo root is probed once per session, not once per command', async (fi
   on('session.root', async () => ({ value: '/repo' }));
   on('session.id', async () => ({ value: 'sess-1' }));
   on('session.usage', async () => ({ value: { context: { tokens: 1, window: 2, percent: 1 } } }));
-  on('ui.log', async () => ({ value: undefined }));
+  on('ui.log', async (_$: any, e: any) => {
+    opts.logs?.push(typeof e === 'string' ? e : (e?.text ?? JSON.stringify(e)));
+    return { value: undefined };
+  });
   on('fs.exists', async () => ({ value: true }));
   on('tool.call', async () => ({
     ref: 1, result: { stdout: 'OUT', stderr: '' }, text: 'OUT', isReadOnly: true,
@@ -870,4 +879,25 @@ test('nothing is appended when the debug switch is off', async (fire: any, on: a
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/missing.ts' });
   expect(runs.length).toBe(0);
   expect(r.result.stdout).toBe('TOOL OUTPUT');
+});
+
+test('nothing is written to the transcript on a path that briefs', async (fire: any, on: any) => {
+  // A stray $.ui.log left in from debugging reached a real session as
+  // `actual-cli: EX=true type=boolean`. The transcript is the user's, not a
+  // scratch pad: the only line this mod may write there is the budget line,
+  // and only under the debug switch.
+  const logs: string[] = [];
+  harness(on, { logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(logs).toEqual([]);
+});
+
+test('with the debug switch on, the only logged line is the budget', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  harness(on, { env: { ACTUAL_HOOK_DEBUG: '1' }, logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(logs.length).toBe(1);
+  expect(logs[0]).toContain('injected');
 });

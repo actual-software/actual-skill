@@ -764,9 +764,7 @@ export function register(on, options = {}) {
           // twice for nothing. Cheap to skip, and it keeps the brief about the
           // code rather than about the rules.
           if (isWithin(rulesDir, candidate)) continue;
-          const ex = await $.fs.exists(candidate);
-          $.ui.log('EX=' + JSON.stringify(ex) + ' type=' + typeof ex);
-          if (!ex) continue;
+          if (!(await $.fs.exists(candidate))) continue;
           if (!paths.includes(candidate)) paths.push(candidate);
           break;
         }
