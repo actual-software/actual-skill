@@ -1035,8 +1035,14 @@ test('the pane lists calls in the order they happened', async (fire: any, on: an
   // Session order, because the rows explain each other: a `no new` row means
   // nothing until the delivered row it refers to has been read.
   //
-  // Relative positions, not absolute: `outcomes` is module state shared by
-  // every test in this file, so the pane also holds rows from earlier ones.
+  // Relative positions, not absolute, so the assertion says what it means --
+  // that one row precedes the other -- rather than pinning row indices.
+  //
+  // An earlier version of this comment claimed the pane also holds rows from
+  // earlier tests. It does not: the plugin module is re-instantiated per test,
+  // and a pane mounted in a later test shows "No reads yet". That wrong claim
+  // was also the stated reason for withdrawing two tests in fa5fbf8, and it
+  // was never checked.
   harness(on);
   on('ui.render', async () => ({ type: 'engine', ref: 1 }));
 
@@ -1146,4 +1152,27 @@ test('each quiet reason gets its own pane row', async (fire: any, on: any) => {
   for (const label of ['no text', 'off-root', 'no set']) {
     expect(drawn).toContain(label);
   }
+});
+
+test('the band adds up what the session briefed', async (fire: any, on: any) => {
+  harness(on);
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/band-a.ts', tool_use_id: 'bd_1' });
+
+  const drawn = await drawnText(fire, 'AbovePrompt', 'prompt', {});
+  expect(drawn).toContain('actual');
+  expect(drawn).toMatch(/ADRs? briefed/);
+  expect(drawn).toMatch(/files? governed/);
+});
+
+test('no band before briefing has done anything', async (fire: any, on: any) => {
+  // A band in every session, including repositories with no rules, would be
+  // furniture rather than information.
+  harness(on, { cli: { exitCode: 0, stdout: '', stderr: 'actual rules brief: no-brief=ungoverned src/a.ts' } });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/band-b.ts', tool_use_id: 'bd_2' });
+
+  expect(await drawnText(fire, 'AbovePrompt', 'prompt', {})).not.toContain('actual');
 });

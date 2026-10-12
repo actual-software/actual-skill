@@ -832,6 +832,52 @@ async function deliverBrief($, e, result, paths, ctx) {
 
 const PANE = 'rules-brief';
 
+// What this session's briefing adds up to, for the band above the prompt.
+//
+// The per-read rows cannot be made to stand out: $.ui.log carries text and
+// nothing else -- no colour, no weight -- and the host draws every line at one
+// dim weight. So prominence goes where it does not depend on a single call's
+// rendering, and where nothing can scroll it away.
+//
+// Counted from the records rather than kept as a running total, so it cannot
+// drift from what the rows say.
+function sessionTally() {
+  const decisions = new Set();
+  const governed = new Set();
+  const ungoverned = new Set();
+  let rules = 0;
+  for (const record of outcomes.values()) {
+    if (record.outcome === 'delivered') {
+      // Each decision is briefed once a session, so these do not repeat --
+      // a Set rather than a sum in case that ever stops being true.
+      for (const name of record.summary?.decisions ?? []) decisions.add(name);
+      rules += record.summary?.shown ?? 0;
+      for (const file of record.files ?? []) governed.add(file);
+    } else if (record.outcome === 'deduped') {
+      // Governed, and its rules were stated earlier. The files quiet for any
+      // other reason say nothing about governance.
+      for (const file of record.files ?? []) {
+        if ((record.reasons ?? {})[file] === 'already-briefed') governed.add(file);
+      }
+    } else if (record.outcome === 'ungoverned') {
+      for (const file of record.files ?? []) ungoverned.add(file);
+    }
+  }
+  return { decisions: decisions.size, rules, governed: governed.size, ungoverned: ungoverned.size };
+}
+
+function bandText(tally) {
+  const parts = [
+    `${tally.decisions} ADR${tally.decisions === 1 ? '' : 's'} briefed`,
+    `${tally.rules} rule${tally.rules === 1 ? '' : 's'}`,
+    `${tally.governed} file${tally.governed === 1 ? '' : 's'} governed`,
+  ];
+  // Only worth saying once there is one, and it is the count a reader checks
+  // when a read they expected to brief stayed quiet.
+  if (tally.ungoverned > 0) parts.push(`${tally.ungoverned} ungoverned`);
+  return parts.join(' \u00b7 ');
+}
+
 // Rows for the pane, oldest first: what each Bash call did about briefing,
 // including the calls that did nothing and why.
 //
@@ -901,6 +947,30 @@ export function register(on, options = {}) {
   on('command.run', { command: 'rules-brief' }, async ($) => {
     await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
     return {};
+  });
+
+  // A standing band above the prompt. Drawn only once briefing has done
+  // something: a band in every session, including the repositories with no
+  // rules at all, would be furniture rather than information.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const theirs = await next(e);
+    const tally = sessionTally();
+    if (tally.decisions === 0 && tally.governed === 0) return theirs;
+    const { Box, Text } = $.ui.resolve(e);
+    return Box({
+      flexDirection: 'column',
+      children: [
+        Box({
+          flexDirection: 'row',
+          columnGap: 1,
+          children: [
+            Text({ color: 'yellow', bold: true, children: ['actual'] }),
+            Text({ dimColor: true, children: [bandText(tally)] }),
+          ],
+        }),
+        theirs,
+      ],
+    });
   });
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
