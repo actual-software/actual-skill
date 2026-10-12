@@ -905,7 +905,9 @@ test('a briefed call reports exactly one line to the transcript', async (fire: a
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(logs.length).toBe(1);
-  expect(logs[0]).toContain('actual: briefed');
+  // No prefix of our own: $.ui.log attributes the line to the plugin, and
+  // carrying one as well read as `actual-cli: actual: briefed 2 ADRs...`.
+  expect(logs[0]).toMatch(/^briefed /);
   expect(logs[0]).toContain('a.ts');
 });
 
@@ -934,7 +936,7 @@ test('with the debug switch on, the only logged line is the budget', async (fire
   // The report, plus the budget line the debug switch adds.
   expect(logs.length).toBe(2);
   expect(logs.some((l) => l.includes('injected'))).toBe(true);
-  expect(logs.some((l) => l.includes('actual: briefed'))).toBe(true);
+  expect(logs.some((l) => l.startsWith('briefed'))).toBe(true);
 });
 
 // --- The Read tool, through the same path ---------------------------------
@@ -1005,4 +1007,16 @@ test('a result whose readable field is missing is left alone', async (fire: any,
 
   expect(runs.length).toBe(0);
   expect(r.result.type).toBe('image');
+});
+
+test('a suppressed brief reports its reason, not silence', async (fire: any, on: any) => {
+  // The report sat after `if (!appended) return result`, so it only fired when
+  // something had actually been injected. Every dedup -- the commonest reason
+  // a read says nothing, and the one most worth seeing -- returned before it.
+  const logs: string[] = [];
+  harness(on, { cli: { exitCode: 0, stdout: '', stderr: '' }, logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(logs.length).toBe(1);
+  expect(logs[0]).toContain('already briefed this session');
 });

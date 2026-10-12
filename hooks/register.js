@@ -312,6 +312,8 @@ function summarize(brief) {
 // The line drawn under a tool result. Null for the calls worth saying nothing
 // about -- a command that read no governed file is the overwhelming majority,
 // and a line on every one of them would be noise rather than information.
+// The sentence for one call's outcome, without a prefix: $.ui.log adds the
+// plugin's name itself, and the drawn line adds its own marker.
 function drawnLine(record) {
   if (!record) return null;
   const files = (record.files ?? []).map((f) => f.split('/').pop()).join(', ');
@@ -735,8 +737,6 @@ async function deliverBrief($, e, result, paths, ctx) {
     if (line) appended += (appended ? '\n\n' : '') + line;
   }
 
-  if (!appended) return result;
-
   // Report through $.ui.log as well as by drawing.
   //
   // A drawn line depends on which render site Claude Code uses, and it
@@ -753,8 +753,13 @@ async function deliverBrief($, e, result, paths, ctx) {
   // nothing unless debugging. That rule was about leftover debug noise
   // reaching a user's transcript, which is still true of `EX=true`. One
   // deliberate line per brief is the report itself.
+  // $.ui.log already prefixes the plugin's name, so the line carried its own
+  // prefix twice: `actual-cli: actual: briefed 2 ADRs...`.
   const report = drawnLine(outcomes.get(e.tool_use_id));
-  if (report) $.ui.log(report);
+  if (report) $.ui.log(report.replace(/^actual: /, ''));
+
+
+  if (!appended) return result;
 
   return appendToResult(result, e.tool, appended);
 }
