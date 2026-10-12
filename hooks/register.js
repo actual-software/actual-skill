@@ -265,6 +265,10 @@ async function debugNote($, outcome, detail) {
 const MAX_OUTCOMES = 200;
 const outcomes = new Map();
 
+// Tool call ids whose line has been drawn, so one brief is not reported twice
+// when more than one render site is asked for the same call.
+const drawnFor = new Set();
+
 function recordOutcome(toolUseId, record) {
   if (!toolUseId) return;
   outcomes.set(toolUseId, { at: Date.now(), ...record });
@@ -810,10 +814,24 @@ export function register(on, options = {}) {
   // One dim line under the tool result that caused a brief. Keeps Claude
   // Code's own drawing and adds to it, rather than replacing it -- the command
   // output is the point and this is a footnote to it.
-  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+  // Three sites, not one. Claude Code renders a tool call expanded as
+  // `ToolResult`, but collapses some into a summary row -- "Listed 1
+  // directory (ctrl+o to expand)" -- which is a different site. Matching
+  // `ToolResult` alone drew the line on expanded calls and silently skipped
+  // collapsed ones: in one observed session two delivered briefs produced no
+  // line while a deduped one did, which reads as the feature half working
+  // rather than as a rendering difference.
+  //
+  // All three sites carry the tool call id as `e.requestId`, so one lookup
+  // serves them, and a site with no record for its id draws nothing.
+  on('ui.render', { component: ['ToolResult', 'ToolGroup', 'ToolUse'] }, async ($, e, next) => {
     const theirs = await next(e);
     const line = drawnLine(outcomes.get(e.requestId));
     if (!line) return theirs;
+    // Once per call: a collapsed group and its expanded result can both be
+    // asked to render, and a line on each would read as two briefs.
+    if (drawnFor.has(e.requestId)) return theirs;
+    drawnFor.add(e.requestId);
     const { Box, Text } = $.ui.resolve(e);
     return Box({
       flexDirection: 'column',
