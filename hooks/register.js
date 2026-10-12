@@ -840,6 +840,52 @@ async function deliverBrief($, e, result, paths, ctx) {
   return appendToResult(result, e.tool, appended);
 }
 
+// One label per outcome, shared by the pane and the end-of-turn summary. Two
+// copies of this drifted apart once already, which is how `no new` and
+// `nothing new for` came to say the same thing two ways.
+const OUTCOME_LABELS = {
+  delivered: 'briefed  ',
+  deduped: 'no new   ',
+  ungoverned: 'no rules ',
+  'no-text': 'no text  ',
+  'outside-root': 'off-root ',
+  'no-rule-set': 'no set   ',
+  budget: 'budget   ',
+  'cli-error': 'error    ',
+  unresolved: 'no match ',
+  'no-paths': 'no path  ',
+  'not-read-only': 'writes   ',
+};
+
+// The session's reads as text, newest last: the `/rules-brief` pane's rows,
+// for somewhere a pane cannot be drawn.
+//
+// Capped, because this repeats at the end of every turn and a long session
+// would otherwise replay its whole history each time.
+const SUMMARY_ROW_CAP = 20;
+
+function summaryRows() {
+  const rows = [...outcomes.values()];
+  if (rows.length === 0) return [];
+  const shown = rows.slice(-SUMMARY_ROW_CAP);
+  const dropped = rows.length - shown.length;
+  const lines = shown.map((record) => {
+    const label = OUTCOME_LABELS[record.outcome] ?? record.outcome;
+    const files = names(record.files ?? []) || '\u2014';
+    const detail =
+      record.outcome === 'delivered'
+        ? `${record.summary?.decisions?.length ?? 0} ADR(s), ${record.summary?.shown ?? 0} rules`
+        : '';
+    return row('', `${label}  ${files}${detail ? `  ${detail}` : ''}`);
+  });
+  const counts = rows.reduce((acc, r) => ((acc[r.outcome] = (acc[r.outcome] ?? 0) + 1), acc), {});
+  const briefed = counts.delivered ?? 0;
+  const head = `${rows.length} read${rows.length === 1 ? '' : 's'} \u00b7 ${briefed} briefed${
+    dropped > 0 ? `, ${dropped} earlier row${dropped === 1 ? '' : 's'} not shown` : ''
+  }`;
+  return [row('SESSION', head), ...lines];
+}
+
 // ── end of turn ──────────────────────────────────────────────────────────────
 //
 // What governed the files this turn changed, reported once when the turn ends.
@@ -951,20 +997,7 @@ function paneRows(elements) {
       .filter((f) => !(record.files ?? []).includes(f))
       .map((f) => f.split('/').pop())
       .join(', ');
-    const label =
-      {
-        delivered: 'briefed  ',
-        deduped: 'no new   ',
-        ungoverned: 'no rules ',
-        'no-text': 'no text  ',
-        'outside-root': 'off-root ',
-        'no-rule-set': 'no set   ',
-        budget: 'budget   ',
-        'cli-error': 'error    ',
-        unresolved: 'no match ',
-        'no-paths': 'no path  ',
-        'not-read-only': 'writes   ',
-      }[record.outcome] ?? record.outcome;
+    const label = OUTCOME_LABELS[record.outcome] ?? record.outcome;
     const detail =
       record.outcome === 'delivered'
         ? `${record.summary?.decisions?.length ?? 0} ADR(s), ${record.summary?.shown ?? 0} of ${record.summary?.total || record.summary?.shown || 0} rules, ${record.summary?.chars ?? 0} chars`
@@ -1004,6 +1037,13 @@ export function register(on, options = {}) {
   on('classic.Stop', async ($, e, next) => {
     // The gate's verdict is untouched whatever happens here.
     try {
+      // What `/rules-brief` would show, without having to ask for it. This is
+      // the report for a turn that only read: `reportTurn` works off
+      // `git status`, so a turn that changed nothing says nothing, and a
+      // read-only turn is exactly when a reader wants the session's reads.
+      if (!e?.stop_hook_active) {
+        for (const line of summaryRows()) $.ui.log(line);
+      }
       await reportTurn($, e);
     } catch {}
     return next(e);

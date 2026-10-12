@@ -1332,3 +1332,55 @@ test('a version string is still not a path', async (fire: any, on: any) => {
   await fire.tool.call({ tool: 'Bash', command: 'echo "=== jwt 9.0.3 API ==="', tool_use_id: 'abs_3' });
   expect(logs).toEqual([]);
 });
+
+test('the end of a turn summarises the session, not only the diff', async (fire: any, on: any) => {
+  // What `/rules-brief` shows, without asking. The changed-files report works
+  // off `git status`, so it says nothing on a read-only turn -- which is
+  // exactly the turn where the reads are the whole story.
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, { logs, gitStatus: '' });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/summary-a.ts', tool_use_id: 'sm_1' });
+  logs.length = 0;
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  const text = logs.join('\n');
+  expect(text).toContain('SESSION');
+  expect(text).toContain('1 read');
+  expect(text).toContain('1 briefed');
+  expect(text).toContain('briefed');
+  expect(text).toContain('summary-a.ts');
+});
+
+test('a session with no reads summarises nothing', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, { logs, gitStatus: '' });
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(logs).toEqual([]);
+});
+
+test('the pane and the summary use one set of labels', async (fire: any, on: any) => {
+  // They were written twice once already, which is how `no new` and
+  // `nothing new for` came to mean the same thing in two different words.
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, {
+    logs,
+    gitStatus: '',
+    cli: { exitCode: 0, stdout: '', stderr: 'actual rules brief: no-brief=ungoverned src/u.ts' },
+  });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/u.ts', tool_use_id: 'lbl_1' });
+  const pane = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  logs.length = 0;
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(pane).toContain('no rules');
+  expect(logs.join('\n')).toContain('no rules');
+});
