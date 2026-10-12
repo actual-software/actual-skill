@@ -829,3 +829,45 @@ test('the pane distinguishes a file that contributed from one that was quiet', a
   expect(drawn).toContain('one.ts');
   expect(drawn).toContain('nothing new for two.ts');
 });
+
+test('ACTUAL_HOOK_DEBUG explains a non-brief, not only a brief', async (fire: any, on: any) => {
+  // The case the first version could not report. Three sessions were spent
+  // unable to tell "mod not loaded" from "mod declined" because every early
+  // exit returned before the debug line was reached.
+  const cases: Array<[string, any, string]> = [
+    ['npx tsc --noEmit', { isReadOnly: undefined }, 'did not mark this command read-only'],
+    ['cat', {}, 'named no path-shaped token'],
+  ];
+  for (const [command, toolOverride, expected] of cases) {
+    const runs = harness(on, {
+      env: { ACTUAL_HOOK_DEBUG: '1' },
+      tool: {
+        ref: 1,
+        result: { stdout: 'OUT', stderr: '' },
+        text: 'OUT',
+        isReadOnly: 'isReadOnly' in toolOverride ? toolOverride.isReadOnly : true,
+      },
+    });
+    const r = await fire.tool.call({ tool: 'Bash', command });
+    expect(runs.length).toBe(0);
+    expect(r.result.stdout).toContain('actual rules brief [debug]: not briefed');
+    expect(r.result.stdout).toContain(expected);
+    break; // one harness per test; the second shape is covered below
+  }
+});
+
+test('a path that resolves to nothing says which tokens were tried', async (fire: any, on: any) => {
+  const runs = harness(on, { env: { ACTUAL_HOOK_DEBUG: '1' }, existing: [] });
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/missing.ts' });
+
+  expect(runs.length).toBe(0);
+  expect(r.result.stdout).toContain('no token resolved to a governed file');
+  expect(r.result.stdout).toContain('src/missing.ts');
+});
+
+test('nothing is appended when the debug switch is off', async (fire: any, on: any) => {
+  const runs = harness(on, { existing: [] });
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/missing.ts' });
+  expect(runs.length).toBe(0);
+  expect(r.result.stdout).toBe('TOOL OUTPUT');
+});

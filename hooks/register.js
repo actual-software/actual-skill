@@ -192,6 +192,29 @@ function candidateTokens(command) {
   return { cdTarget: split.base, tokens };
 }
 
+// Under ACTUAL_HOOK_DEBUG, say what briefing decided -- including, and
+// especially, when it decided nothing. The first version of this reported only
+// from the point where a brief was already being appended, which left every
+// case worth debugging silent: a command that was not read-only, a token that
+// resolved to nothing, a spent budget, and a mod that never loaded all looked
+// identical from a transcript. Three sessions were spent unable to tell them
+// apart. The line rides out on the tool result, because $.ui.log does not
+// reach `claude -p`, and it is debug-gated for that reason.
+// Append a debug line to a tool result, leaving everything else as it was.
+// Returns the result untouched when there is no line, so the non-debug path
+// allocates nothing.
+function withNote(result, note) {
+  if (!note) return result;
+  if (typeof result?.result?.stdout !== 'string') return result;
+  return { ...result, result: { ...result.result, stdout: `${result.result.stdout}\n\n${note}` } };
+}
+
+async function debugNote($, outcome, detail) {
+  const enabled = await $.env.get('ACTUAL_HOOK_DEBUG');
+  if (!enabled) return '';
+  return `actual rules brief [debug]: ${outcome}${detail ? ` -- ${detail}` : ''}`;
+}
+
 // --- What the user sees ---------------------------------------------------
 //
 // The brief itself has to reach Claude, so it rides in the tool result and
@@ -671,7 +694,7 @@ export function register(on, options = {}) {
       // and absent for anything it could not classify -- both mean no brief.
       if (result?.isReadOnly !== true) {
         recordOutcome(e.tool_use_id, { outcome: 'not-read-only' });
-        return result;
+        return withNote(result, await debugNote($, 'not briefed', 'Claude Code did not mark this command read-only'));
       }
       // result.stdout is the string Claude reads. Verified by appending a
       // marker to each candidate field in a live session: only the one in
@@ -704,7 +727,7 @@ export function register(on, options = {}) {
       }
       if (!found || found.tokens.length === 0) {
         recordOutcome(e.tool_use_id, { outcome: 'no-paths' });
-        return result;
+        return withNote(result, await debugNote($, 'not briefed', 'the command named no path-shaped token'));
       }
       const shellCwd = shellCwds.get(sessionId) ?? cwd;
 
@@ -752,7 +775,8 @@ export function register(on, options = {}) {
         // Tokens that looked like paths but resolved to nothing inside the
         // repository. Common and uninteresting on its own; the pane shows it.
         recordOutcome(e.tool_use_id, { outcome: 'unresolved', tokens: found.tokens });
-        return result;
+        return withNote(result, await debugNote($, 'not briefed',
+          `no token resolved to a governed file inside the repo: ${found.tokens.join(', ')}`));
       }
 
       const resolved = mergeSettings(await readEnvSettings($), options);
@@ -763,7 +787,7 @@ export function register(on, options = {}) {
       let remaining = spendable(sessionId, cap);
       if (remaining <= 0) {
         recordOutcome(e.tool_use_id, { outcome: 'budget', files: paths });
-        return result;
+        return withNote(result, await debugNote($, 'not briefed', `session budget of ${cap} chars is spent`));
       }
 
       let appended = '';
@@ -843,6 +867,9 @@ export function register(on, options = {}) {
         // useful thing to be able to see, because it is the one case where
         // silence is correct.
         recordOutcome(e.tool_use_id, { outcome: 'deduped', files: paths });
+        const note = await debugNote($, 'not briefed',
+          `every decision for ${paths.join(', ')} was already briefed this session`);
+        if (note) appended = note;
       }
 
       if (options.debug || (await $.env.get('ACTUAL_HOOK_DEBUG'))) {
