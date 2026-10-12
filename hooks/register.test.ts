@@ -683,7 +683,7 @@ test('a delivered brief reports a line to the transcript', async (fire: any, on:
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_1' });
   const drawn = reported(logs);
 
-  expect(drawn).toContain('briefed');
+  expect(drawn).toContain('BRIEFED');
   expect(drawn).toContain('a.ts');
 });
 
@@ -717,7 +717,7 @@ test('a governed file already briefed says so rather than nothing', async (fire:
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_3' });
   const drawn = reported(logs);
 
-  expect(drawn).toContain('nothing new for');
+  expect(drawn).toContain('NO CHANGE');
 });
 
 test('a CLI failure is shown, not swallowed', async (fire: any, on: any) => {
@@ -727,7 +727,7 @@ test('a CLI failure is shown, not swallowed', async (fire: any, on: any) => {
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_4' });
   const drawn = reported(logs);
 
-  expect(drawn).toContain('brief unavailable');
+  expect(drawn).toContain('CLI ERROR');
   expect(drawn).toContain('exit 2');
 });
 
@@ -917,7 +917,7 @@ test('a briefed call reports exactly one line to the transcript', async (fire: a
   expect(logs.length).toBe(1);
   // No prefix of our own: $.ui.log attributes the line to the plugin, and
   // carrying one as well read as `actual-cli: actual: briefed 2 ADRs...`.
-  expect(logs[0]).toMatch(/^briefed /);
+  expect(logs[0]).toMatch(/^\u258c BRIEFED /);
   expect(logs[0]).toContain('a.ts');
 });
 
@@ -935,7 +935,7 @@ test('a brief whose text does not parse still reports its size', async (fire: an
   harness(on, { cli: { exitCode: 0, stdout: reply('a line with no heading'), stderr: '' }, logs });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
-  expect(logs[0]).toMatch(/briefed \d+ chars/);
+  expect(logs[0]).toMatch(/BRIEFED\s+\d+ chars/);
 });
 
 test('with the debug switch on, the only logged line is the budget', async (fire: any, on: any) => {
@@ -946,7 +946,7 @@ test('with the debug switch on, the only logged line is the budget', async (fire
   // The report, plus the budget line the debug switch adds.
   expect(logs.length).toBe(2);
   expect(logs.some((l) => l.includes('injected'))).toBe(true);
-  expect(logs.some((l) => l.startsWith('briefed'))).toBe(true);
+  expect(logs.some((l) => l.includes('BRIEFED'))).toBe(true);
 });
 
 // --- The Read tool, through the same path ---------------------------------
@@ -1003,7 +1003,7 @@ test('a Read draws the same line a Bash read draws', async (fire: any, on: any) 
   await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts', tool_use_id: 'r_draw' });
   const drawn = reported(logs);
 
-  expect(drawn).toContain('briefed');
+  expect(drawn).toContain('BRIEFED');
   expect(drawn).toContain('a.ts');
 });
 
@@ -1028,7 +1028,7 @@ test('a suppressed brief reports its reason, not silence', async (fire: any, on:
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(logs.length).toBe(1);
-  expect(logs[0]).toContain('nothing new for');
+  expect(logs[0]).toContain('NO CHANGE');
 });
 
 test('the pane lists calls in the order they happened', async (fire: any, on: any) => {
@@ -1074,8 +1074,11 @@ test('a suppressed brief does not claim the file is governed', async (fire: any,
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   const line = reported(logs);
 
-  expect(line).toContain('nothing new for');
-  expect(line).not.toContain('governed');
+  expect(line).toContain('NO CHANGE');
+  // The old line read `<files> governed, already briefed this session`, which
+  // claimed governance for every file it named. Asserted as the claim rather
+  // than the word, since "ungoverned" contains it.
+  expect(line).not.toMatch(/\bgoverned,/);
   expect(line).not.toMatch(/already briefed this session/);
 });
 
@@ -1089,8 +1092,8 @@ test('the reason the CLI names on stderr is what the line says', async (fire: an
   });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
-  expect(reported(logs)).toContain('a.ts — already briefed this session');
-  expect(reported(logs)).not.toContain('or nothing governs');
+  expect(reported(logs)).toContain('briefed earlier  a.ts');
+  expect(reported(logs)).not.toContain('or ungoverned');
 });
 
 test('a read of files nothing governs reports nothing', async (fire: any, on: any) => {
@@ -1116,7 +1119,7 @@ test('a CLI too old to name a reason degrades to the hedge', async (fire: any, o
   harness(on, { cli: { exitCode: 0, stdout: '', stderr: '' }, logs });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
-  expect(reported(logs)).toContain('already briefed, or nothing governs them');
+  expect(reported(logs)).toContain('briefed earlier, or ungoverned');
 });
 
 test('each quiet reason gets its own pane row', async (fire: any, on: any) => {
@@ -1145,5 +1148,30 @@ test('each quiet reason gets its own pane row', async (fire: any, on: any) => {
   const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
   for (const label of ['no text', 'off-root', 'no set']) {
     expect(drawn).toContain(label);
+  }
+});
+
+test('a row puts its state in a fixed-width column', async (fire: any, on: any) => {
+  // The point of the shape: the host draws every row as `⏺ actual-cli: <text>`
+  // at one dim weight, so a scan down the transcript has only the row's own
+  // layout to land on. A constant prefix plus a padded state means the state
+  // and the detail sit at the same column on every kind of row.
+  const logs: string[] = [];
+  harness(on, { logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'row_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'npx tsc', tool_use_id: 'row_2' });
+
+  const line = logs[0];
+  expect(line.startsWith('▌ ')).toBe(true);
+  // `BRIEFED` padded to the width of the longest state, then the detail.
+  expect(line.slice(2, 2 + 9)).toBe('BRIEFED  ');
+  expect(line.slice(2 + 9)).toMatch(/^ {2}\S/);
+});
+
+test('every state is at most the column width', async (fire: any, on: any) => {
+  // A state longer than the pad would push its own row's detail out of line.
+  for (const state of ['BRIEFED', 'NO CHANGE', 'BUDGET', 'CLI ERROR']) {
+    expect(state.length).toBeLessThanOrEqual(9);
   }
 });

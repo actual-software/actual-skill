@@ -333,63 +333,66 @@ function names(files) {
   return files.map((f) => f.split('/').pop()).join(', ');
 }
 
+// A row's three columns: a state in caps, what it amounted to, then the files.
+//
+// The host draws every one of these as `⏺ actual-cli: <text>` at one dim
+// weight -- $.ui.log carries text and nothing else, no colour and no bold -- so
+// the only way to make a row findable is its shape. A bar glyph gives a column
+// of rows a left edge, and a fixed-width state in caps puts the same word in
+// the same place every time, so a scan down the transcript lands on it without
+// reading the sentence.
+//
+// The state is padded to the longest of them, which is why the detail and the
+// files line up across rows of different kinds.
+const STATE_WIDTH = 9;
+
+function row(state, detail, files) {
+  const columns = [state.padEnd(STATE_WIDTH), detail];
+  if (files) columns.push(`  ${files}`);
+  return `\u258c ${columns.join('  ')}`;
+}
+
 function reportLine(record) {
   if (!record) return null;
-  const files = (record.files ?? []).map((f) => f.split('/').pop()).join(', ');
+  const files = names(record.files ?? []);
   switch (record.outcome) {
     case 'delivered': {
       const s = record.summary ?? {};
       const n = s.decisions?.length ?? 0;
-      // The summary is parsed out of the CLI's human-readable text, which is
-      // not a contract. An earlier commit claimed a parse finding nothing
-      // falls back to a character count; it did not, and reported
-      // "briefed 0 ADRs, 0 rules" -- which reads as a failure when a brief
-      // was in fact delivered. The count is the one thing always known.
-      if (n === 0) return `actual: briefed ${s.chars ?? 0} chars — ${files}`;
+      // A brief whose text did not parse still reports its size: the count is
+      // the one thing always known, and "0 ADRs" reads as a failure.
+      if (n === 0) return row('BRIEFED', `${s.chars ?? 0} chars`, files);
       const rules =
         s.total && s.total > s.shown
           ? `${s.shown} of ${s.total} rules`
           : `${s.shown ?? 0} rules`;
-      return `actual: briefed ${n} ADR${n === 1 ? '' : 's'}, ${rules} — ${files}`;
+      return row('BRIEFED', `${n} ADR${n === 1 ? '' : 's'} \u00b7 ${rules}`, files);
     }
     case 'deduped': {
-      // The CLI names why each file was quiet, so this speaks only for the
-      // files it can. Earlier wordings asserted governance for everything
-      // named, and reported `package.json, pnpm-lock.yaml governed, already
-      // briefed this session` for a lockfile nothing governs.
-      //
-      // A CLI too old to name a reason leaves `unknown`, which degrades to
-      // the hedge rather than to a guess. Preflight warns about that CLI
-      // separately; a line that quietly picked one of the two meanings would
-      // be wrong about half the repo.
+      // Only the files this row can speak for. `unknown` is a CLI too old to
+      // name a reason, which keeps both meanings rather than picking one.
       const by = (want) =>
         (record.files ?? []).filter((f) => ((record.reasons ?? {})[f] ?? 'unknown') === want);
       const known = by('already-briefed');
       const unsure = by('unknown');
-      const parts = [];
-      if (known.length) parts.push(`${names(known)} — already briefed this session`);
-      if (unsure.length)
-        parts.push(`${names(unsure)} — already briefed, or nothing governs them`);
-      // Only the ungoverned files were quiet: see the `ungoverned` case.
-      if (parts.length === 0) return null;
-      return `actual: nothing new for ${parts.join('; ')}`;
+      const groups = [];
+      if (known.length) groups.push(`briefed earlier  ${names(known)}`);
+      if (unsure.length) groups.push(`briefed earlier, or ungoverned  ${names(unsure)}`);
+      if (groups.length === 0) return null;
+      return row('NO CHANGE', groups.join('  \u00b7  '));
     }
     case 'ungoverned':
     case 'no-text':
     case 'outside-root':
     case 'no-rule-set':
-      // Quiet for a reason that is not about this read. Most files in a repo
-      // are ungoverned, so a line on each would be noise; the other three say
-      // something about the rule set rather than the file. The `/rules-brief`
-      // pane names all four, which is where a deliberate look belongs.
+      // Quiet for a reason that is not about this read: see the pane, which
+      // names all four.
       return null;
     case 'budget':
-      return 'actual: briefing budget spent for this session, staying quiet';
+      return row('BUDGET', 'spent for this session');
     case 'cli-error':
-      return `actual: brief unavailable (${record.detail ?? 'CLI error'}) — ${files}`;
+      return row('CLI ERROR', record.detail ?? 'CLI error', files);
     default:
-      // 'unresolved', 'no-paths' and 'not-read-only' are recorded for the pane
-      // and deliberately not drawn.
       return null;
   }
 }
@@ -822,7 +825,7 @@ async function deliverBrief($, e, result, paths, ctx) {
   // $.ui.log already prefixes the plugin's name, so the line carried its own
   // prefix twice: `actual-cli: actual: briefed 2 ADRs...`.
   const report = reportLine(outcomes.get(e.tool_use_id));
-  if (report) $.ui.log(report.replace(/^actual: /, ''));
+  if (report) $.ui.log(report);
 
 
   if (!appended) return result;
