@@ -339,12 +339,24 @@ function reportLine(record) {
       return `actual: briefed ${n} ADR${n === 1 ? '' : 's'}, ${rules} — ${files}`;
     }
     case 'deduped':
-      // Not "already briefed", which reads as a claim about the files and is
-      // false: dedup is per decision, so a file never briefed by name is
-      // suppressed once the ADRs governing it have been stated through some
-      // other file. A user reading `already database.types.ts` looked for that
-      // file in the delivered rows and did not find it.
-      return `actual: ${files} governed, no rules left to brief this session`;
+      // Two different facts, and this mod cannot tell them apart.
+      //
+      // In `--claude-hook` mode the CLI returns empty stdout both for a file
+      // whose decisions were all briefed earlier and for a file nothing
+      // governs at all. (Direct `--file` mode does distinguish them: it prints
+      // "No rule document governs X." Hook mode cannot, because any text it
+      // printed would reach the model.)
+      //
+      // So earlier wordings asserted what was not known. `package.json,
+      // pnpm-lock.yaml governed, already briefed this session` was half false:
+      // package.json is governed, the lockfile is governed by nothing. Naming
+      // both and claiming governance for both made the line untrustworthy
+      // exactly where it was meant to explain a silence.
+      //
+      // The honest claim is the one thing observed -- no rules arrived -- with
+      // both reasons named. Distinguishing them needs the CLI to say which on
+      // stderr, where the model cannot see it.
+      return `actual: nothing new for ${files} — already briefed, or nothing governs them`;
     case 'budget':
       return 'actual: briefing budget spent for this session, staying quiet';
     case 'cli-error':

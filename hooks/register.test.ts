@@ -717,7 +717,7 @@ test('a governed file already briefed says so rather than nothing', async (fire:
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_3' });
   const drawn = reported(logs);
 
-  expect(drawn).toContain('no rules left to brief this session');
+  expect(drawn).toContain('nothing new for');
 });
 
 test('a CLI failure is shown, not swallowed', async (fire: any, on: any) => {
@@ -1028,7 +1028,7 @@ test('a suppressed brief reports its reason, not silence', async (fire: any, on:
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(logs.length).toBe(1);
-  expect(logs[0]).toContain('no rules left to brief this session');
+  expect(logs[0]).toContain('nothing new for');
 });
 
 test('the pane lists calls in the order they happened', async (fire: any, on: any) => {
@@ -1060,4 +1060,21 @@ test('a suppressed row says no rules are left, not that the file was briefed', a
   const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
   expect(drawn).toContain('no new');
   expect(drawn).not.toContain('already');
+});
+
+test('a suppressed brief does not claim the file is governed', async (fire: any, on: any) => {
+  // In --claude-hook mode the CLI returns empty stdout both for a file whose
+  // decisions were already briefed and for a file nothing governs, so neither
+  // can be asserted. A real session reported
+  // `package.json, pnpm-lock.yaml governed, already briefed this session`
+  // where the lockfile is governed by nothing.
+  const logs: string[] = [];
+  harness(on, { cli: { exitCode: 0, stdout: '', stderr: '' }, logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  const line = reported(logs);
+
+  expect(line).toContain('nothing new for');
+  expect(line).not.toContain('governed');
+  expect(line).not.toMatch(/already briefed this session/);
 });
