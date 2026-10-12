@@ -263,6 +263,16 @@ async function debugNote($, outcome, detail) {
 // drawing can find the call it belongs to. Bounded: a long session makes
 // thousands of tool calls and this is a convenience, not a log.
 const MAX_OUTCOMES = 200;
+// A quiet read's own outcome name, when every file was quiet for one reason.
+// `already-briefed` is left out on purpose: that is the `deduped` row, whose
+// line can also speak for a mixed call.
+const QUIET_OUTCOMES = {
+  ungoverned: 'ungoverned',
+  'nothing-to-show': 'no-text',
+  'outside-root': 'outside-root',
+  'no-rules': 'no-rule-set',
+};
+
 const outcomes = new Map();
 
 
@@ -365,10 +375,13 @@ function reportLine(record) {
       return `actual: nothing new for ${parts.join('; ')}`;
     }
     case 'ungoverned':
-      // Every file read was ungoverned. Not reported: most files in a repo
-      // are, so a line here would be noise on nearly every read. The
-      // `/rules-brief` pane still lists it, which is where a deliberate look
-      // at why a read was quiet belongs.
+    case 'no-text':
+    case 'outside-root':
+    case 'no-rule-set':
+      // Quiet for a reason that is not about this read. Most files in a repo
+      // are ungoverned, so a line on each would be noise; the other three say
+      // something about the rule set rather than the file. The `/rules-brief`
+      // pane names all four, which is where a deliberate look belongs.
       return null;
     case 'budget':
       return 'actual: briefing budget spent for this session, staying quiet';
@@ -771,9 +784,12 @@ async function deliverBrief($, e, result, paths, ctx) {
     // says which. A read whose files are all ungoverned is the common case
     // and reports nothing: in a repo of any size most files are not governed,
     // and a line on every one of them would bury the reads that matter.
+    // When every file was quiet for the same reason, the row says which. A
+    // mixed call stays `deduped`, whose line names each group.
     const kinds = new Set(paths.map((f) => reasons.get(f) ?? 'unknown'));
+    const only = kinds.size === 1 ? [...kinds][0] : null;
     recordOutcome(e.tool_use_id, {
-      outcome: kinds.size === 1 && kinds.has('ungoverned') ? 'ungoverned' : 'deduped',
+      outcome: QUIET_OUTCOMES[only] ?? 'deduped',
       files: paths,
       reasons: Object.fromEntries(reasons),
     });
@@ -842,6 +858,9 @@ function paneRows(elements) {
         delivered: 'briefed  ',
         deduped: 'no new   ',
         ungoverned: 'no rules ',
+        'no-text': 'no text  ',
+        'outside-root': 'off-root ',
+        'no-rule-set': 'no set   ',
         budget: 'budget   ',
         'cli-error': 'error    ',
         unresolved: 'no match ',

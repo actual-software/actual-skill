@@ -1118,3 +1118,32 @@ test('a CLI too old to name a reason degrades to the hedge', async (fire: any, o
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(reported(logs)).toContain('already briefed, or nothing governs them');
 });
+
+test('each quiet reason gets its own pane row', async (fire: any, on: any) => {
+  // `nothing-to-show` is a real case in a real repo: a lockfile claimed by a
+  // Storybook ADR at the score floor, which renders no rule text. Calling that
+  // a dedup would say its rules had been stated when it has none to state.
+  const tokens = ['nothing-to-show', 'outside-root', 'no-rules'];
+  let call = 0;
+  const logs: string[] = [];
+  harness(on, {
+    cli: () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: `actual rules brief: no-brief=${tokens[call++]} src/a.ts`,
+    }),
+    logs,
+  });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  for (const token of tokens) {
+    await fire.tool.call({ tool: 'Bash', command: `cat src/${token}.ts` });
+  }
+  // None of the three is about this read, so none is reported.
+  expect(logs).toEqual([]);
+
+  const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  for (const label of ['no text', 'off-root', 'no set']) {
+    expect(drawn).toContain(label);
+  }
+});
