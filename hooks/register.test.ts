@@ -1333,54 +1333,71 @@ test('a version string is still not a path', async (fire: any, on: any) => {
   expect(logs).toEqual([]);
 });
 
-test('the end of a turn summarises the session, not only the diff', async (fire: any, on: any) => {
-  // What `/rules-brief` shows, without asking. The changed-files report works
-  // off `git status`, so it says nothing on a read-only turn -- which is
-  // exactly the turn where the reads are the whole story.
-  const logs: string[] = [];
+test('the end of a turn opens the rules-brief pane', async (fire: any, on: any) => {
+  // Literally what the command does, rather than a second summary assembled
+  // here: one renderer, one set of words.
+  const opens: any[] = [];
   stopBase(on);
-  harness(on, { logs, gitStatus: '' });
+  harness(on, { gitStatus: '' });
+  on('ui.open', async (_$: any, e: any) => {
+    opens.push(e);
+    return { value: undefined };
+  });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/summary-a.ts', tool_use_id: 'sm_1' });
-  logs.length = 0;
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(opens.length).toBe(1);
+  expect(opens[0].id).toBe('rules-brief');
+  // Focused, because the host refuses anything else: `ui.open: focus is true
+  // or left out`. Opening the pane means taking focus, as the command does.
+  expect(opens[0].focus).toBe(true);
+});
+
+test('a turn that read nothing opens no pane', async (fire: any, on: any) => {
+  const opens: any[] = [];
+  stopBase(on);
+  harness(on, { gitStatus: '' });
+  on('ui.open', async (_$: any, e: any) => {
+    opens.push(e);
+    return { value: undefined };
+  });
 
   await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
 
-  const text = logs.join('\n');
-  expect(text).toContain('SESSION');
-  expect(text).toContain('1 read');
-  expect(text).toContain('1 briefed');
-  expect(text).toContain('briefed');
-  expect(text).toContain('summary-a.ts');
+  expect(opens).toEqual([]);
 });
 
-test('a session with no reads summarises nothing', async (fire: any, on: any) => {
-  const logs: string[] = [];
+test('a gate continuation does not reopen the pane', async (fire: any, on: any) => {
+  const opens: any[] = [];
   stopBase(on);
-  harness(on, { logs, gitStatus: '' });
+  harness(on, { gitStatus: '' });
+  on('ui.open', async (_$: any, e: any) => {
+    opens.push(e);
+    return { value: undefined };
+  });
 
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'cont_1' });
+  await fire.classic.Stop({
+    hook_event_name: 'Stop',
+    session_id: 's1',
+    cwd: '/repo',
+    stop_hook_active: true,
+  });
 
-  expect(logs).toEqual([]);
+  expect(opens).toEqual([]);
 });
 
-test('the pane and the summary use one set of labels', async (fire: any, on: any) => {
-  // They were written twice once already, which is how `no new` and
-  // `nothing new for` came to mean the same thing in two different words.
-  const logs: string[] = [];
-  stopBase(on);
+test('the pane names a quiet read by its reason', async (fire: any, on: any) => {
+  // `OUTCOME_LABELS` is the one table both the pane and anything else must
+  // read from; the end-of-turn report now opens this very pane rather than
+  // rebuilding it, which is what keeps them from drifting.
   harness(on, {
-    logs,
-    gitStatus: '',
     cli: { exitCode: 0, stdout: '', stderr: 'actual rules brief: no-brief=ungoverned src/u.ts' },
   });
   on('ui.render', async () => ({ type: 'engine', ref: 1 }));
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/u.ts', tool_use_id: 'lbl_1' });
-  const pane = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
-  logs.length = 0;
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
 
-  expect(pane).toContain('no rules');
-  expect(logs.join('\n')).toContain('no rules');
+  expect(await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 })).toContain('no rules');
 });

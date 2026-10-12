@@ -857,35 +857,6 @@ const OUTCOME_LABELS = {
   'not-read-only': 'writes   ',
 };
 
-// The session's reads as text, newest last: the `/rules-brief` pane's rows,
-// for somewhere a pane cannot be drawn.
-//
-// Capped, because this repeats at the end of every turn and a long session
-// would otherwise replay its whole history each time.
-const SUMMARY_ROW_CAP = 20;
-
-function summaryRows() {
-  const rows = [...outcomes.values()];
-  if (rows.length === 0) return [];
-  const shown = rows.slice(-SUMMARY_ROW_CAP);
-  const dropped = rows.length - shown.length;
-  const lines = shown.map((record) => {
-    const label = OUTCOME_LABELS[record.outcome] ?? record.outcome;
-    const files = names(record.files ?? []) || '\u2014';
-    const detail =
-      record.outcome === 'delivered'
-        ? `${record.summary?.decisions?.length ?? 0} ADR(s), ${record.summary?.shown ?? 0} rules`
-        : '';
-    return row('', `${label}  ${files}${detail ? `  ${detail}` : ''}`);
-  });
-  const counts = rows.reduce((acc, r) => ((acc[r.outcome] = (acc[r.outcome] ?? 0) + 1), acc), {});
-  const briefed = counts.delivered ?? 0;
-  const head = `${rows.length} read${rows.length === 1 ? '' : 's'} \u00b7 ${briefed} briefed${
-    dropped > 0 ? `, ${dropped} earlier row${dropped === 1 ? '' : 's'} not shown` : ''
-  }`;
-  return [row('SESSION', head), ...lines];
-}
-
 // ── end of turn ──────────────────────────────────────────────────────────────
 //
 // What governed the files this turn changed, reported once when the turn ends.
@@ -1037,12 +1008,18 @@ export function register(on, options = {}) {
   on('classic.Stop', async ($, e, next) => {
     // The gate's verdict is untouched whatever happens here.
     try {
-      // What `/rules-brief` would show, without having to ask for it. This is
-      // the report for a turn that only read: `reportTurn` works off
-      // `git status`, so a turn that changed nothing says nothing, and a
-      // read-only turn is exactly when a reader wants the session's reads.
-      if (!e?.stop_hook_active) {
-        for (const line of summaryRows()) $.ui.log(line);
+      // `/rules-brief`, run for you. Literally the same call the command
+      // makes, so there is one renderer and one set of words -- a second,
+      // text-only summary was assembled here first, and a hand-built copy of
+      // a view is how the labels came to disagree across surfaces before.
+      //
+      // Nothing to show if nothing was read, and not at a gate continuation,
+      // which would reopen it at every stop of a turn already sent back.
+      if (!e?.stop_hook_active && outcomes.size > 0) {
+        // The same arguments the command uses, focus included: the host
+        // refuses `focus: false` ("ui.open: focus is true or left out"), so a
+        // pane that opens is a pane that takes focus. Escape closes it.
+        await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
       }
       await reportTurn($, e);
     } catch {}
