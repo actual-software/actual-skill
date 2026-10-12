@@ -265,9 +265,6 @@ async function debugNote($, outcome, detail) {
 const MAX_OUTCOMES = 200;
 const outcomes = new Map();
 
-// Tool call ids whose line has been drawn, so one brief is not reported twice
-// when more than one render site is asked for the same call.
-const drawnFor = new Set();
 
 function recordOutcome(toolUseId, record) {
   if (!toolUseId) return;
@@ -313,8 +310,16 @@ function summarize(brief) {
 // about -- a command that read no governed file is the overwhelming majority,
 // and a line on every one of them would be noise rather than information.
 // The sentence for one call's outcome, without a prefix: $.ui.log adds the
-// plugin's name itself, and the drawn line adds its own marker.
-function drawnLine(record) {
+// plugin's name itself.
+//
+// Reported through $.ui.log alone. An earlier version also drew the line under
+// the tool call through `ui.render`, which looked better placed but could not
+// be relied on -- Claude Code collapses some calls into a summary row whose id
+// is not the call's, so the line vanished. Keeping both channels meant every
+// expanded call reported its brief twice, once in each, which a real session
+// showed six times over. One channel that always works beats two that
+// sometimes do.
+function reportLine(record) {
   if (!record) return null;
   const files = (record.files ?? []).map((f) => f.split('/').pop()).join(', ');
   switch (record.outcome) {
@@ -755,7 +760,7 @@ async function deliverBrief($, e, result, paths, ctx) {
   // deliberate line per brief is the report itself.
   // $.ui.log already prefixes the plugin's name, so the line carried its own
   // prefix twice: `actual-cli: actual: briefed 2 ADRs...`.
-  const report = drawnLine(outcomes.get(e.tool_use_id));
+  const report = reportLine(outcomes.get(e.tool_use_id));
   if (report) $.ui.log(report.replace(/^actual: /, ''));
 
 
@@ -845,31 +850,6 @@ export function register(on, options = {}) {
   // One dim line under the tool result that caused a brief. Keeps Claude
   // Code's own drawing and adds to it, rather than replacing it -- the command
   // output is the point and this is a footnote to it.
-  // Three sites, not one. Claude Code renders a tool call expanded as
-  // `ToolResult`, but collapses some into a summary row -- "Listed 1
-  // directory (ctrl+o to expand)" -- which is a different site. Matching
-  // `ToolResult` alone drew the line on expanded calls and silently skipped
-  // collapsed ones: in one observed session two delivered briefs produced no
-  // line while a deduped one did, which reads as the feature half working
-  // rather than as a rendering difference.
-  //
-  // All three sites carry the tool call id as `e.requestId`, so one lookup
-  // serves them, and a site with no record for its id draws nothing.
-  on('ui.render', { component: ['ToolResult', 'ToolGroup', 'ToolUse'] }, async ($, e, next) => {
-    const theirs = await next(e);
-    const line = drawnLine(outcomes.get(e.requestId));
-    if (!line) return theirs;
-    // Once per call: a collapsed group and its expanded result can both be
-    // asked to render, and a line on each would read as two briefs.
-    if (drawnFor.has(e.requestId)) return theirs;
-    drawnFor.add(e.requestId);
-    const { Box, Text } = $.ui.resolve(e);
-    return Box({
-      flexDirection: 'column',
-      children: [theirs, Text({ dimColor: true, children: [`  ⊢ ${line}`] })],
-    });
-  });
-
   // The Read tool and the shell, through one path. A brief is the same brief
   // either way, and so are the budget, the dedup record and the line drawn
   // under the call -- which is the point: two implementations of one feature

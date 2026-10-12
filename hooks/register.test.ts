@@ -651,6 +651,16 @@ function textOf(node: any): string {
 
 // Mount a site, read what it drew, and unmount -- an un-unmounted drawing
 // rejects at the end of the file.
+/**
+ * The line this call reported to the transcript, or '' when it reported none.
+ *
+ * Replaces mounting a render site: the report goes through $.ui.log, because a
+ * drawn line vanishes whenever Claude Code collapses the call.
+ */
+function reported(logs: string[]) {
+  return logs.filter((l) => !l.includes('injected')).join('\n');
+}
+
 async function drawnText(fire: any, component: string, requestId: string, props: any = {}) {
   const view = await fire.ui.mount({
     plugin: 'actual-cli',
@@ -666,18 +676,18 @@ async function drawnText(fire: any, component: string, requestId: string, props:
   }
 }
 
-test('a delivered brief draws a line under the tool result', async (fire: any, on: any) => {
-  harness(on);
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+test('a delivered brief reports a line to the transcript', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  harness(on, { logs });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_1' });
-  const drawn = await drawnText(fire, 'ToolResult', 'tu_1');
+  const drawn = reported(logs);
 
-  expect(drawn).toContain('actual: briefed');
+  expect(drawn).toContain('briefed');
   expect(drawn).toContain('a.ts');
 });
 
-test('the drawn summary reports the decision and rule counts', async (fire: any, on: any) => {
+test('the report states the decision and rule counts', async (fire: any, on: any) => {
   // Parsed out of the CLI's own text, which is not a contract -- hence a
   // summary that degrades rather than throws. This brief shows 2 of 35.
   const brief = [
@@ -688,11 +698,11 @@ test('the drawn summary reports the decision and rule counts', async (fire: any,
     '- [doc-a/R-JWT-002] MUST two.',
     '- (2 of 35 rules shown)',
   ].join('\n');
-  harness(on, { cli: { exitCode: 0, stdout: reply(brief), stderr: '' } });
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+  const logs: string[] = [];
+  harness(on, { logs, cli: { exitCode: 0, stdout: reply(brief), stderr: '' } });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_2' });
-  const drawn = await drawnText(fire, 'ToolResult', 'tu_2');
+  const drawn = reported(logs);
 
   expect(drawn).toContain('1 ADR');
   expect(drawn).toContain('2 of 35 rules');
@@ -701,43 +711,43 @@ test('the drawn summary reports the decision and rule counts', async (fire: any,
 test('a governed file already briefed says so rather than nothing', async (fire: any, on: any) => {
   // The one case where silence is correct, and therefore the one most worth
   // making visible: every bug in this mod looked exactly like this.
-  harness(on, { cli: { exitCode: 0, stdout: '', stderr: '' } });
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+  const logs: string[] = [];
+  harness(on, { logs, cli: { exitCode: 0, stdout: '', stderr: '' } });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_3' });
-  const drawn = await drawnText(fire, 'ToolResult', 'tu_3');
+  const drawn = reported(logs);
 
   expect(drawn).toContain('already briefed this session');
 });
 
 test('a CLI failure is shown, not swallowed', async (fire: any, on: any) => {
-  harness(on, { cli: { exitCode: 2, stdout: '', stderr: 'boom' } });
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+  const logs: string[] = [];
+  harness(on, { logs, cli: { exitCode: 2, stdout: '', stderr: 'boom' } });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_4' });
-  const drawn = await drawnText(fire, 'ToolResult', 'tu_4');
+  const drawn = reported(logs);
 
   expect(drawn).toContain('brief unavailable');
   expect(drawn).toContain('exit 2');
 });
 
-test('a command that read no governed file draws nothing extra', async (fire: any, on: any) => {
+test('a command that read no governed file reports nothing', async (fire: any, on: any) => {
   // A line on every tool call would be noise. The engine's own drawing stands.
-  harness(on);
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+  const logs: string[] = [];
+  harness(on, { logs });
 
   await fire.tool.call({ tool: 'Bash', command: 'npx tsc --noEmit', tool_use_id: 'tu_5' });
-  const drawn = await drawnText(fire, 'ToolResult', 'tu_5');
+  const drawn = reported(logs);
 
   expect(drawn).not.toContain('actual:');
 });
 
 test('a tool result from another call is left alone', async (fire: any, on: any) => {
-  harness(on);
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+  const logs: string[] = [];
+  harness(on, { logs });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_6' });
-  const drawn = await drawnText(fire, 'ToolResult', 'tu_other');
+  const drawn = reported(logs);
 
   expect(drawn).not.toContain('actual:');
 });
@@ -807,29 +817,29 @@ test('rule counts are summed per decision, not mixed across them', async (fire: 
     '## Complete decision',
     '- [doc-b/R-1] MUST y.',
   ].join('\n');
-  harness(on, { cli: { exitCode: 0, stdout: reply(brief), stderr: '' } });
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+  const logs: string[] = [];
+  harness(on, { logs, cli: { exitCode: 0, stdout: reply(brief), stderr: '' } });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_sum' });
-  const drawn = await drawnText(fire, 'ToolResult', 'tu_sum');
+  const drawn = reported(logs);
 
   expect(drawn).toContain('2 ADRs');
   expect(drawn).toContain('9 of 36 rules');
 });
 
-test('the drawn line names only the files that contributed a brief', async (fire: any, on: any) => {
+test('the report names only the files that contributed a brief', async (fire: any, on: any) => {
   // Observed live: `briefed 2 ADRs, 16 of 33 rules — package.json,
   // pnpm-lock.yaml`, where package.json produced all 16 rules and the lockfile
   // produced nothing. A line that exists to make briefing legible must not
   // itself overstate what was briefed.
   let call = 0;
-  const runs = harness(on, {
+  const logs: string[] = [];
+  const runs = harness(on, { logs,
     cli: () => (++call === 1 ? { exitCode: 0, stdout: reply(BRIEF), stderr: '' } : { exitCode: 0, stdout: '', stderr: '' }),
   });
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts src/b.ts', tool_use_id: 'tu_files' });
-  const drawn = await drawnText(fire, 'ToolResult', 'tu_files');
+  const drawn = reported(logs);
 
   expect(runs.length).toBe(2);
   expect(drawn).toContain('a.ts');
@@ -987,13 +997,13 @@ test('a Read and a cat of one file share the budget and the dedup record', async
 });
 
 test('a Read draws the same line a Bash read draws', async (fire: any, on: any) => {
-  harness(on, { readShaped: true });
-  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+  const logs: string[] = [];
+  harness(on, { logs, readShaped: true });
 
   await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts', tool_use_id: 'r_draw' });
-  const drawn = await drawnText(fire, 'ToolResult', 'r_draw');
+  const drawn = reported(logs);
 
-  expect(drawn).toContain('actual: briefed');
+  expect(drawn).toContain('briefed');
   expect(drawn).toContain('a.ts');
 });
 
