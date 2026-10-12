@@ -35,6 +35,8 @@ function harness(
     logs?: string[];
     // A Read result carries its text at result.file.content, not result.stdout.
     readShaped?: boolean;
+    // `git status --porcelain` output, for the end-of-turn report.
+    gitStatus?: string;
   } = {}
 ) {
   const runs: any[] = [];
@@ -83,9 +85,13 @@ function harness(
           isReadOnly: true,
         }));
   on('process.run', async (_$: any, e: any) => {
-    // The repo-root probe is not a brief; answer it without recording a run.
+    // Neither git query is a brief; answer both without recording a run.
     if (e.argv?.[0] === 'git') {
-      return { value: { exitCode: 0, stdout: `${opts.gitRoot ?? opts.root ?? '/repo'}\n`, stderr: '' } };
+      const stdout =
+        e.argv?.[1] === 'status'
+          ? opts.gitStatus ?? ''
+          : `${opts.gitRoot ?? opts.root ?? '/repo'}\n`;
+      return { value: { exitCode: 0, stdout, stderr: '' } };
     }
     runs.push(e);
     const cli = typeof opts.cli === 'function' ? opts.cli() : opts.cli;
@@ -1174,4 +1180,115 @@ test('every state is at most the column width', async (fire: any, on: any) => {
   for (const state of ['BRIEFED', 'NO CHANGE', 'BUDGET', 'CLI ERROR']) {
     expect(state.length).toBeLessThanOrEqual(9);
   }
+});
+
+// ── the end-of-turn report ──────────────────────────────────────────────────
+
+/**
+ * What Claude Code itself does at Stop: nothing, and allow it.
+ *
+ * The chain needs a base beneath the plugin or the event has no implementation,
+ * the same way `tool.call` needs one. It also doubles as the assertion that the
+ * report passes the gate's verdict through: a test that broke that would see
+ * this base's value replaced.
+ */
+function stopBase(on: any) {
+  on('classic.Stop', async () => ({ value: {} }));
+}
+
+test('the end of a turn reports what governed the files it changed', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, {
+    logs,
+    gitStatus: ' M app/lib/discover.ts\n?? app/hooks/useReadingStreakQuery.ts\n',
+    cli: { exitCode: 0, stdout: 'rules that apply:\n\n## Head\n- [doc-a/R-QCC-001] MUST one.\n- [doc-a/R-CACHE-001] MUST two.\n', stderr: '' },
+  });
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  const text = logs.join('\n');
+  expect(text).toContain('TURN');
+  expect(text).toContain('2 files changed');
+  expect(text).toContain('discover.ts');
+  // Verbose on purpose, to be cut back once there is a feel for it.
+  expect(text).toContain('R-QCC-001, R-CACHE-001');
+});
+
+test('a file the rules do not cover is reported as such, not left out', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, {
+    logs,
+    gitStatus: '?? notes.md\n',
+    cli: { exitCode: 0, stdout: 'No rule document governs notes.md.\n', stderr: '' },
+  });
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(logs.join('\n')).toContain('no rules  notes.md');
+});
+
+test('a turn that changed nothing reports nothing', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, { logs, gitStatus: '' });
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(logs).toEqual([]);
+});
+
+test('a gate continuation does not repeat the report', async (fire: any, on: any) => {
+  // The gate blocks and the turn runs on, reaching Stop again. The same list
+  // at every stop would read as new work each time.
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, { logs, gitStatus: ' M app/lib/discover.ts\n' });
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo', stop_hook_active: true });
+
+  expect(logs).toEqual([]);
+});
+
+test('the report never changes the Stop decision', async (fire: any, on: any) => {
+  // The implementation gate is a separate hook and its verdict is the one that
+  // counts. A report is not allowed to deny, allow or alter a stop.
+  on('classic.Stop', async () => ({ value: { decision: 'block', reason: 'gate says no' } }));
+  harness(on, { gitStatus: ' M app/lib/discover.ts\n' });
+
+  const out = await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+  expect(out).toEqual({ value: { decision: 'block', reason: 'gate says no' } });
+});
+
+test('a report that throws still lets the turn stop', async (fire: any, on: any) => {
+  // Governance must not go down with the reporting. $.process.run rejects here.
+  on('classic.Stop', async () => ({ value: { ok: true } }));
+  mock.env(on, {});
+  on('session.id', async () => ({ value: 's1' }));
+  on('session.cwd', async () => ({ value: '/repo' }));
+  on('session.root', async () => ({ value: '/repo' }));
+  on('ui.log', async () => ({ value: undefined }));
+  on('fs.exists', async () => ({ value: true }));
+  on('process.run', async () => { throw new Error('git is gone'); });
+
+  const out = await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+  expect(out).toEqual({ value: { ok: true } });
+});
+
+test('the files a turn changed are read off git status, renames included', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, {
+    logs,
+    // A rename names two paths; the new one is what was written.
+    gitStatus: 'R  app/old-name.ts -> app/new-name.ts\n M app/lib/discover.ts\n',
+    cli: { exitCode: 0, stdout: '## H\n- [doc/R-1] MUST x.\n', stderr: '' },
+  });
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  const text = logs.join('\n');
+  expect(text).toContain('new-name.ts');
+  expect(text).not.toContain('old-name.ts');
 });

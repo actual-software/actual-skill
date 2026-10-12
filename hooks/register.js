@@ -833,6 +833,94 @@ async function deliverBrief($, e, result, paths, ctx) {
   return appendToResult(result, e.tool, appended);
 }
 
+// ── end of turn ──────────────────────────────────────────────────────────────
+//
+// What governed the files this turn changed, reported once when the turn ends.
+//
+// Informational only. It never touches the Stop decision -- the implementation
+// gate is a separate hook and its verdict is the one that counts -- and it runs
+// inside a try/catch for the same reason: a report that failed must not take
+// governance down with it.
+//
+// Deliberately verbose to begin with, naming every rule per file, on the
+// understanding that it will be cut back once there is a feel for how much of
+// it is worth reading.
+//
+// Two things this does NOT do, worth stating so they are not mistaken for
+// oversights. It does not reach the model: output at this point is for the
+// person, and getting rules to the agent would mean blocking the stop and
+// re-entering the turn, which is what the gate already does. And it selects by
+// path, like every other brief, so it cannot surface a rule the gate found by
+// reading the diff -- a rule whose document declares no globs is invisible to
+// it here just as it is on a read.
+const TURN_FILE_CAP = 20;
+
+// Rule ids out of a brief's text: each rule line reads `- [doc-slug/R-ID] ...`.
+// A bare regex for the id itself would also match ids quoted inside prose.
+function rulesIn(text) {
+  const ids = [];
+  for (const match of text.matchAll(/^- \[([^\]]+)\]/gm)) {
+    const id = match[1].split('/').pop();
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+// Paths out of `git status --porcelain`. A rename reads `R  old -> new`: the
+// new path is the one that was written.
+function changedPaths(stdout) {
+  const paths = [];
+  for (const line of (stdout ?? '').split('\n')) {
+    if (line.length < 4) continue;
+    const path = line.slice(3).split(' -> ').pop().replace(/^"|"$/g, '');
+    if (path) paths.push(path);
+  }
+  return paths;
+}
+
+async function reportTurn($, e) {
+  // A gate continuation, not a new turn: the gate blocks and the turn runs on,
+  // and reporting again at each stop would repeat the same list.
+  if (e?.stop_hook_active) return;
+
+  const sessionId = e?.session_id ?? (await $.session.id());
+  const cwd = e?.cwd ?? (await $.session.cwd());
+  const root = await resolveRepoRoot($, sessionId, cwd);
+  const rulesDir = await resolveRulesDir($, sessionId, cwd);
+
+  const status = await $.process.run(['git', 'status', '--porcelain'], { cwd: root });
+  if (status.exitCode !== 0) return;
+
+  const all = changedPaths(status.stdout).filter((p) => !isWithin(rulesDir, `${root}/${p}`));
+  if (all.length === 0) return;
+  const paths = all.slice(0, TURN_FILE_CAP);
+
+  const governed = [];
+  const quiet = [];
+  for (const path of paths) {
+    // Direct mode, not `--claude-hook`: it is stateless, so this report neither
+    // spends the session's brief memory nor claims a decision has been stated
+    // to the agent when it has only been shown to the person.
+    const run = await $.process.run(
+      ['actual', 'rules', 'brief', '--file', path, '--rules-dir', rulesDir],
+      { cwd: root }
+    );
+    if (run.exitCode !== 0) continue;
+    const ids = rulesIn(run.stdout ?? '');
+    if (ids.length) governed.push({ path, ids });
+    else quiet.push(path);
+  }
+
+  const more = all.length > paths.length ? `, ${all.length - paths.length} more unchecked` : '';
+  $.ui.log(
+    row('TURN', `${all.length} file${all.length === 1 ? '' : 's'} changed \u00b7 ${governed.length} governed${more}`)
+  );
+  for (const { path, ids } of governed) {
+    $.ui.log(row('', `${path.split('/').pop()}  ${ids.length} rule${ids.length === 1 ? '' : 's'} \u00b7 ${ids.join(', ')}`));
+  }
+  if (quiet.length) $.ui.log(row('', `no rules  ${names(quiet)}`));
+}
+
 const PANE = 'rules-brief';
 
 // Rows for the pane, oldest first: what each Bash call did about briefing,
@@ -904,6 +992,14 @@ export function register(on, options = {}) {
   on('command.run', { command: 'rules-brief' }, async ($) => {
     await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
     return {};
+  });
+
+  on('classic.Stop', async ($, e, next) => {
+    // The gate's verdict is untouched whatever happens here.
+    try {
+      await reportTurn($, e);
+    } catch {}
+    return next(e);
   });
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {

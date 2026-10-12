@@ -1163,16 +1163,18 @@ fi
 
 # The mod is not shell, so the jq/python/node rule does not apply to it -- it
 # runs inside Claude Code and adds no system dependency. The invariant that
-# does apply is narrower: the only process it may spawn is the `actual` CLI.
+# does apply is narrower: the only processes it may spawn are the `actual` CLI
+# and the two read-only `git` queries it needs -- `rev-parse` for the
+# repository root and `status` for the files a turn changed.
 # `claude plugin validate` reports that it calls $.process.run at all; this
 # pins what it runs. Comment lines are stripped first, or the file's own
 # prose about $.process.run would count as a call site.
 MOD_CODE="${WORK}/register.nocomments.js"
 grep -vE '^[[:space:]]*(//|\*|/\*)' "${HOOKS_DIR}/register.js" > "$MOD_CODE"
 SPAWNS=$(grep -c '\$\.process\.run(' "$MOD_CODE" || true)
-ALLOWED=$(grep -cE "'actual', 'rules', 'brief'|'git', 'rev-parse'" "$MOD_CODE" || true)
-if [ "$SPAWNS" = "2" ] && [ "$ALLOWED" = "2" ]; then
-  pass "the mod spawns nothing but the actual CLI and git rev-parse"
+ALLOWED=$(grep -cE "'actual', 'rules', 'brief'|'git', 'rev-parse'|'git', 'status'" "$MOD_CODE" || true)
+if [ "$SPAWNS" = "4" ] && [ "$ALLOWED" = "4" ]; then
+  pass "the mod spawns nothing but the actual CLI, git rev-parse and git status"
 else
   fail "the mod spawns an unexpected process" \
        "process.run sites=$SPAWNS allowed=$ALLOWED"
