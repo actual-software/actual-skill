@@ -319,6 +319,12 @@ function drawnLine(record) {
     case 'delivered': {
       const s = record.summary ?? {};
       const n = s.decisions?.length ?? 0;
+      // The summary is parsed out of the CLI's human-readable text, which is
+      // not a contract. An earlier commit claimed a parse finding nothing
+      // falls back to a character count; it did not, and reported
+      // "briefed 0 ADRs, 0 rules" -- which reads as a failure when a brief
+      // was in fact delivered. The count is the one thing always known.
+      if (n === 0) return `actual: briefed ${s.chars ?? 0} chars — ${files}`;
       const rules =
         s.total && s.total > s.shown
           ? `${s.shown} of ${s.total} rules`
@@ -730,6 +736,26 @@ async function deliverBrief($, e, result, paths, ctx) {
   }
 
   if (!appended) return result;
+
+  // Report through $.ui.log as well as by drawing.
+  //
+  // A drawn line depends on which render site Claude Code uses, and it
+  // collapses some calls into a summary row whose own id is not any member
+  // call's tool_use_id -- so the lookup misses and nothing appears. Observed
+  // twice: a session where two delivered briefs drew no line while a deduped
+  // one did, and again after widening the matcher to ToolGroup and ToolUse,
+  // because the id a group carries is not the id the record is under.
+  //
+  // $.ui.log writes a dim transcript line the model does not read. It depends
+  // on no render site, so collapsing cannot hide it.
+  //
+  // This reverses an invariant added two commits earlier -- that the mod logs
+  // nothing unless debugging. That rule was about leftover debug noise
+  // reaching a user's transcript, which is still true of `EX=true`. One
+  // deliberate line per brief is the report itself.
+  const report = drawnLine(outcomes.get(e.tool_use_id));
+  if (report) $.ui.log(report);
+
   return appendToResult(result, e.tool, appended);
 }
 

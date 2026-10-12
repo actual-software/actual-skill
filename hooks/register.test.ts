@@ -892,16 +892,38 @@ test('nothing is appended when the debug switch is off', async (fire: any, on: a
   expect(r.result.stdout).toBe('TOOL OUTPUT');
 });
 
-test('nothing is written to the transcript on a path that briefs', async (fire: any, on: any) => {
-  // A stray $.ui.log left in from debugging reached a real session as
-  // `actual-cli: EX=true type=boolean`. The transcript is the user's, not a
-  // scratch pad: the only line this mod may write there is the budget line,
-  // and only under the debug switch.
+test('a briefed call reports exactly one line to the transcript', async (fire: any, on: any) => {
+  // Reported deliberately, because a drawn line depends on the render site
+  // Claude Code picks and it hides the line when it collapses a call.
+  //
+  // The earlier rule here was that the mod logs nothing unless debugging. That
+  // was about leftover debug noise -- a real session once saw
+  // `EX=true type=boolean` -- and that is still forbidden. One intentional
+  // line per brief is the report itself, which is different.
   const logs: string[] = [];
   harness(on, { logs });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(logs.length).toBe(1);
+  expect(logs[0]).toContain('actual: briefed');
+  expect(logs[0]).toContain('a.ts');
+});
+
+test('a call that briefs nothing reports nothing', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  harness(on, { logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'npx tsc --noEmit' });
   expect(logs).toEqual([]);
+});
+
+test('a brief whose text does not parse still reports its size', async (fire: any, on: any) => {
+  // "briefed 0 ADRs, 0 rules" reads as a failure when a brief was delivered.
+  const logs: string[] = [];
+  harness(on, { cli: { exitCode: 0, stdout: reply('a line with no heading'), stderr: '' }, logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(logs[0]).toMatch(/briefed \d+ chars/);
 });
 
 test('with the debug switch on, the only logged line is the budget', async (fire: any, on: any) => {
@@ -909,8 +931,10 @@ test('with the debug switch on, the only logged line is the budget', async (fire
   harness(on, { env: { ACTUAL_HOOK_DEBUG: '1' }, logs });
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
-  expect(logs.length).toBe(1);
-  expect(logs[0]).toContain('injected');
+  // The report, plus the budget line the debug switch adds.
+  expect(logs.length).toBe(2);
+  expect(logs.some((l) => l.includes('injected'))).toBe(true);
+  expect(logs.some((l) => l.includes('actual: briefed'))).toBe(true);
 });
 
 // --- The Read tool, through the same path ---------------------------------
