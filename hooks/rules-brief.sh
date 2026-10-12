@@ -67,8 +67,10 @@ cd "$repo_root" 2>/dev/null || true
 reply=$(printf '%s' "$payload" | actual rules brief --claude-hook --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 
-# Silence is the whole contract here, which also means a brief that never
-# arrives is indistinguishable from a file with no rules -- and a PostToolUse
+# Silence is the whole contract here: on stdout a brief that never arrives
+# looks exactly like a file with no rules. The CLI separates the two on stderr
+# as `no-brief=<token>`; this hook does not act on it, but the debug stream
+# below carries it, so a quiet read can be explained -- and a PostToolUse
 # hook that hits its timeout is cancelled with its output discarded and nothing
 # shown to anyone, so there is normally no thread to pull at all. ACTUAL_HOOK_DEBUG
 # is the thread: it echoes the CLI's exit status and stderr to this hook's own

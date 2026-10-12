@@ -1078,3 +1078,43 @@ test('a suppressed brief does not claim the file is governed', async (fire: any,
   expect(line).not.toContain('governed');
   expect(line).not.toMatch(/already briefed this session/);
 });
+
+test('the reason the CLI names on stderr is what the line says', async (fire: any, on: any) => {
+  // Hook-mode stdout carries the brief the model reads, so it cannot explain
+  // itself. The CLI names the reason on stderr as `no-brief=<token>`.
+  const logs: string[] = [];
+  harness(on, {
+    cli: { exitCode: 0, stdout: '', stderr: 'actual rules brief: no-brief=already-briefed src/a.ts' },
+    logs,
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(reported(logs)).toContain('a.ts — already briefed this session');
+  expect(reported(logs)).not.toContain('or nothing governs');
+});
+
+test('a read of files nothing governs reports nothing', async (fire: any, on: any) => {
+  // Most files in a repo are ungoverned, so a line on each would bury the
+  // reads that matter. The pane still lists it.
+  const logs: string[] = [];
+  harness(on, {
+    cli: { exitCode: 0, stdout: '', stderr: 'actual rules brief: no-brief=ungoverned src/a.ts' },
+    logs,
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'ung_1' });
+  expect(logs).toEqual([]);
+
+  const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  expect(drawn).toContain('no rules');
+});
+
+test('a CLI too old to name a reason degrades to the hedge', async (fire: any, on: any) => {
+  // Not to a guess: picking one of the two meanings would be wrong about half
+  // the files in a repo.
+  const logs: string[] = [];
+  harness(on, { cli: { exitCode: 0, stdout: '', stderr: '' }, logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  expect(reported(logs)).toContain('already briefed, or nothing governs them');
+});

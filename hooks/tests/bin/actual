@@ -149,6 +149,12 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
     crash)
       echo "thread 'main' panicked at src/cli/commands/rules_brief.rs:1" >&2
       exit 101 ;;
+    no-brief-ungoverned)
+      # The real CLI names why it stayed quiet on stderr, where neither the
+      # model nor the user sees it. Silent stdout, exit 0, same as a brief
+      # that was suppressed -- the token is the only thing that separates them.
+      echo "actual rules brief: no-brief=ungoverned src/a.ts" >&2
+      exit 0 ;;
     garbage)
       echo "not json at all"
       exit 0 ;;

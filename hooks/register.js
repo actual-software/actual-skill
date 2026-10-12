@@ -319,6 +319,10 @@ function summarize(brief) {
 // expanded call reported its brief twice, once in each, which a real session
 // showed six times over. One channel that always works beats two that
 // sometimes do.
+function names(files) {
+  return files.map((f) => f.split('/').pop()).join(', ');
+}
+
 function reportLine(record) {
   if (!record) return null;
   const files = (record.files ?? []).map((f) => f.split('/').pop()).join(', ');
@@ -338,25 +342,34 @@ function reportLine(record) {
           : `${s.shown ?? 0} rules`;
       return `actual: briefed ${n} ADR${n === 1 ? '' : 's'}, ${rules} — ${files}`;
     }
-    case 'deduped':
-      // Two different facts, and this mod cannot tell them apart.
+    case 'deduped': {
+      // The CLI names why each file was quiet, so this speaks only for the
+      // files it can. Earlier wordings asserted governance for everything
+      // named, and reported `package.json, pnpm-lock.yaml governed, already
+      // briefed this session` for a lockfile nothing governs.
       //
-      // In `--claude-hook` mode the CLI returns empty stdout both for a file
-      // whose decisions were all briefed earlier and for a file nothing
-      // governs at all. (Direct `--file` mode does distinguish them: it prints
-      // "No rule document governs X." Hook mode cannot, because any text it
-      // printed would reach the model.)
-      //
-      // So earlier wordings asserted what was not known. `package.json,
-      // pnpm-lock.yaml governed, already briefed this session` was half false:
-      // package.json is governed, the lockfile is governed by nothing. Naming
-      // both and claiming governance for both made the line untrustworthy
-      // exactly where it was meant to explain a silence.
-      //
-      // The honest claim is the one thing observed -- no rules arrived -- with
-      // both reasons named. Distinguishing them needs the CLI to say which on
-      // stderr, where the model cannot see it.
-      return `actual: nothing new for ${files} — already briefed, or nothing governs them`;
+      // A CLI too old to name a reason leaves `unknown`, which degrades to
+      // the hedge rather than to a guess. Preflight warns about that CLI
+      // separately; a line that quietly picked one of the two meanings would
+      // be wrong about half the repo.
+      const by = (want) =>
+        (record.files ?? []).filter((f) => ((record.reasons ?? {})[f] ?? 'unknown') === want);
+      const known = by('already-briefed');
+      const unsure = by('unknown');
+      const parts = [];
+      if (known.length) parts.push(`${names(known)} — already briefed this session`);
+      if (unsure.length)
+        parts.push(`${names(unsure)} — already briefed, or nothing governs them`);
+      // Only the ungoverned files were quiet: see the `ungoverned` case.
+      if (parts.length === 0) return null;
+      return `actual: nothing new for ${parts.join('; ')}`;
+    }
+    case 'ungoverned':
+      // Every file read was ungoverned. Not reported: most files in a repo
+      // are, so a line here would be noise on nearly every read. The
+      // `/rules-brief` pane still lists it, which is where a deliberate look
+      // at why a read was quiet belongs.
+      return null;
     case 'budget':
       return 'actual: briefing budget spent for this session, staying quiet';
     case 'cli-error':
@@ -683,6 +696,10 @@ async function deliverBrief($, e, result, paths, ctx) {
   // nothing, which is exactly the kind of thing this line exists to make
   // visible and so must not itself misstate.
   const briefedFiles = [];
+  // Why each quiet file was quiet, from the CLI's stderr. Hook-mode stdout
+  // cannot say -- it carries the brief the model reads -- so the reason is
+  // named on stderr as `no-brief=<token>`, which the model never sees.
+  const reasons = new Map();
   for (const filePath of paths) {
     const run = await $.process.run(
       [
@@ -696,6 +713,8 @@ async function deliverBrief($, e, result, paths, ctx) {
       cliError = `exit ${run.exitCode}`;
       continue;
     }
+    const reason = /no-brief=([a-z-]+)/.exec(run.stderr ?? '')?.[1];
+    if (reason) reasons.set(filePath, reason);
     const brief = briefFrom(run.stdout);
     if (!brief) continue;
 
@@ -748,7 +767,16 @@ async function deliverBrief($, e, result, paths, ctx) {
     // decision has already been briefed this session. The single most
     // useful thing to be able to see, because it is the one case where
     // silence is correct.
-    recordOutcome(e.tool_use_id, { outcome: 'deduped', files: paths });
+    // One outcome name, two very different facts, which is why the CLI now
+    // says which. A read whose files are all ungoverned is the common case
+    // and reports nothing: in a repo of any size most files are not governed,
+    // and a line on every one of them would bury the reads that matter.
+    const kinds = new Set(paths.map((f) => reasons.get(f) ?? 'unknown'));
+    recordOutcome(e.tool_use_id, {
+      outcome: kinds.size === 1 && kinds.has('ungoverned') ? 'ungoverned' : 'deduped',
+      files: paths,
+      reasons: Object.fromEntries(reasons),
+    });
     const note = await debugNote($, 'not briefed',
       `every decision for ${paths.join(', ')} was already briefed this session`);
     if (note) appended = note;
@@ -813,6 +841,7 @@ function paneRows(elements) {
       {
         delivered: 'briefed  ',
         deduped: 'no new   ',
+        ungoverned: 'no rules ',
         budget: 'budget   ',
         'cli-error': 'error    ',
         unresolved: 'no match ',

@@ -1092,6 +1092,14 @@ else
   fail "debug switch did not explain the drop" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
 fi
 
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-brief-ungoverned ACTUAL_HOOK_DEBUG=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] \
+   && grep -q "cli-stderr:.*no-brief=ungoverned" "${WORK}/err"; then
+  pass "the CLI's reason for staying quiet reaches the debug stream, not stdout"
+else
+  fail "debug switch did not carry the no-brief reason" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
 st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=crash ACTUAL_HOOK_DEBUG=1)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] \
    && grep -q "cli-stderr:.*panicked" "${WORK}/err"; then
