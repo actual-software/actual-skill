@@ -33,6 +33,8 @@ function harness(
     // Collects every $.ui.log line, so a test can assert the mod writes
     // nothing to the user's transcript except what it means to.
     logs?: string[];
+    // A Read result carries its text at result.file.content, not result.stdout.
+    readShaped?: boolean;
   } = {}
 ) {
   const runs: any[] = [];
@@ -65,12 +67,21 @@ function harness(
   // Shaped like a real Bash tool result, probed from a live session: `text`
   // is the string Claude reads, `result` is a structured object, and
   // `isReadOnly` is Claude Code's own read/write verdict.
-  on('tool.call', async () => opts.tool ?? {
-    ref: 1,
-    result: { stdout: 'TOOL OUTPUT', stderr: '', interrupted: false, isImage: false },
-    text: 'TOOL OUTPUT',
-    isReadOnly: true,
-  });
+  on('tool.call', async () =>
+    opts.tool ??
+    (opts.readShaped
+      ? {
+          ref: 1,
+          result: { type: 'text', file: { filePath: '/repo/src/a.ts', content: 'TOOL OUTPUT' } },
+          text: 'TOOL OUTPUT',
+          isReadOnly: true,
+        }
+      : {
+          ref: 1,
+          result: { stdout: 'TOOL OUTPUT', stderr: '', interrupted: false, isImage: false },
+          text: 'TOOL OUTPUT',
+          isReadOnly: true,
+        }));
   on('process.run', async (_$: any, e: any) => {
     // The repo-root probe is not a brief; answer it without recording a run.
     if (e.argv?.[0] === 'git') {
@@ -900,4 +911,74 @@ test('with the debug switch on, the only logged line is the budget', async (fire
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(logs.length).toBe(1);
   expect(logs[0]).toContain('injected');
+});
+
+// --- The Read tool, through the same path ---------------------------------
+
+test('a Read is briefed, into the field a Read result carries', async (fire: any, on: any) => {
+  // Probed in a live session: Bash results carry result.stdout, Read results
+  // carry result.file.content, and the `text` field on both reaches the model
+  // on neither. Appending to the wrong one is silent -- the brief simply never
+  // arrives -- which is why each is pinned.
+  const runs = harness(on, { readShaped: true });
+  const r = await fire.tool.call({
+    tool: 'Read',
+    file_path: '/repo/src/a.ts',
+    tool_use_id: 'r_1',
+  });
+
+  expect(runs.length).toBe(1);
+  expect(r.result.file.content).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+  // The rest of the result is passed through untouched.
+  expect(r.result.type).toBe('text');
+  expect(r.result.file.filePath).toBe('/repo/src/a.ts');
+});
+
+test('a Read takes its path from the event, not from parsing', async (fire: any, on: any) => {
+  const runs = harness(on, { readShaped: true });
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/pkg/api/src/deep.ts' });
+
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/pkg/api/src/deep.ts');
+});
+
+test('a Read and a cat of one file share the budget and the dedup record', async (fire: any, on: any) => {
+  // The whole reason for one code path: before this, the Read hook and the mod
+  // kept separate books, and a file read both ways was briefed twice.
+  let call = 0;
+  const runs = harness(on, {
+    readShaped: true,
+    cli: () => (++call === 1 ? { exitCode: 0, stdout: reply(BRIEF), stderr: '' } : { exitCode: 0, stdout: '', stderr: '' }),
+  });
+
+  const first = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
+  expect(first.result.file.content).toContain(BRIEF);
+
+  // The CLI now reports nothing new, as it would for a decision already briefed.
+  const second = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
+  expect(second.result.file.content).toBe('TOOL OUTPUT');
+  expect(runs.length).toBe(2);
+});
+
+test('a Read draws the same line a Bash read draws', async (fire: any, on: any) => {
+  harness(on, { readShaped: true });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts', tool_use_id: 'r_draw' });
+  const drawn = await drawnText(fire, 'ToolResult', 'r_draw');
+
+  expect(drawn).toContain('actual: briefed');
+  expect(drawn).toContain('a.ts');
+});
+
+test('a result whose readable field is missing is left alone', async (fire: any, on: any) => {
+  // A tool shape this mod does not know. Guessing where the text lives could
+  // overwrite a result rather than annotate it, so it declines.
+  const runs = harness(on, {
+    tool: { ref: 1, result: { type: 'image', file: {} }, text: 'x', isReadOnly: true },
+  });
+  const r = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
+
+  expect(runs.length).toBe(0);
+  expect(r.result.type).toBe('image');
 });

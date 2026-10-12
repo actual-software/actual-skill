@@ -200,13 +200,44 @@ function candidateTokens(command) {
 // identical from a transcript. Three sessions were spent unable to tell them
 // apart. The line rides out on the tool result, because $.ui.log does not
 // reach `claude -p`, and it is debug-gated for that reason.
+// Where each tool's result carries the text Claude reads, and where a brief
+// therefore has to go.
+//
+// Both were established by appending a distinct marker to every candidate
+// field in a live session and asking which came back, because both times the
+// obvious answer was wrong. A `text` field sits on both results and reaches
+// the model on neither.
+//
+//   Bash  ->  result.stdout            (result is {stdout, stderr, ...})
+//   Read  ->  result.file.content      (result is {type, file})
+//
+// A tool whose shape is not one of these returns null and is left alone: the
+// brief is advisory, and a guess at where to put it could overwrite a tool
+// result instead of annotating it.
+function readableField(result, tool) {
+  if (tool === 'Bash' && typeof result?.result?.stdout === 'string') return 'stdout';
+  if (tool === 'Read' && typeof result?.result?.file?.content === 'string') return 'content';
+  return null;
+}
+
+function appendToResult(result, tool, text) {
+  const field = readableField(result, tool);
+  if (!text || field === null) return result;
+  if (field === 'stdout') {
+    return { ...result, result: { ...result.result, stdout: `${result.result.stdout}\n\n${text}` } };
+  }
+  const file = result.result.file;
+  return {
+    ...result,
+    result: { ...result.result, file: { ...file, content: `${file.content}\n\n${text}` } },
+  };
+}
+
 // Append a debug line to a tool result, leaving everything else as it was.
 // Returns the result untouched when there is no line, so the non-debug path
 // allocates nothing.
-function withNote(result, note) {
-  if (!note) return result;
-  if (typeof result?.result?.stdout !== 'string') return result;
-  return { ...result, result: { ...result.result, stdout: `${result.result.stdout}\n\n${note}` } };
+function withNote(result, tool, note) {
+  return appendToResult(result, tool, note);
 }
 
 async function debugNote($, outcome, detail) {
@@ -590,6 +621,114 @@ async function optedOut($) {
   return planGate === 'off' || briefSwitch === 'off' || subprocess === '1';
 }
 
+// Everything that happens once a set of governed files is in hand: the
+// budget, the CLI call per file, the record, and the text appended to the
+// result. Shared by the shell path and the Read path so neither can drift
+// from the other -- the divergence that produced every key bug in this mod.
+async function deliverBrief($, e, result, paths, ctx) {
+  const { cwd, sessionId, rulesDir, options } = ctx;
+  const resolved = mergeSettings(await readEnvSettings($), options);
+  const cap = Number.isFinite(resolved.maxSessionChars)
+    ? resolved.maxSessionChars
+    : DEFAULT_MAX_SESSION_CHARS;
+
+  let remaining = spendable(sessionId, cap);
+  if (remaining <= 0) {
+    recordOutcome(e.tool_use_id, { outcome: 'budget', files: paths });
+    return withNote(result, e.tool, await debugNote($, 'not briefed', `session budget of ${cap} chars is spent`));
+  }
+
+  let appended = '';
+  let exhausted = false;
+  let cliError = null;
+  const summaries = [];
+  // Which files actually contributed, as opposed to which resolved. A
+  // command naming two governed files where only one has anything new to
+  // say must not be reported as having briefed both: `package.json,
+  // pnpm-lock.yaml` read as two sources when the lockfile contributed
+  // nothing, which is exactly the kind of thing this line exists to make
+  // visible and so must not itself misstate.
+  const briefedFiles = [];
+  for (const filePath of paths) {
+    const run = await $.process.run(
+      [
+        'actual', 'rules', 'brief', '--claude-hook',
+        '--rules-dir', rulesDir,
+        ...cliLimits(resolved),
+      ],
+      { stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }), cwd }
+    );
+    if (run.exitCode !== 0) {
+      cliError = `exit ${run.exitCode}`;
+      continue;
+    }
+    const brief = briefFrom(run.stdout);
+    if (!brief) continue;
+
+    // A brief that does not fit is dropped whole, and the budget is
+    // declared spent. Taking the next, smaller brief instead would make
+    // which rules an agent sees depend on the order it happened to read
+    // files in.
+    if (brief.length > remaining) {
+      exhausted = true;
+      break;
+    }
+    appended += (appended ? '\n\n' : '') + brief;
+    remaining -= brief.length;
+    summaries.push(summarize(brief));
+    briefedFiles.push(filePath);
+  }
+
+  if (exhausted) {
+    // Spend the rest of the budget so the notice is emitted once, not on
+    // every subsequent read.
+    spend(sessionId, cap);
+    // Claude is told as well as the user, deliberately. The drawn toast is
+    // for the person watching; Claude still needs to know that briefing has
+    // stopped, or it is back to not being able to tell silence from a file
+    // no rule governs.
+    appended += (appended ? '\n\n' : '') + EXHAUSTED_NOTICE;
+    $.ui.toast('Actual rule briefing has reached its per-session context budget.');
+  } else if (appended) {
+    spend(sessionId, appended.length);
+  }
+
+  if (appended) {
+    // One record for the call, merging what each file contributed.
+    recordOutcome(e.tool_use_id, {
+      outcome: exhausted ? 'budget' : 'delivered',
+      files: briefedFiles,
+      // Kept so the pane can still show what resolved but said nothing.
+      resolved: paths,
+      summary: {
+        decisions: summaries.flatMap((x) => x.decisions),
+        shown: summaries.reduce((n, x) => n + x.shown, 0),
+        total: summaries.reduce((n, x) => n + x.total, 0),
+        chars: appended.length,
+      },
+    });
+  } else if (cliError) {
+    recordOutcome(e.tool_use_id, { outcome: 'cli-error', files: paths, detail: cliError });
+  } else {
+    // Resolved a governed file and the CLI said nothing: every applicable
+    // decision has already been briefed this session. The single most
+    // useful thing to be able to see, because it is the one case where
+    // silence is correct.
+    recordOutcome(e.tool_use_id, { outcome: 'deduped', files: paths });
+    const note = await debugNote($, 'not briefed',
+      `every decision for ${paths.join(', ')} was already briefed this session`);
+    if (note) appended = note;
+  }
+
+  if (options.debug || (await $.env.get('ACTUAL_HOOK_DEBUG'))) {
+    const line = await budgetLine($, sessionId, cap);
+    if (line) appended += (appended ? '\n\n' : '') + line;
+  }
+
+  if (!appended) return result;
+  return appendToResult(result, e.tool, appended);
+}
+
 const PANE = 'rules-brief';
 
 // Rows for the pane, newest first: what each recent Bash call did about
@@ -682,7 +821,24 @@ export function register(on, options = {}) {
     });
   });
 
-  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+  // The Read tool and the shell, through one path. A brief is the same brief
+  // either way, and so are the budget, the dedup record and the line drawn
+  // under the call -- which is the point: two implementations of one feature
+  // produced four separate bugs where they computed the same key differently.
+  // hooks/rules-brief.sh is registered on PostToolUse:Read and does the same
+  // job as this mod, for versions of Claude Code that cannot load a mod. Where
+  // the mod does load, it stands the hook down rather than briefing beside it:
+  // two deliveries of the same brief, one of them with no budget, no record
+  // and nothing drawn.
+  //
+  // Verified both ways on 2.1.287: answering this event without calling next
+  // stops the settings hook running, and passing it through lets it run.
+  on('classic.PostToolUse', async ($, e, next) => {
+    if (e?.tool_name === 'Read') return {};
+    return next(e);
+  });
+
+  on('tool.call', { tool: ['Bash', 'Read'] }, async ($, e, next) => {
     // Let the command run first. Briefing is advisory, so it must never delay
     // or gate the tool, and a command that fails has nothing worth briefing.
     const result = await next(e);
@@ -694,12 +850,14 @@ export function register(on, options = {}) {
       // and absent for anything it could not classify -- both mean no brief.
       if (result?.isReadOnly !== true) {
         recordOutcome(e.tool_use_id, { outcome: 'not-read-only' });
-        return withNote(result, await debugNote($, 'not briefed', 'Claude Code did not mark this command read-only'));
+        return withNote(result, e.tool, await debugNote($, 'not briefed', 'Claude Code did not mark this command read-only'));
       }
-      // result.stdout is the string Claude reads. Verified by appending a
-      // marker to each candidate field in a live session: only the one in
-      // result.stdout came back.
-      if (typeof result?.result?.stdout !== 'string') return result;
+      // The field Claude reads differs per tool and is never the obvious one.
+      // Bail before any work if this result does not carry it.
+      if (readableField(result, e.tool) === null) {
+        recordOutcome(e.tool_use_id, { outcome: 'no-readable-field' });
+        return result;
+      }
 
       const [cwd, root, sessionId] = await Promise.all([
         $.session.cwd(),
@@ -711,6 +869,17 @@ export function register(on, options = {}) {
       const rulesDir = await resolveRulesDir($, sessionId, cwd);
       if (!rulesDir) return result;
       const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+
+      // A Read names its file outright, already absolute. Only the shell
+      // needs anything parsed out of it.
+      if (e.tool === 'Read') {
+        const named = typeof e.file_path === 'string' ? normalizePath(e.file_path) : null;
+        if (!named) {
+          recordOutcome(e.tool_use_id, { outcome: 'no-paths' });
+          return withNote(result, e.tool, await debugNote($, 'not briefed', 'the Read named no file'));
+        }
+        return await deliverBrief($, e, result, [named], { cwd, sessionId, rulesDir, repoRoot, options });
+      }
 
       const found = candidateTokens(e.command);
 
@@ -727,7 +896,7 @@ export function register(on, options = {}) {
       }
       if (!found || found.tokens.length === 0) {
         recordOutcome(e.tool_use_id, { outcome: 'no-paths' });
-        return withNote(result, await debugNote($, 'not briefed', 'the command named no path-shaped token'));
+        return withNote(result, e.tool, await debugNote($, 'not briefed', 'the command named no path-shaped token'));
       }
       const shellCwd = shellCwds.get(sessionId) ?? cwd;
 
@@ -773,113 +942,11 @@ export function register(on, options = {}) {
         // Tokens that looked like paths but resolved to nothing inside the
         // repository. Common and uninteresting on its own; the pane shows it.
         recordOutcome(e.tool_use_id, { outcome: 'unresolved', tokens: found.tokens });
-        return withNote(result, await debugNote($, 'not briefed',
+        return withNote(result, e.tool, await debugNote($, 'not briefed',
           `no token resolved to a governed file inside the repo: ${found.tokens.join(', ')}`));
       }
 
-      const resolved = mergeSettings(await readEnvSettings($), options);
-      const cap = Number.isFinite(resolved.maxSessionChars)
-        ? resolved.maxSessionChars
-        : DEFAULT_MAX_SESSION_CHARS;
-
-      let remaining = spendable(sessionId, cap);
-      if (remaining <= 0) {
-        recordOutcome(e.tool_use_id, { outcome: 'budget', files: paths });
-        return withNote(result, await debugNote($, 'not briefed', `session budget of ${cap} chars is spent`));
-      }
-
-      let appended = '';
-      let exhausted = false;
-      let cliError = null;
-      const summaries = [];
-      // Which files actually contributed, as opposed to which resolved. A
-      // command naming two governed files where only one has anything new to
-      // say must not be reported as having briefed both: `package.json,
-      // pnpm-lock.yaml` read as two sources when the lockfile contributed
-      // nothing, which is exactly the kind of thing this line exists to make
-      // visible and so must not itself misstate.
-      const briefedFiles = [];
-      for (const filePath of paths) {
-        const run = await $.process.run(
-          [
-            'actual', 'rules', 'brief', '--claude-hook',
-            '--rules-dir', rulesDir,
-            ...cliLimits(resolved),
-          ],
-          { stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }), cwd }
-        );
-        if (run.exitCode !== 0) {
-          cliError = `exit ${run.exitCode}`;
-          continue;
-        }
-        const brief = briefFrom(run.stdout);
-        if (!brief) continue;
-
-        // A brief that does not fit is dropped whole, and the budget is
-        // declared spent. Taking the next, smaller brief instead would make
-        // which rules an agent sees depend on the order it happened to read
-        // files in.
-        if (brief.length > remaining) {
-          exhausted = true;
-          break;
-        }
-        appended += (appended ? '\n\n' : '') + brief;
-        remaining -= brief.length;
-        summaries.push(summarize(brief));
-        briefedFiles.push(filePath);
-      }
-
-      if (exhausted) {
-        // Spend the rest of the budget so the notice is emitted once, not on
-        // every subsequent read.
-        spend(sessionId, cap);
-        // Claude is told as well as the user, deliberately. The drawn toast is
-        // for the person watching; Claude still needs to know that briefing has
-        // stopped, or it is back to not being able to tell silence from a file
-        // no rule governs.
-        appended += (appended ? '\n\n' : '') + EXHAUSTED_NOTICE;
-        $.ui.toast('Actual rule briefing has reached its per-session context budget.');
-      } else if (appended) {
-        spend(sessionId, appended.length);
-      }
-
-      if (appended) {
-        // One record for the call, merging what each file contributed.
-        recordOutcome(e.tool_use_id, {
-          outcome: exhausted ? 'budget' : 'delivered',
-          files: briefedFiles,
-          // Kept so the pane can still show what resolved but said nothing.
-          resolved: paths,
-          summary: {
-            decisions: summaries.flatMap((x) => x.decisions),
-            shown: summaries.reduce((n, x) => n + x.shown, 0),
-            total: summaries.reduce((n, x) => n + x.total, 0),
-            chars: appended.length,
-          },
-        });
-      } else if (cliError) {
-        recordOutcome(e.tool_use_id, { outcome: 'cli-error', files: paths, detail: cliError });
-      } else {
-        // Resolved a governed file and the CLI said nothing: every applicable
-        // decision has already been briefed this session. The single most
-        // useful thing to be able to see, because it is the one case where
-        // silence is correct.
-        recordOutcome(e.tool_use_id, { outcome: 'deduped', files: paths });
-        const note = await debugNote($, 'not briefed',
-          `every decision for ${paths.join(', ')} was already briefed this session`);
-        if (note) appended = note;
-      }
-
-      if (options.debug || (await $.env.get('ACTUAL_HOOK_DEBUG'))) {
-        const line = await budgetLine($, sessionId, cap);
-        if (line) appended += (appended ? '\n\n' : '') + line;
-      }
-
-      if (!appended) return result;
-      return {
-        ...result,
-        result: { ...result.result, stdout: `${result.result.stdout}\n\n${appended}` },
-      };
+      return await deliverBrief($, e, result, paths, { cwd, sessionId, rulesDir, repoRoot, options });
     } catch {
       // Fail open, silently, exactly as the shell hook does. A governance aid
       // that disturbs the agent's loop when it malfunctions is worse than one
