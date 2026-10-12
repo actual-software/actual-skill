@@ -1292,3 +1292,43 @@ test('the files a turn changed are read off git status, renames included', async
   expect(text).toContain('new-name.ts');
   expect(text).not.toContain('old-name.ts');
 });
+
+test('an absolute path in a command is a candidate', async (fire: any, on: any) => {
+  // The miss that made briefing look intermittent. Claude Code's Bash tool
+  // writes absolute paths freely, and the token pattern required the first
+  // character to be a word character or a dot, so every one of them was
+  // rejected. A reported session ran three reads of absolute paths and briefed
+  // nothing; the same reads written relatively briefed correctly.
+  const logs: string[] = [];
+  harness(on, { logs, root: '/repo' });
+
+  await fire.tool.call({
+    tool: 'Bash',
+    command: "sed -n '1,20p' /repo/app/lib/query-keys.ts",
+    tool_use_id: 'abs_1',
+  });
+
+  expect(reported(logs)).toContain('BRIEFED');
+  expect(reported(logs)).toContain('query-keys.ts');
+});
+
+test('a home-relative path is a candidate', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  const runs = harness(on, { logs, root: '/repo' });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat ~/notes/a.ts', tool_use_id: 'abs_2' });
+  // `~` is not expanded here, so where it resolves is another question. What
+  // this holds is that the token reached resolution at all: the CLI was asked
+  // about it rather than the command being discarded as naming no path.
+  expect(runs.length).toBeGreaterThan(0);
+});
+
+test('a version string is still not a path', async (fire: any, on: any) => {
+  // The reason the extension must start with a letter, kept honest while the
+  // leading-slash case was added.
+  const logs: string[] = [];
+  harness(on, { logs });
+
+  await fire.tool.call({ tool: 'Bash', command: 'echo "=== jwt 9.0.3 API ==="', tool_use_id: 'abs_3' });
+  expect(logs).toEqual([]);
+});

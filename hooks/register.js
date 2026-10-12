@@ -92,7 +92,14 @@
 // commands, the version string in `echo "=== jwt 9.0.3 API evidence ==="`
 // matched a digits-allowed pattern and became a candidate path; `.ts`, `.md`,
 // `.json`, `.cjs`, `.tf`, `.yaml` and `.d.ts` all still match.
-const PATH_TOKEN = /^[\w.][\w./-]*\.[A-Za-z][A-Za-z0-9]{0,5}$/;
+//
+// A leading `/` or `~/` is allowed. Without it every absolute path was
+// rejected, because the first character had to be a word character or a dot --
+// and Claude Code's Bash tool writes absolute paths freely. A reported session
+// ran `sed -n '1,20p' /Users/.../app/lib/query-keys.ts` and two `cat`s of
+// absolute paths, and all three briefed nothing while the same reads written
+// relatively briefed correctly, which made the whole feature look intermittent.
+const PATH_TOKEN = /^(\/|~\/)?[\w.][\w./-]*\.[A-Za-z][A-Za-z0-9]{0,5}$/;
 
 // How many files one command may brief. A command reading six files would
 // otherwise inject six briefs at once, which is the volume question Phase 3
