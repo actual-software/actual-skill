@@ -1795,6 +1795,40 @@ test('a Write shares the session budget with reads', async (fire: any, on: any) 
   expect(runs.length).toBe(2);
 });
 
+test('a scratchpad Write outside the repository spawns nothing, and the pane says why', async (fire: any, on: any) => {
+  // Claude Code keeps a scratchpad under TMPDIR and writes there routinely.
+  const runs = harness(on, { tool: WRITE_RESULT });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+  const r = await fire.tool.call({
+    tool: 'Write',
+    file_path: '/private/tmp/claude-501/scratchpad/notes.ts',
+    tool_use_id: 'scr_1',
+  });
+  expect(runs.length).toBe(0);
+  expect(r.result).toEqual(WRITE_RESULT.result);
+  expect(await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 })).toContain('off-root');
+});
+
+test('a Read outside the repository spawns nothing', async (fire: any, on: any) => {
+  const runs = harness(on, { readShaped: true });
+  await fire.tool.call({ tool: 'Read', file_path: '/etc/hosts', tool_use_id: 'out_r' });
+  expect(runs.length).toBe(0);
+});
+
+test('an Edit of a rule document spawns nothing: it is not governed by itself', async (fire: any, on: any) => {
+  const runs = harness(on, { tool: WRITE_RESULT });
+  await fire.tool.call({ tool: 'Edit', file_path: '/repo/.actual/rules/R-001.md', tool_use_id: 'rd_1' });
+  expect(runs.length).toBe(0);
+});
+
+test('a checkout opened through a symlink still briefs: the session directory counts as inside', async (fire: any, on: any) => {
+  // git answers the physical root; Claude names files by the path it was
+  // opened through. Filtering on the root alone would skip every file here.
+  const runs = harness(on, { tool: WRITE_RESULT, cwd: '/link/repo', root: '/real/repo', gitRoot: '/real/repo' });
+  await fire.tool.call({ tool: 'Write', file_path: '/link/repo/src/a.ts', tool_use_id: 'sym_1' });
+  expect(runs.length).toBe(1);
+});
+
 test('NotebookEdit is left alone: the CLI cannot answer it', async (fire: any, on: any) => {
   const runs = harness(on, { tool: WRITE_RESULT });
   const r = await fire.tool.call({ tool: 'NotebookEdit', notebook_path: '/repo/n.ipynb', new_source: 'x' });

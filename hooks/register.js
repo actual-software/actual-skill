@@ -185,6 +185,22 @@ function isWithin(root, candidate) {
   return candidate === r || candidate.startsWith(`${r}/`);
 }
 
+// Why a file a Read, Edit or Write names outright is not worth a spawn, or
+// null when it is: the Bash path's two filters, for the tools that skip its
+// parsing. Without them every scratchpad write -- Claude Code keeps one under
+// TMPDIR -- and every edit of a rule document spawned the CLI to hear "no".
+//
+// Outside only when outside both the root and the session's directory. The
+// root can be git's physical path while Claude names files by the logical
+// one a symlinked checkout was opened through; a test against the root alone
+// would skip governed files there, silently. A file inside the rules
+// directory is a rule document, which is not governed by itself.
+function unbriefable(named, { repoRoot, cwd, rulesDir }) {
+  if (![repoRoot, cwd].filter(Boolean).some((base) => isWithin(base, named))) return 'outside-root';
+  if (rulesDir && isWithin(rulesDir, named)) return 'ungoverned';
+  return null;
+}
+
 // The Bash tool runs every command in ONE persistent shell, so a `cd` in any
 // call changes the directory every later call runs in. On Claude Code 2.1.296
 // `$.session.cwd()` follows that shell: after `cd apps/actual && ls lib/oauth`
@@ -1221,6 +1237,11 @@ export function register(on, options = {}) {
           return withContext(result, await debugNote($, 'not briefed', `the ${e.tool} named no file`));
         }
         const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+        const skip = unbriefable(named, { repoRoot, cwd, rulesDir });
+        if (skip) {
+          recordOutcome(sessionId, e.tool_use_id, { outcome: skip, files: [named] });
+          return withContext(result, await debugNote($, 'not briefed', `${named} is ${skip === 'outside-root' ? 'outside the repository' : 'a rule document'}`));
+        }
         return await deliverBrief($, e, result, [named], { cwd, sessionId, rulesDir, repoRoot, options });
       }
 
@@ -1240,6 +1261,11 @@ export function register(on, options = {}) {
         if (!named) {
           recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-paths' });
           return withContext(result, await debugNote($, 'not briefed', 'the Read named no file'));
+        }
+        const skip = unbriefable(named, { repoRoot, cwd, rulesDir });
+        if (skip) {
+          recordOutcome(sessionId, e.tool_use_id, { outcome: skip, files: [named] });
+          return withContext(result, await debugNote($, 'not briefed', `${named} is ${skip === 'outside-root' ? 'outside the repository' : 'a rule document'}`));
         }
         return await deliverBrief($, e, result, [named], { cwd, sessionId, rulesDir, repoRoot, options });
       }
