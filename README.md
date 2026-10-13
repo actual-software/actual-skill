@@ -171,6 +171,12 @@ Set `ACTUAL_PLAN_GATE=off` to turn governance off, `ACTUAL_RULES_BRIEF=off` to t
 
 The hooks also stay silent inside the `claude` subprocesses `actual` itself spawns (marked with `ACTUAL_CLI_SUBPROCESS=1`), so the judge's own Stop hook can't rerun `impl-check` and recurse. Failures are silent by design, so if you need to see why briefing isn't appearing, set `ACTUAL_HOOK_DEBUG=1` and run `claude --debug`; it reports the rules directory, the CLI's exit status, why a reply was dropped, and how much context briefing has used. Run `bash hooks/tests/run.sh` to test the hooks locally, and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .` to test the mod; neither needs the network or a CLI install. Governance relies on Claude Code hooks, so it isn't available in Codex, ChatGPT, Cursor, or OpenCode.
 
+### Session summary
+
+In Claude Code, a row above the prompt shows how many of your repository's ADRs have been added to your agent's context this session: `Actual AI: 3 of 12 ADRs added to context`. It reads `0 of 12` from the start of the session and updates after each of your agent's replies, in the background, so no reply waits on it. After `/clear` it counts the new session. Claude Code's own surveys and other plugins share that band: the row steps aside while a survey is showing, and the `[-]` at its right collapses the band.
+
+It counts against the same rules directory as briefing, `ACTUAL_RULES_DIR` included, and shows nothing outside a repository with `.actual/rules/`, when the rules hold no decision, or when the CLI is missing or predates `actual session summary`. `ACTUAL_PLAN_GATE=off` leaves it on. The same mod that briefs shell reads draws it, so it needs the same Claude Code: 2.1.287 or later, or 2.1.285 and 2.1.286 with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`. The band appears in the terminal and the desktop app, and not in VS Code or `claude -p`. Its tests run with the mod's: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .`.
+
 ### Troubleshooting
 
 When something fails, the skill diagnoses it for you. It knows every error the CLI can return, all five runners (`claude-cli`, `anthropic-api`, `openai-api`, `codex-cli`, `cursor-cli`), and all three output formats, so it can find the cause and retry without you reading logs.
