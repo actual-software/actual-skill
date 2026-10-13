@@ -68,6 +68,16 @@
 //
 // What Phase 2 still owes: better *path* extraction -- heredoc bodies, more
 // than one path per command -- not classification.
+//
+// Edit and Write are the one exception to "only a read", and a narrow one
+// (AK-794). Claude Code makes the agent Read a file before editing or
+// overwriting it, so for an existing file the Read brief has already landed
+// and the CLI answers the edit with silence. What is left is a file written
+// without a Read -- mostly a new one from Write -- which no read-time brief
+// could ever reach. Its brief lands with the tool result, after the write ran,
+// so it is a reminder that can prompt a revision, not a briefing ahead of the
+// work. The Bash write path stays unbriefed: a shell write names its file
+// inside an arbitrary command string, and the Stop gate covers it.
 
 // --- Path extraction ---------------------------------------------------
 //
@@ -505,15 +515,22 @@ function briefFrom(stdout) {
 // the parent's slot, so the subagent would be denied a brief the parent had
 // already seen, and the parent would later miss one it never saw. All three
 // fields are asserted in the tests.
-function envelopeFor({ sessionId, agentId, cwd, filePath }) {
+//
+// The event and tool are what the call was: a Bash or Read call is a
+// PostToolUse:Read, an Edit or Write call is a PreToolUse on that tool -- the
+// two pairs the CLI answers, and the ones hooks/rules-brief.sh forwards. The
+// CLI keeps one brief memory across both, so a file briefed by either is not
+// briefed again by the other.
+function envelopeFor({ sessionId, agentId, cwd, filePath, tool = 'Read' }) {
+  const write = WRITE_TOOLS.includes(tool);
   const envelope = {
     session_id: sessionId,
     cwd,
-    hook_event_name: 'PostToolUse',
-    tool_name: 'Read',
+    hook_event_name: write ? 'PreToolUse' : 'PostToolUse',
+    tool_name: write ? tool : 'Read',
     tool_input: { file_path: filePath },
-    tool_response: { type: 'text' },
   };
+  if (!write) envelope.tool_response = { type: 'text' };
   // Omitted rather than sent empty for the main agent, matching the hook: the
   // CLI treats an absent and an empty agent_id the same, but an envelope that
   // mirrors the real one is easier to reason about.
@@ -864,7 +881,7 @@ async function deliverBrief($, e, result, paths, ctx) {
           ...cliLimits(resolved),
         ],
         {
-          stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }),
+          stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath, tool: e.tool }),
           cwd,
           timeoutMs: SPAWN_TIMEOUT_MS,
         }
@@ -977,7 +994,14 @@ async function deliverBrief($, e, result, paths, ctx) {
   // deliberate line per brief is the report itself.
   // $.ui.log already prefixes the plugin's name, so the line carried its own
   // prefix twice: `actual-cli: actual: briefed 2 ADRs...`.
-  const report = reportLine(outcomesFor(sessionId).get(e.tool_use_id));
+  //
+  // An Edit or Write reports only what it delivered or what failed. Nearly
+  // every edit is of a file already read, so its `NO CHANGE` row would be the
+  // same line under every edit of a session; the pane still lists each one.
+  const record = outcomesFor(sessionId).get(e.tool_use_id);
+  const quietWrite =
+    WRITE_TOOLS.includes(e.tool) && record?.outcome !== 'delivered' && record?.outcome !== 'cli-error';
+  const report = quietWrite ? null : reportLine(record);
   if (report) $.ui.log(report);
 
 
@@ -1010,6 +1034,11 @@ const PANE = 'rules-brief';
 // stands down for it. The hook matches the literal bytes, so a rename here
 // must be made there too.
 const STAND_DOWN_FIELD = 'actual_rules_brief_by_mod';
+
+// The tools briefed as a reminder when written, and the ones whose
+// PreToolUse event is marked for rules-brief.sh. Exactly the CLI's own list:
+// NotebookEdit names its file as notebook_path and the CLI does not answer it.
+const WRITE_TOOLS = ['Edit', 'Write'];
 
 // ── end of turn ──────────────────────────────────────────────────────────────
 //
@@ -1173,7 +1202,24 @@ export function register(on, options = {}) {
     return next(e);
   });
 
-  on('tool.call', { tool: ['Bash', 'Read'] }, async ($, e, next) => {
+  // The same stand-down for the PreToolUse:Edit|Write registration. This
+  // event's `e` is the call's envelope, the tool's arguments spread beside
+  // `tool`, so the marker can only ride as an argument: the settings hook
+  // receives it inside tool_input, which rules-brief.sh matches the same way.
+  // Probed on 2.1.287: it reached the hook as written, the Write and Edit both
+  // ran, and neither the transcript's tool input nor the file carried it. It
+  // is the input the permission check sees, though: a denied Write's entry in
+  // `claude -p`'s permission_denials lists it, as does every PreToolUse hook
+  // beneath, which receives it in tool_input.
+  //
+  // No decision is added: the result is whatever the hooks beneath return, so
+  // the normal permission flow is unchanged.
+  on('classic.PreToolUse', async ($, e, next) => {
+    if (WRITE_TOOLS.includes(e?.tool)) return next({ ...e, [STAND_DOWN_FIELD]: true });
+    return next(e);
+  });
+
+  on('tool.call', { tool: ['Bash', 'Read', ...WRITE_TOOLS] }, async ($, e, next) => {
     // Let the command run first. Briefing is advisory, so it must never delay
     // or gate the tool, and a command that fails has nothing worth briefing.
     //
@@ -1203,6 +1249,18 @@ export function register(on, options = {}) {
       // gates: it is the live cwd, or the start-of-call cwd plus the `cd`.
       // Parsing is pure, so doing it here costs nothing on a write.
       const found = e.tool === 'Bash' ? candidateTokens(e.command) : null;
+
+      // An Edit or Write names its file outright, like a Read, and is briefed
+      // whatever isReadOnly says: it is the reminder for a file never read.
+      if (WRITE_TOOLS.includes(e.tool)) {
+        const named = typeof e.file_path === 'string' ? normalizePath(e.file_path) : null;
+        if (!named) {
+          recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-paths' });
+          return withContext(result, await debugNote($, 'not briefed', `the ${e.tool} named no file`));
+        }
+        const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+        return await deliverBrief($, e, result, [named], { cwd, sessionId, rulesDir, repoRoot, options });
+      }
 
       // Claude Code's own read/write verdict. Absent (not false) for a write,
       // and absent for anything it could not classify -- both mean no brief.

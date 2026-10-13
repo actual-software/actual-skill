@@ -1855,3 +1855,169 @@ test('the pane opens once for a brief, then not again until there is another', a
 
   expect(opens.length).toBe(1);
 });
+
+// ── Edit and Write: the reminder for a file never read (AK-794) ─────────────
+//
+// Shaped like a real Write result: no isReadOnly, which is Claude Code's way
+// of saying the call wrote. The Bash path refuses exactly that; this one must
+// not.
+const WRITE_RESULT = {
+  ref: 1,
+  result: { type: 'create', filePath: '/repo/src/persistence/new_store.ts', content: 'export {}' },
+  text: 'File created successfully',
+};
+
+test('a Write of a governed file gets the brief beside its result', async (fire: any, on: any) => {
+  const runs = harness(on, { tool: WRITE_RESULT });
+  const r = await fire.tool.call({
+    tool: 'Write',
+    file_path: '/repo/src/persistence/new_store.ts',
+    content: 'export {}',
+    tool_use_id: 'w_1',
+  });
+
+  expect(runs.length).toBe(1);
+  expect(r.context).toEqual([BRIEF]);
+  expect(r.result).toEqual(WRITE_RESULT.result);
+});
+
+test('an Edit or Write envelope is the PreToolUse pair the CLI answers', async (fire: any, on: any) => {
+  // The CLI answers PreToolUse on Edit and Write, and PostToolUse on Read --
+  // nothing else. A PostToolUse:Write envelope would be silence every time.
+  const runs = harness(on, { tool: WRITE_RESULT });
+  for (const tool of ['Edit', 'Write']) {
+    await fire.tool.call({ tool, file_path: '/repo/src/persistence/user_store.ts', tool_use_id: `env_${tool}` });
+    const sent = JSON.parse(runs[runs.length - 1].init.stdin);
+    expect(sent.hook_event_name).toBe('PreToolUse');
+    expect(sent.tool_name).toBe(tool);
+    expect(sent.tool_input.file_path).toBe('/repo/src/persistence/user_store.ts');
+    expect(sent.session_id).toBe('sess-1');
+    expect('tool_response' in sent).toBe(false);
+  }
+});
+
+test('an Edit in a subagent is filed under its own agent id', async (fire: any, on: any) => {
+  const runs = harness(on, { tool: WRITE_RESULT });
+  await fire.tool.call({ tool: 'Edit', file_path: '/repo/src/a.ts', agentId: 'agent-7' });
+  expect(JSON.parse(runs[0].init.stdin).agent_id).toBe('agent-7');
+});
+
+test('an Edit of a file already briefed by its Read adds nothing, and says nothing', async (fire: any, on: any) => {
+  // The acceptance case. The CLI keeps the memory; the mod has to send both
+  // calls under the same session so it can, and stay quiet when it does.
+  let call = 0;
+  const logs: string[] = [];
+  const runs = harness(on, {
+    logs,
+    tool: () => (call === 0 ? undefined : WRITE_RESULT),
+    readShaped: true,
+    cli: () =>
+      ++call === 1
+        ? { exitCode: 0, stdout: reply(BRIEF), stderr: '' }
+        : { exitCode: 0, stdout: '', stderr: 'actual rules brief: no-brief=already-briefed src/a.ts' },
+  });
+
+  const read = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts', tool_use_id: 'd_1' });
+  expect(briefed(read)).toBe(BRIEF);
+  const linesAfterRead = logs.length;
+
+  const edit = await fire.tool.call({ tool: 'Edit', file_path: '/repo/src/a.ts', tool_use_id: 'd_2' });
+  expect(runs.length).toBe(2);
+  expect(JSON.parse(runs[0].init.stdin).session_id).toBe(JSON.parse(runs[1].init.stdin).session_id);
+  expect(briefed(edit)).toBe('');
+  // No NO CHANGE row: nearly every edit is of a file already read.
+  expect(logs.length).toBe(linesAfterRead);
+});
+
+test('a delivered Write reports its line, as a read does', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  harness(on, { logs, tool: WRITE_RESULT });
+  await fire.tool.call({ tool: 'Write', file_path: '/repo/src/persistence/new_store.ts', tool_use_id: 'w_2' });
+  const drawn = reported(logs);
+  expect(drawn).toContain('BRIEFED');
+  expect(drawn).toContain('new_store.ts');
+});
+
+test('a Write the CLI fails on is shown, not swallowed', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  harness(on, { logs, tool: WRITE_RESULT, cli: { exitCode: 2, stdout: '', stderr: 'boom' } });
+  const r = await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'w_3' });
+  expect(reported(logs)).toContain('CLI ERROR');
+  expect(r.result).toEqual(WRITE_RESULT.result);
+});
+
+test('a denied Write is not briefed', async (fire: any, on: any) => {
+  const runs = harness(on, { tool: { deny: 'nope' } });
+  await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts' });
+  expect(runs.length).toBe(0);
+});
+
+test('a failed Edit is not briefed', async (fire: any, on: any) => {
+  const runs = harness(on, { tool: { ...WRITE_RESULT, isError: true } });
+  await fire.tool.call({ tool: 'Edit', file_path: '/repo/src/a.ts' });
+  expect(runs.length).toBe(0);
+});
+
+test('a Write in a repo with no rule files spawns nothing and says nothing', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  const runs = harness(on, { rules: [], tool: WRITE_RESULT, logs });
+  const r = await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'w_4' });
+  expect(runs.length).toBe(0);
+  expect(logs).toEqual([]);
+  expect(r).toEqual(WRITE_RESULT);
+});
+
+test('ACTUAL_RULES_BRIEF=off turns the Write reminder off too', async (fire: any, on: any) => {
+  const runs = harness(on, { tool: WRITE_RESULT, env: { ACTUAL_RULES_BRIEF: 'off' } });
+  await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts' });
+  expect(runs.length).toBe(0);
+});
+
+test('a Write shares the session budget with reads', async (fire: any, on: any) => {
+  const runs = harness(on, { tool: WRITE_RESULT, config: { maxSessionChars: BRIEF.length + 10 } });
+  const first = await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'b_1' });
+  expect(briefed(first)).toBe(BRIEF);
+  const second = await fire.tool.call({ tool: 'Write', file_path: '/repo/src/b.ts', tool_use_id: 'b_2' });
+  expect(briefed(second)).not.toContain(BRIEF);
+  expect(runs.length).toBe(2);
+});
+
+test('NotebookEdit is left alone: the CLI cannot answer it', async (fire: any, on: any) => {
+  const runs = harness(on, { tool: WRITE_RESULT });
+  const r = await fire.tool.call({ tool: 'NotebookEdit', notebook_path: '/repo/n.ipynb', new_source: 'x' });
+  expect(runs.length).toBe(0);
+  expect(r).toEqual(WRITE_RESULT);
+});
+
+// classic.PreToolUse fires inside tool.call, beneath every plugin's tool.call
+// hook, so a test raises it the way a session does: by calling the tool.
+test('an Edit or Write PreToolUse event reaches the settings hooks marked, with no decision added', async (fire: any, on: any) => {
+  const seen: any[] = [];
+  on('classic.PreToolUse', async (_$: any, e: any) => {
+    seen.push(e);
+    return { value: {} };
+  });
+  harness(on, { tool: WRITE_RESULT });
+  for (const tool of ['Edit', 'Write']) {
+    const r = await fire.tool.call({ tool, file_path: '/repo/src/a.ts', tool_use_id: `pre_${tool}` });
+    // The call ran: nothing above it granted, asked or denied.
+    expect(r.result).toEqual(WRITE_RESULT.result);
+  }
+  expect(seen.length).toBe(2);
+  for (const e of seen) {
+    expect(e.actual_rules_brief_by_mod).toBe(true);
+    expect(e.file_path).toBe('/repo/src/a.ts');
+  }
+});
+
+test('a PreToolUse event for any other tool passes through unmarked', async (fire: any, on: any) => {
+  const seen: any[] = [];
+  on('classic.PreToolUse', async (_$: any, e: any) => {
+    seen.push(e);
+    return { value: {} };
+  });
+  harness(on);
+  await fire.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'pre_b' });
+  expect(seen.length).toBe(1);
+  expect('actual_rules_brief_by_mod' in seen[0]).toBe(false);
+});
