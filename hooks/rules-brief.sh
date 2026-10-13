@@ -80,21 +80,19 @@ case "$payload" in
   *) exit 0 ;;
 esac
 
-# PreToolUse: a file per session, which the mod writes before this hook runs.
-# A field cannot ride this event: the only thing the mod can change is the
-# tool's arguments, and those are what the permission check judges -- auto
-# mode's classifier refuses to judge a Write carrying one it does not know, so
-# the Write never runs. TMPDIR because both sides see the same one (the mod
-# cannot see CLAUDE_PLUGIN_DATA); trailing slashes stripped on both. The id is
-# the first top-level session_id, and a content-spelled one cannot match:
-# inside a string its quotes are escaped.
-if [ "$event" = PreToolUse ]; then
-  sid_re='"session_id": ?"([A-Za-z0-9_-]+)"'
-  if [[ $payload =~ $sid_re ]]; then
-    tmp=${TMPDIR:-/tmp}
-    while [ "${tmp%/}" != "$tmp" ]; do tmp=${tmp%/}; done
-    [ -n "$tmp" ] || tmp=/tmp
-    [ -e "${tmp}/actual-skill-mod/${BASH_REMATCH[1]}" ] && exit 0
+# PreToolUse: ACTUAL_SKILL_MOD_SESSION, which the mod sets to its session id
+# before this hook runs, so the hook inherits it. A field cannot ride this
+# event: the only thing the mod can change is the tool's arguments, and those
+# are what the permission check judges -- auto mode's classifier refuses to
+# judge a Write carrying one it does not know, so the Write never runs. The
+# value is compared, not just tested: a `claude` started from inside a session
+# inherits the variable under a session id of its own. The id is the first
+# top-level session_id, and a content-spelled one cannot match: inside a
+# string its quotes are escaped.
+if [ "$event" = PreToolUse ] && [ -n "${ACTUAL_SKILL_MOD_SESSION:-}" ]; then
+  sid_re='"session_id": ?"([^"\\]+)"'
+  if [[ $payload =~ $sid_re ]] && [ "${BASH_REMATCH[1]}" = "$ACTUAL_SKILL_MOD_SESSION" ]; then
+    exit 0
   fi
 fi
 

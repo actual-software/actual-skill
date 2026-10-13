@@ -58,9 +58,9 @@ function harness(
     // `process.run` rejects instead of returning, as it does past `timeoutMs`.
     // Receives the brief spawn's 1-based ordinal; return true to reject it.
     rejectBrief?: (n: number) => boolean;
-    // Collects every $.fs.write as `{ path, text }`; `failWrites` rejects them.
-    writes?: any[];
-    failWrites?: boolean;
+    // Collects every $.env.set as `{ name, value }`; `failEnvSets` rejects them.
+    envSets?: any[];
+    failEnvSets?: boolean;
   } = {}
 ) {
   const runs: any[] = [];
@@ -91,9 +91,9 @@ function harness(
     const existing = typeof opts.existing === 'function' ? opts.existing() : opts.existing;
     return { value: existing ? existing.includes(e.path) : true };
   });
-  on('fs.write', async (_$: any, e: any) => {
-    if (opts.failWrites) throw new Error(`EACCES: ${e.path}`);
-    opts.writes?.push(e);
+  on('env.set', async (_$: any, e: any) => {
+    if (opts.failEnvSets) throw new Error(`refused: ${e.name}`);
+    opts.envSets?.push(e);
     return { value: undefined };
   });
   on('fs.list', async (_$: any, e: any) => {
@@ -1810,7 +1810,7 @@ test('an Edit or Write PreToolUse event reaches the settings hooks untouched, wi
     seen.push(e);
     return { value: {} };
   });
-  harness(on, { tool: WRITE_RESULT, writes: [] });
+  harness(on, { tool: WRITE_RESULT, envSets: [] });
   for (const tool of ['Edit', 'Write']) {
     const r = await fire.tool.call({ tool, file_path: '/repo/src/a.ts', tool_use_id: `pre_${tool}` });
     // The call ran: nothing above it granted, asked or denied.
@@ -1826,43 +1826,36 @@ test('an Edit or Write PreToolUse event reaches the settings hooks untouched, wi
 });
 
 test('an Edit or Write announces the mod to rules-brief.sh once per session, before the settings hooks run', async (fire: any, on: any) => {
-  const writes: any[] = [];
-  let writtenBeforeHooks = false;
+  const envSets: any[] = [];
+  let setBeforeHooks = false;
   on('classic.PreToolUse', async () => {
-    writtenBeforeHooks = writes.length === 1;
+    setBeforeHooks = envSets.length === 1;
     return { value: {} };
   });
-  harness(on, { tool: WRITE_RESULT, writes, env: { TMPDIR: '/var/folders/x/T/' } });
+  harness(on, { tool: WRITE_RESULT, envSets });
   await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'pre_w' });
   await fire.tool.call({ tool: 'Edit', file_path: '/repo/src/a.ts', tool_use_id: 'pre_e' });
-  expect(writtenBeforeHooks).toBe(true);
-  // The same path rules-brief.sh builds: TMPDIR, trailing slash dropped.
-  expect(writes.map((w) => w.path)).toEqual(['/var/folders/x/T/actual-skill-mod/sess-1']);
+  expect(setBeforeHooks).toBe(true);
+  // The session id, not a flag: rules-brief.sh compares it with its own.
+  expect(envSets).toEqual([{ name: 'ACTUAL_SKILL_MOD_SESSION', value: 'sess-1' }]);
 });
 
-test('with no TMPDIR the announcement goes under /tmp, as the hook looks', async (fire: any, on: any) => {
-  const writes: any[] = [];
-  harness(on, { tool: WRITE_RESULT, writes });
-  await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'pre_w' });
-  expect(writes.map((w) => w.path)).toEqual(['/tmp/actual-skill-mod/sess-1']);
-});
-
-test('an announcement that cannot be written never stops the call', async (fire: any, on: any) => {
-  harness(on, { tool: WRITE_RESULT, failWrites: true });
+test('an announcement that cannot be set never stops the call', async (fire: any, on: any) => {
+  harness(on, { tool: WRITE_RESULT, failEnvSets: true });
   const r = await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'pre_w' });
   expect(r.result).toEqual(WRITE_RESULT.result);
 });
 
 test('a PreToolUse event for any other tool passes through untouched and announces nothing', async (fire: any, on: any) => {
   const seen: any[] = [];
-  const writes: any[] = [];
+  const envSets: any[] = [];
   on('classic.PreToolUse', async (_$: any, e: any) => {
     seen.push(e);
     return { value: {} };
   });
-  harness(on, { writes });
+  harness(on, { envSets });
   await fire.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 'pre_b' });
   expect(seen.length).toBe(1);
   expect('actual_rules_brief_by_mod' in seen[0]).toBe(false);
-  expect(writes).toEqual([]);
+  expect(envSets).toEqual([]);
 });

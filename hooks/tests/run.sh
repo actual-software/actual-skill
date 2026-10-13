@@ -65,7 +65,7 @@ run_hook() {
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         "$@" \
@@ -82,7 +82,7 @@ run_hook_no_cli() {
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${WORK}/empty-bin:/usr/bin:/bin" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
@@ -98,7 +98,7 @@ run_hook_cwd() {
   shift 4
   local status
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         "$@" \
@@ -1242,22 +1242,19 @@ else
   fail "shared dedupe across Read and Edit|Write" "read=$read_out edit=$edit_out write=$(cat "${WORK}/out")"
 fi
 
-# The mod announces itself for a session with a file under TMPDIR, written
-# before this hook runs; a field in the tool's arguments would reach the
+# The mod announces itself by setting ACTUAL_SKILL_MOD_SESSION to its session
+# id before this hook runs; a field in the tool's arguments would reach the
 # permission check, and auto mode refuses to judge a Write that carries one.
-MOD_TMP="${WORK}/mod-tmp"
-mkdir -p "${MOD_TMP}/actual-skill-mod"
-: > "${MOD_TMP}/actual-skill-mod/test-session-read"
-st=$(run_hook "$RB" "$PRE_EDIT" "$REPO_WITH_RULES" TMPDIR="${MOD_TMP}/" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="${WORK}/rb-pre-mod-capture")
+st=$(run_hook "$RB" "$PRE_EDIT" "$REPO_WITH_RULES" ACTUAL_SKILL_MOD_SESSION=test-session-read ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="${WORK}/rb-pre-mod-capture")
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -f "${WORK}/rb-pre-mod-capture" ]; then
   pass "a PreToolUse event in a session the mod announced: stands down without invoking the CLI"
 else
   fail "rules-brief briefed a PreToolUse event the mod owns" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
-OTHER_SESSION="${WORK}/pretooluse-other-session.json"
-jq -c '.session_id = "another-session"' "$PRE_WRITE" > "$OTHER_SESSION"
-st=$(run_hook "$RB" "$OTHER_SESSION" "$REPO_WITH_RULES" TMPDIR="$MOD_TMP" ACTUAL_TEST_MODE=brief)
+# A `claude` started from inside a session inherits the variable under a
+# session id of its own; with no mod loaded there, this hook is the only brief.
+st=$(run_hook "$RB" "$PRE_WRITE" "$REPO_WITH_RULES" ACTUAL_SKILL_MOD_SESSION=another-session ACTUAL_TEST_MODE=brief)
 if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
   pass "another session's announcement does not stand the hook down"
 else
@@ -1268,7 +1265,7 @@ fi
 # spelled one if escaping did not rule it out.
 SPELLED_SESSION="${WORK}/pretooluse-spelled-session.json"
 jq -c '. as $o | {tool_input: ($o.tool_input + {content: "{\"session_id\":\"test-session-read\"}"})} + ($o | del(.tool_input)) | .session_id = "unannounced"' "$PRE_WRITE" > "$SPELLED_SESSION"
-st=$(run_hook "$RB" "$SPELLED_SESSION" "$REPO_WITH_RULES" TMPDIR="$MOD_TMP" ACTUAL_TEST_MODE=brief)
+st=$(run_hook "$RB" "$SPELLED_SESSION" "$REPO_WITH_RULES" ACTUAL_SKILL_MOD_SESSION=test-session-read ACTUAL_TEST_MODE=brief)
 if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
   pass "an announced session id spelled inside a Write's content does not stand the hook down"
 else

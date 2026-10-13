@@ -1027,8 +1027,9 @@ const OUTCOME_LABELS = {
 const PANE = 'rules-brief';
 
 // Set on a PostToolUse:Read event this mod is briefing, so hooks/rules-brief.sh
-// stands down for it. Read only: PreToolUse uses MOD_ACTIVE_DIR instead. The hook matches the literal bytes, so a rename here
-// must be made there too.
+// stands down for it. Read only: PreToolUse uses ACTUAL_SKILL_MOD_SESSION
+// instead. The hook matches the literal bytes, so a rename here must be made
+// there too.
 const STAND_DOWN_FIELD = 'actual_rules_brief_by_mod';
 
 // The tools briefed as a reminder when written, and the ones whose
@@ -1037,23 +1038,17 @@ const STAND_DOWN_FIELD = 'actual_rules_brief_by_mod';
 // does not answer it.
 const WRITE_TOOLS = ['Edit', 'Write'];
 
-// Where rules-brief.sh looks, on PreToolUse, for a file named after the session
-// to learn this mod is briefing its Edits and Writes. The hook builds the same
-// path, so a change here must be made there too.
-const MOD_ACTIVE_DIR = 'actual-skill-mod';
-
-// Sessions already announced by this load of the module. A hot reload starts
-// it over, which costs one rewrite of a file that already exists.
-const announced = new Set();
+// The session this load of the module last announced to rules-brief.sh,
+// through the ACTUAL_SKILL_MOD_SESSION variable the hook compares with its own
+// session_id. A hot reload starts it over, which costs one repeated set.
+let announced;
 
 async function announce($) {
   const sessionId = await $.session.id();
-  // The hook only matches an id of these characters, and the id is a path
-  // segment here, so anything else is not written at all.
-  if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId) || announced.has(sessionId)) return;
-  const tmp = ((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/tmp';
-  await $.fs.write(`${tmp}/${MOD_ACTIVE_DIR}/${sessionId}`, '');
-  announced.add(sessionId);
+  if (!sessionId || sessionId === announced) return;
+  // A literal name, so `claude plugin validate` lists exactly this one write.
+  await $.env.set('ACTUAL_SKILL_MOD_SESSION', sessionId);
+  announced = sessionId;
 }
 
 // Rows for the pane, oldest first: what each Bash call did about briefing,
@@ -1158,14 +1153,15 @@ export function register(on, options = {}) {
   // arguments are what the permission check judges. Probed on 2.1.287: with
   // one added, auto mode's classifier gave no verdict on the Write, so it
   // never ran; without it, the same Write ran. So the event passes down
-  // untouched, and the mod says it is here by a file instead: written before
-  // next, so it exists by the time rules-brief.sh looks.
+  // untouched, and the mod says it is here by an environment variable instead:
+  // set before next, for this process and everything it starts after, so the
+  // settings hook inherits it (probed on 2.1.287).
   //
-  // Both sides find it through TMPDIR, the one location both can see: probed
-  // on 2.1.287, the hook gets CLAUDE_PLUGIN_DATA and this module does not, while
-  // TMPDIR and the session id agree. A write that fails costs a second brief,
-  // never the call. No decision is added either way, so the normal permission
-  // flow is unchanged.
+  // The value is the session id, not a flag. A `claude` the session starts --
+  // from a Bash call, say -- inherits the variable under a session id of its
+  // own, so its hook still briefs when no mod loads there. A set that fails
+  // costs a second brief, never the call. No decision is added either way, so
+  // the normal permission flow is unchanged.
   on('classic.PreToolUse', async ($, e, next) => {
     if (WRITE_TOOLS.includes(e?.tool)) {
       try {
