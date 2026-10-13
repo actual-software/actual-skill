@@ -546,8 +546,8 @@ const repoRoots = new Map();
 
 // Every spawn's timeout: the PostToolUse:Read hook's own budget in hooks.json.
 // $.process.run waits 30 seconds when given none, and the hook time limit does
-// not cover it, so a CLI that hangs would stall every read -- and the end of
-// every turn -- for that long. A spawn that times out reads as exit 1, which
+// not cover it, so a CLI that hangs would stall every read for that long. A
+// spawn that times out reads as exit 1, which
 // every caller already treats as no answer.
 const SPAWN_TIMEOUT_MS = 2000;
 
@@ -849,7 +849,7 @@ async function deliverBrief($, e, result, paths, ctx) {
   return withContext(result, appended);
 }
 
-// One label per outcome, shared by the pane and the end-of-turn summary. Two
+// One label per outcome, the one table the pane reads. Two
 // copies of this drifted apart once already, which is how `no new` and
 // `nothing new for` came to say the same thing two ways.
 const OUTCOME_LABELS = {
@@ -866,99 +866,6 @@ const OUTCOME_LABELS = {
   'not-read-only': 'writes   ',
 };
 
-// ── end of turn ──────────────────────────────────────────────────────────────
-//
-// What governed the files this turn changed, reported once when the turn ends.
-//
-// Informational only. It never touches the Stop decision -- the implementation
-// gate is a separate hook and its verdict is the one that counts -- and it runs
-// inside a try/catch for the same reason: a report that failed must not take
-// governance down with it.
-//
-// Deliberately verbose to begin with, naming every rule per file, on the
-// understanding that it will be cut back once there is a feel for how much of
-// it is worth reading.
-//
-// Two things this does NOT do, worth stating so they are not mistaken for
-// oversights. It does not reach the model: output at this point is for the
-// person, and getting rules to the agent would mean blocking the stop and
-// re-entering the turn, which is what the gate already does. And it selects by
-// path, like every other brief, so it cannot surface a rule the gate found by
-// reading the diff -- a rule whose document declares no globs is invisible to
-// it here just as it is on a read.
-const TURN_FILE_CAP = 20;
-
-// The whole report's time, on top of each spawn's own timeout: twenty files at
-// SPAWN_TIMEOUT_MS each is forty seconds of a turn that has otherwise ended.
-// Files not reached in time are counted as unchecked, as the cap's are.
-const TURN_REPORT_BUDGET_MS = 5000;
-
-// Rule ids out of a brief's text: each rule line reads `- [doc-slug/R-ID] ...`.
-// A bare regex for the id itself would also match ids quoted inside prose.
-function rulesIn(text) {
-  const ids = [];
-  for (const match of text.matchAll(/^- \[([^\]]+)\]/gm)) {
-    const id = match[1].split('/').pop();
-    if (id) ids.push(id);
-  }
-  return ids;
-}
-
-// Paths out of `git status --porcelain`. A rename reads `R  old -> new`: the
-// new path is the one that was written.
-function changedPaths(stdout) {
-  const paths = [];
-  for (const line of (stdout ?? '').split('\n')) {
-    if (line.length < 4) continue;
-    const path = line.slice(3).split(' -> ').pop().replace(/^"|"$/g, '');
-    if (path) paths.push(path);
-  }
-  return paths;
-}
-
-async function reportTurn($, { sessionId, cwd, rulesDir }) {
-  const root = await resolveRepoRoot($, sessionId, cwd);
-
-  const deadline = (await $.clock.now()) + TURN_REPORT_BUDGET_MS;
-  const status = await $.process.run(['git', 'status', '--porcelain'], {
-    cwd: root,
-    timeoutMs: SPAWN_TIMEOUT_MS,
-  });
-  if (status.exitCode !== 0) return;
-
-  const all = changedPaths(status.stdout).filter((p) => !isWithin(rulesDir, `${root}/${p}`));
-  if (all.length === 0) return;
-  const paths = all.slice(0, TURN_FILE_CAP);
-
-  const governed = [];
-  const quiet = [];
-  let checked = 0;
-  for (const path of paths) {
-    if ((await $.clock.now()) >= deadline) break;
-    checked += 1;
-    // Direct mode, not `--claude-hook`: it is stateless, so this report neither
-    // spends the session's brief memory nor claims a decision has been stated
-    // to the agent when it has only been shown to the person.
-    const run = await $.process.run(
-      ['actual', 'rules', 'brief', '--file', path, '--rules-dir', rulesDir],
-      { cwd: root, timeoutMs: SPAWN_TIMEOUT_MS }
-    );
-    if (run.exitCode !== 0) continue;
-    const ids = rulesIn(run.stdout ?? '');
-    if (ids.length) governed.push({ path, ids });
-    else quiet.push(path);
-  }
-
-  const more = all.length > checked ? `, ${all.length - checked} more unchecked` : '';
-  $.ui.log(
-    row('TURN', `${all.length} file${all.length === 1 ? '' : 's'} changed \u00b7 ${governed.length} governed${more}`)
-  );
-  for (const { path, ids } of governed) {
-    $.ui.log(row('', `${path.split('/').pop()}  ${ids.length} rule${ids.length === 1 ? '' : 's'} \u00b7 ${ids.join(', ')}`));
-  }
-  if (quiet.length) $.ui.log(row('', `no rules  ${names(quiet)}`));
-}
-
 const PANE = 'rules-brief';
 
 // Set on a PostToolUse:Read event this mod is briefing, so hooks/rules-brief.sh
@@ -966,19 +873,26 @@ const PANE = 'rules-brief';
 // must be made there too.
 const STAND_DOWN_FIELD = 'actual_rules_brief_by_mod';
 
+// ── end of turn ──────────────────────────────────────────────────────────────
+//
+// Informational only. It never touches the Stop decision -- the implementation
+// gate is a separate hook and its verdict is the one that counts -- and it runs
+// inside a try/catch for the same reason: a pane that failed to open must not
+// take governance down with it.
+//
+// What the turn wrote is the gate's to judge: it checks the whole diff, rules
+// with no globs included, so nothing is reported about written files here.
 async function endOfTurn($, e) {
   // A gate continuation, not a new turn: the gate blocks and the turn runs
-  // on, and reporting again at each stop would repeat the same list and
-  // reopen the pane at every stop of a turn already sent back.
+  // on, and opening the pane again would reopen it at every stop of a turn
+  // already sent back.
   if (e?.stop_hook_active) return;
   // The same switches the read path honours. ACTUAL_CLI_SUBPROCESS matters
-  // most here: the conformance judge is a nested `claude -p` that stops too,
-  // and this report would otherwise run git and the CLI inside it.
+  // most here: the conformance judge is a nested `claude -p` that stops too.
   if (await optedOut($)) return;
   const sessionId = e?.session_id ?? (await $.session.id());
   const cwd = e?.cwd ?? (await $.session.cwd());
-  const rulesDir = await governedRulesDir($, sessionId, cwd);
-  if (!rulesDir) return;
+  if (!(await governedRulesDir($, sessionId, cwd))) return;
 
   // `/rules-brief`, run for you. Literally the same call the command makes,
   // so there is one renderer and one set of words -- a second, text-only
@@ -992,7 +906,6 @@ async function endOfTurn($, e) {
     // opens is a pane that takes focus. Escape closes it.
     await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
   }
-  await reportTurn($, { sessionId, cwd, rulesDir });
 }
 
 // Rows for the pane, oldest first: what each Bash call did about briefing,
@@ -1056,8 +969,7 @@ export function register(on, options = {}) {
   on('classic.Stop', async ($, e, next) => {
     // The gate's verdict is untouched whatever happens here. It is also reached
     // first: the implementation gate is a settings hook beneath this module, and
-    // a report run ahead of it would hold the verdict back by however long the
-    // report took.
+    // anything run ahead of it would hold the verdict back.
     const verdict = await next(e);
     try {
       await endOfTurn($, e);
