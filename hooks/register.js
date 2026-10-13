@@ -292,17 +292,8 @@ function outcomesFor(sessionId) {
   return own;
 }
 
-// Outcomes worth interrupting a person for at the end of a turn: a brief that
-// arrived, one held back, or a failure. Every other row (a write, an
-// ungoverned file, an unresolved token) is in the pane for anyone who asks.
-const ATTENTION_OUTCOMES = new Set(['delivered', 'deduped', 'budget', 'cli-error']);
-
-// Sessions with such a row since the pane last opened on its own.
-const needsAttention = new Set();
-
 function recordOutcome(sessionId, toolUseId, record) {
   if (!toolUseId) return;
-  if (ATTENTION_OUTCOMES.has(record.outcome)) needsAttention.add(sessionId);
   const own = outcomesFor(sessionId);
   own.set(toolUseId, { at: Date.now(), ...record });
   while (own.size > MAX_OUTCOMES) {
@@ -1060,61 +1051,6 @@ async function announce($) {
   announced.add(sessionId);
 }
 
-// ── end of turn ──────────────────────────────────────────────────────────────
-//
-// Informational only. It never touches the Stop decision -- the implementation
-// gate is a separate hook and its verdict is the one that counts -- and it runs
-// inside a try/catch for the same reason: a pane that failed to open must not
-// take governance down with it.
-//
-// What the turn wrote is the gate's to judge: it checks the whole diff, rules
-// with no globs included, so nothing is reported about written files here.
-async function endOfTurn($, e) {
-  // A gate continuation, not a new turn: the gate blocks and the turn runs
-  // on, and opening the pane again would reopen it at every stop of a turn
-  // already sent back.
-  if (e?.stop_hook_active) return;
-  // The same switches the read path honours. ACTUAL_CLI_SUBPROCESS matters
-  // most here: the conformance judge is a nested `claude -p` that stops too.
-  if (await optedOut($)) return;
-  // `$.session.id()` first, not the envelope's `session_id`. The read path
-  // files its records under the former, and keying this path off the latter
-  // is the same mistake four earlier bugs were: two paths computing one key
-  // differently, with the records invisible to whichever used the other.
-  const sessionId = (await $.session.id()) ?? e?.session_id;
-  const cwd = (await $.session.cwd()) ?? e?.cwd;
-  if (!(await governedRulesDir($, sessionId, cwd))) return;
-
-  // `/rules-brief`, run for you. Literally the same call the command makes,
-  // so there is one renderer and one set of words -- a second, text-only
-  // summary was assembled here first, and a hand-built copy of a view is how
-  // the labels came to disagree across surfaces before.
-  //
-  // Nothing to show if nothing was read.
-  if (outcomesFor(sessionId).size === 0) return;
-
-  // Only when the turn left something worth looking at: a brief, one held back
-  // or a failure. Every Bash call in a governed repository leaves a row, a
-  // write's included, so "any row" opened the pane -- and took focus -- at the
-  // end of every turn. `/rules-brief` still shows the rest.
-  if (!needsAttention.delete(sessionId)) return;
-
-  // The same arguments the command uses, focus included: the host refuses
-  // `focus: false` ("ui.open: focus is true or left out"). Focus is granted
-  // only while the prompt is empty and nothing else holds it, so this does
-  // not take keystrokes from someone mid-sentence.
-  const opened = await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
-
-  // A pane a mod opens on its own initiative needs a terminal at least 144
-  // columns wide -- 110 once the person has opened that pane themselves --
-  // and below that it waits, undrawn, reporting `isPlaced: false`. Without
-  // this the end of a turn was simply silent in a narrower terminal, and the
-  // README promised a pane that would never arrive.
-  if (opened && opened.isPlaced === false) {
-    $.ui.log(row('BRIEFING', `${outcomesFor(sessionId).size} reads this session; /rules-brief to see them`));
-  }
-}
-
 // Rows for the pane, oldest first: what each Bash call did about briefing,
 // including the calls that did nothing and why.
 //
@@ -1171,17 +1107,6 @@ export function register(on, options = {}) {
   on('command.run', { command: 'rules-brief' }, async ($) => {
     await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
     return {};
-  });
-
-  on('classic.Stop', async ($, e, next) => {
-    // The gate's verdict is untouched whatever happens here. It is also reached
-    // first: the implementation gate is a settings hook beneath this module, and
-    // anything run ahead of it would hold the verdict back.
-    const verdict = await next(e);
-    try {
-      await endOfTurn($, e);
-    } catch {}
-    return verdict;
   });
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
@@ -1266,8 +1191,8 @@ export function register(on, options = {}) {
 
       const [cwd, sessionId] = await Promise.all([$.session.cwd(), $.session.id()]);
       if (!cwd || !sessionId) return result;
-      // Before anything is recorded: in a repository with no rules, even a
-      // `not-read-only` record would make the pane open at the end of the turn.
+      // Before anything is recorded: a repository with no rules has nothing
+      // for /rules-brief to list, not even a `not-read-only` row.
       const rulesDir = await governedRulesDir($, sessionId, cwd);
       if (!rulesDir) return result;
 

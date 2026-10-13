@@ -1278,39 +1278,26 @@ test('every state is at most the column width', async (fire: any, on: any) => {
 
 // ── the end of a turn ───────────────────────────────────────────────────────
 
-/**
- * What Claude Code itself does at Stop: nothing, and allow it.
- *
- * The chain needs a base beneath the plugin or the event has no implementation,
- * the same way `tool.call` needs one. It also doubles as the assertion that the
- * mod passes the gate's verdict through: a test that broke that would see this
- * base's value replaced.
- */
-function stopBase(on: any) {
-  on('classic.Stop', async () => ({ value: {} }));
-}
-
-test('the end of a turn never changes the Stop decision', async (fire: any, on: any) => {
-  // The implementation gate is a separate hook and its verdict is the one that
-  // counts. The mod is not allowed to deny, allow or alter a stop.
+test('the end of a turn opens nothing and leaves the Stop decision alone', async (fire: any, on: any) => {
+  // The pane used to open on its own at a turn's end. It was too much: the
+  // transcript line per read already says what arrived, and /rules-brief
+  // shows the rest for anyone who asks.
+  const logs: string[] = [];
+  const opens: any[] = [];
   on('classic.Stop', async () => ({ value: { decision: 'block', reason: 'gate says no' } }));
-  harness(on);
-  on('ui.open', async () => ({ value: undefined }));
+  harness(on, { logs });
+  on('ui.open', async (_$: any, e: any) => {
+    opens.push(e);
+    return { value: undefined };
+  });
 
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'v_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'eot_1' });
+  const linesAfterRead = logs.length;
   const out = await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
   expect(out).toEqual({ value: { decision: 'block', reason: 'gate says no' } });
-});
-
-test('a pane that fails to open still lets the turn stop', async (fire: any, on: any) => {
-  // Governance must not go down with the pane. $.ui.open rejects here.
-  on('classic.Stop', async () => ({ value: { ok: true } }));
-  harness(on);
-  on('ui.open', async () => { throw new Error('no pane for you'); });
-
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'f_1' });
-  const out = await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-  expect(out).toEqual({ value: { ok: true } });
+  expect(opens).toEqual([]);
+  expect(logs.length).toBe(linesAfterRead);
 });
 
 test('an absolute path in a command is a candidate', async (fire: any, on: any) => {
@@ -1353,65 +1340,8 @@ test('a version string is still not a path', async (fire: any, on: any) => {
   expect(logs).toEqual([]);
 });
 
-test('the end of a turn opens the rules-brief pane', async (fire: any, on: any) => {
-  // Literally what the command does, rather than a second summary assembled
-  // here: one renderer, one set of words.
-  const opens: any[] = [];
-  stopBase(on);
-  harness(on);
-  on('ui.open', async (_$: any, e: any) => {
-    opens.push(e);
-    return { value: undefined };
-  });
-
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/summary-a.ts', tool_use_id: 'sm_1' });
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-
-  expect(opens.length).toBe(1);
-  expect(opens[0].id).toBe('rules-brief');
-  // Focused, because the host refuses anything else: `ui.open: focus is true
-  // or left out`. Opening the pane means taking focus, as the command does.
-  expect(opens[0].focus).toBe(true);
-});
-
-test('a turn that read nothing opens no pane', async (fire: any, on: any) => {
-  const opens: any[] = [];
-  stopBase(on);
-  harness(on);
-  on('ui.open', async (_$: any, e: any) => {
-    opens.push(e);
-    return { value: undefined };
-  });
-
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-
-  expect(opens).toEqual([]);
-});
-
-test('a gate continuation does not reopen the pane', async (fire: any, on: any) => {
-  const opens: any[] = [];
-  stopBase(on);
-  harness(on);
-  on('ui.open', async (_$: any, e: any) => {
-    opens.push(e);
-    return { value: undefined };
-  });
-
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'cont_1' });
-  await fire.classic.Stop({
-    hook_event_name: 'Stop',
-    session_id: 's1',
-    cwd: '/repo',
-    stop_hook_active: true,
-  });
-
-  expect(opens).toEqual([]);
-});
-
 test('the pane names a quiet read by its reason', async (fire: any, on: any) => {
-  // `OUTCOME_LABELS` is the one table the pane reads; the end of a turn opens
-  // this very pane rather than rebuilding it, which is what keeps them from
-  // drifting.
+  // `OUTCOME_LABELS` is the one table the pane reads.
   harness(on, {
     cli: { exitCode: 0, stdout: '', stderr: 'actual rules brief: no-brief=ungoverned src/u.ts' },
   });
@@ -1437,24 +1367,6 @@ test('every spawn on a read carries a short timeout', async (fire: any, on: any)
   expect(kinds).toContain('git rev-parse');
   expect(kinds).toContain('actual rules');
   for (const s of spawns) expect(s.init?.timeoutMs).toBe(2000);
-});
-
-test('the gate reaches its verdict before the pane opens', async (fire: any, on: any) => {
-  const order: string[] = [];
-  on('classic.Stop', async () => {
-    order.push('gate');
-    return { value: {} };
-  });
-  harness(on);
-  on('ui.open', async () => {
-    order.push('pane');
-    return { value: undefined };
-  });
-
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'o_1' });
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-
-  expect(order).toEqual(['gate', 'pane']);
 });
 
 // ── the Read hook standing down ─────────────────────────────────────────────
@@ -1552,72 +1464,6 @@ test('ACTUAL_RULES_DIR is the directory checked for rule files', async (fire: an
   expect(listed).toEqual(['/elsewhere/rules']);
 });
 
-test('a write in a repo with no rule files leaves no record to open a pane for', async (fire: any, on: any) => {
-  // Recording a `not-read-only` row is harmless in a governed repo; here it
-  // would be the thing that opened the pane at the end of every turn.
-  const opens: any[] = [];
-  stopBase(on);
-  harness(on, {
-    rules: [],
-    tool: { ref: 1, result: { stdout: '', stderr: '' }, text: '', isReadOnly: undefined },
-  });
-  on('ui.open', async (_$: any, e: any) => {
-    opens.push(e);
-    return { value: undefined };
-  });
-
-  await fire.tool.call({ tool: 'Bash', command: 'npx tsc', tool_use_id: 'u_6' });
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-
-  expect(opens).toEqual([]);
-});
-
-test('the end of a turn in a repo with no rule files does nothing', async (fire: any, on: any) => {
-  const logs: string[] = [];
-  const opens: any[] = [];
-  stopBase(on);
-  const runs = harness(on, { rules: [], logs });
-  on('ui.open', async (_$: any, e: any) => {
-    opens.push(e);
-    return { value: undefined };
-  });
-
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'nr_1' });
-  const out = await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-
-  expect(out).toEqual({ value: {} });
-  expect(logs).toEqual([]);
-  expect(opens).toEqual([]);
-  expect(runs.length).toBe(0);
-});
-
-for (const [name, env] of [
-  ['ACTUAL_PLAN_GATE=off', { ACTUAL_PLAN_GATE: 'off' }],
-  ['ACTUAL_RULES_BRIEF=off', { ACTUAL_RULES_BRIEF: 'off' }],
-  ['ACTUAL_CLI_SUBPROCESS=1', { ACTUAL_CLI_SUBPROCESS: '1' }],
-] as const) {
-  test(`${name} turns off the end-of-turn pane too`, async (fire: any, on: any) => {
-    // ACTUAL_CLI_SUBPROCESS above all: the conformance judge is a nested
-    // `claude -p` that reaches Stop too, and must not run git and the CLI.
-    const logs: string[] = [];
-    const opens: any[] = [];
-    const spawns: any[] = [];
-    stopBase(on);
-    const runs = harness(on, { env, logs, spawns });
-    on('ui.open', async (_$: any, e: any) => {
-      opens.push(e);
-      return { value: undefined };
-    });
-
-    await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-
-    expect(logs).toEqual([]);
-    expect(opens).toEqual([]);
-    expect(runs.length).toBe(0);
-    expect(spawns).toEqual([]);
-  });
-}
-
 // ── the review's follow-ups ─────────────────────────────────────────────────
 
 test('a bare cd moves the tracked directory', async (fire: any, on: any) => {
@@ -1682,34 +1528,6 @@ test('a cap of zero turns briefing off and says nothing', async (fire: any, on: 
 
   expect(logs).toEqual([]);
   expect(runs.length).toBe(0);
-});
-
-test('a pane that cannot be placed says so in the transcript', async (fire: any, on: any) => {
-  // A pane a mod opens by itself needs 144 columns and waits undrawn below
-  // that, so the end of a turn was silent in a narrower terminal.
-  const logs: string[] = [];
-  stopBase(on);
-  harness(on, { logs });
-  on('ui.open', async () => ({ value: { isPlaced: false, reason: 'terminal too narrow' } }));
-
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'np_1' });
-  logs.length = 0;
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/repo' });
-
-  expect(logs.join('\n')).toContain('/rules-brief');
-});
-
-test('a placed pane adds no transcript line', async (fire: any, on: any) => {
-  const logs: string[] = [];
-  stopBase(on);
-  harness(on, { logs });
-  on('ui.open', async () => ({ value: { isPlaced: true } }));
-
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'np_2' });
-  logs.length = 0;
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/repo' });
-
-  expect(logs).toEqual([]);
 });
 
 test('the debug note names the reason the CLI gave', async (fire: any, on: any) => {
@@ -1829,39 +1647,6 @@ test('a spawn that rejects with nothing collected reports a CLI error', async (f
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'rej_2' });
 
   expect(logs.some((l) => l.includes('CLI ERROR'))).toBe(true);
-});
-
-test('a turn that only wrote opens no pane', async (fire: any, on: any) => {
-  // Every Bash call in a governed repo leaves a row, a write's included. Only
-  // a brief, a held-back one or a failure is worth taking focus for.
-  const opens: any[] = [];
-  stopBase(on);
-  harness(on, { tool: () => ({ ref: 1, result: { stdout: 'x' }, isReadOnly: false }) });
-  on('ui.open', async (_$: any, e: any) => {
-    opens.push(e);
-    return { value: undefined };
-  });
-
-  await fire.tool.call({ tool: 'Bash', command: 'npm test', tool_use_id: 'w_1' });
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-
-  expect(opens).toEqual([]);
-});
-
-test('the pane opens once for a brief, then not again until there is another', async (fire: any, on: any) => {
-  const opens: any[] = [];
-  stopBase(on);
-  harness(on);
-  on('ui.open', async (_$: any, e: any) => {
-    opens.push(e);
-    return { value: undefined };
-  });
-
-  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'p_1' });
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
-
-  expect(opens.length).toBe(1);
 });
 
 // ── Edit and Write: the reminder for a file never read (AK-794) ─────────────
