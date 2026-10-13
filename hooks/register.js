@@ -174,19 +174,18 @@ function isWithin(root, candidate) {
 }
 
 // The Bash tool runs every command in ONE persistent shell, so a `cd` in any
-// call changes the directory every later call runs in -- while
-// $.session.cwd() keeps reporting the session's own directory, which does not
-// move. Observed in session 9dc24b52: one call did
-// `cd <repo>/apps/actual && ...`, and two later calls read
-// `lib/oauth/verify-token.ts`, a governed file. Resolved against the session
-// cwd those became <repo>/lib/oauth/verify-token.ts, which does not exist, so
-// the existence filter dropped them and two briefs were silently lost.
+// call changes the directory every later call runs in. On Claude Code 2.1.296
+// `$.session.cwd()` follows that shell: after `cd apps/actual && ls lib/oauth`
+// the next call reads `<repo>/apps/actual`. That is why nothing is tracked
+// here -- the cwd read after a call is already where the shell ended up, and
+// the only arithmetic left is for the call that did the `cd`, whose relative
+// target must be joined onto the directory the call STARTED in (see the
+// tool.call handler). A copy of the shell's directory kept here drifted from
+// the real one on every failed `cd`, and doubled every relative one.
 //
-// Tracked per session, updated from a leading `cd` chain. Perfect shell
-// emulation is not the goal and not achievable -- a `cd` buried in a pipeline,
-// a shell variable, a subshell -- so the resolver below treats this as the
-// first guess among several rather than the truth.
-const shellCwds = new Map();
+// Perfect shell emulation is not the goal and not achievable -- a `cd` buried
+// in a pipeline, a shell variable, a subshell -- so the resolver treats the
+// shell's directory as the first guess among several rather than the truth.
 
 // Candidate path tokens, plus the directory a leading `cd` chain moved to.
 // Resolution is left to the caller, which can check what exists; this stays a
@@ -263,7 +262,7 @@ const QUIET_OUTCOMES = {
   'no-rules': 'no-rule-set',
 };
 
-// Per session, not per process. `spent`, `shellCwds` and `repoRoots` are all
+// Per session, not per process. `spent` and `repoRoots` are both
 // keyed by session and this was not, so a pane headed "this session" listed
 // reads from before a `/clear` -- and from any other session sharing the
 // process -- as though they were this one's.
@@ -281,8 +280,17 @@ function outcomesFor(sessionId) {
   return own;
 }
 
+// Outcomes worth interrupting a person for at the end of a turn: a brief that
+// arrived, one held back, or a failure. Every other row (a write, an
+// ungoverned file, an unresolved token) is in the pane for anyone who asks.
+const ATTENTION_OUTCOMES = new Set(['delivered', 'deduped', 'budget', 'cli-error']);
+
+// Sessions with such a row since the pane last opened on its own.
+const needsAttention = new Set();
+
 function recordOutcome(sessionId, toolUseId, record) {
   if (!toolUseId) return;
+  if (ATTENTION_OUTCOMES.has(record.outcome)) needsAttention.add(sessionId);
   const own = outcomesFor(sessionId);
   own.set(toolUseId, { at: Date.now(), ...record });
   while (own.size > MAX_OUTCOMES) {
@@ -579,8 +587,8 @@ const repoRoots = new Map();
 // Every spawn's timeout: the PostToolUse:Read hook's own budget in hooks.json.
 // $.process.run waits 30 seconds when given none, and the hook time limit does
 // not cover it, so a CLI that hangs would stall every read for that long. A
-// spawn that times out reads as exit 1, which
-// every caller already treats as no answer.
+// spawn that times out does not return: `$.process.run` rejects, as it does
+// when the command cannot start, so each caller catches it.
 const SPAWN_TIMEOUT_MS = 2000;
 
 function deeperOf(projectDir, gitRoot) {
@@ -611,6 +619,37 @@ async function resolveHome($, sessionId) {
   }
   homeDirs.set(sessionId, home);
   return home;
+}
+
+// Whether the installed CLI has `rules brief` at all, asked once a session the
+// way preflight asks it (`have_rules_brief` in bootstrap.sh). actual-cli v0.6.2,
+// the latest release, answers `unrecognized subcommand` with exit 2 -- and
+// without this every read in a governed repository logged a CLI ERROR row for
+// a state the person cannot do anything about mid-turn. Preflight already
+// tells the agent once to upgrade.
+//
+// Only a definite answer is kept. A probe that times out says nothing about
+// the CLI, so the next read asks again.
+const briefAvailable = new Map();
+
+async function rulesBriefAvailable($, sessionId, cwd) {
+  if (briefAvailable.has(sessionId)) return briefAvailable.get(sessionId);
+  let ok = false;
+  let definite = true;
+  try {
+    const run = await $.process.run(['actual', 'rules', 'brief', '--help'], {
+      cwd,
+      timeoutMs: SPAWN_TIMEOUT_MS,
+    });
+    ok = run.exitCode === 0;
+  } catch {
+    // Cannot start (no `actual` on PATH) or still running at the timeout. The
+    // first is as definite as an exit code; the second is not distinguishable
+    // from it here, so neither is cached against the session for good.
+    definite = false;
+  }
+  if (definite) briefAvailable.set(sessionId, ok);
+  return ok;
 }
 
 async function resolveRepoRoot($, sessionId, cwd) {
@@ -782,6 +821,11 @@ async function deliverBrief($, e, result, paths, ctx) {
     return withContext(result, await debugNote($, 'not briefed', `session budget of ${cap} chars is spent`));
   }
 
+  if (!(await rulesBriefAvailable($, sessionId, cwd))) {
+    recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-cli', files: paths });
+    return withContext(result, await debugNote($, 'not briefed', '`actual rules brief` is not available in this CLI'));
+  }
+
   let appended = '';
   let exhausted = false;
   let cliError = null;
@@ -798,29 +842,40 @@ async function deliverBrief($, e, result, paths, ctx) {
   // named on stderr as `no-brief=<token>`, which the model never sees.
   const reasons = new Map();
   for (const filePath of paths) {
-    const run = await $.process.run(
-      [
-        'actual', 'rules', 'brief', '--claude-hook',
-        // The root, stated rather than inferred. The CLI takes it from
-        // `--repo` first and from the envelope's `cwd` otherwise, and that cwd
-        // follows the agent's `cd`: measured on 2.1.296, after
-        // `cd apps/actual && ls lib/oauth` the next call ran in
-        // `<repo>/apps/actual`. The CLI then placed every file against that
-        // subdirectory -- files inside it matched as `lib/...` against
-        // repository-relative globs, files outside it refused as "not under"
-        // -- so four governed reads in one session briefed nothing while this
-        // mod had resolved all four correctly. 11 of the 35 Bash calls in the
-        // reference session began with `cd <dir> &&`.
-        '--repo', repoRoot,
-        '--rules-dir', rulesDir,
-        ...cliLimits(resolved),
-      ],
-      {
-        stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }),
-        cwd,
-        timeoutMs: SPAWN_TIMEOUT_MS,
-      }
-    );
+    let run;
+    try {
+      run = await $.process.run(
+        [
+          'actual', 'rules', 'brief', '--claude-hook',
+          // The root, stated rather than inferred. The CLI takes it from
+          // `--repo` first and from the envelope's `cwd` otherwise, and that cwd
+          // follows the agent's `cd`: measured on 2.1.296, after
+          // `cd apps/actual && ls lib/oauth` the next call ran in
+          // `<repo>/apps/actual`. The CLI then placed every file against that
+          // subdirectory -- files inside it matched as `lib/...` against
+          // repository-relative globs, files outside it refused as "not under"
+          // -- so four governed reads in one session briefed nothing while this
+          // mod had resolved all four correctly. 11 of the 35 Bash calls in the
+          // reference session began with `cd <dir> &&`.
+          '--repo', repoRoot,
+          '--rules-dir', rulesDir,
+          ...cliLimits(resolved),
+        ],
+        {
+          stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }),
+          cwd,
+          timeoutMs: SPAWN_TIMEOUT_MS,
+        }
+      );
+    } catch {
+      // Past the timeout, or the CLI could not start. `$.process.run` rejects
+      // for both rather than returning an exit code. Without this the
+      // rejection left for the handler's outer catch, which returned the
+      // untouched result: no row, and a brief already collected for an earlier
+      // file thrown away after the CLI had recorded it as shown.
+      cliError = 'timed out or did not start';
+      continue;
+    }
     if (run.exitCode !== 0) {
       cliError = `exit ${run.exitCode}`;
       continue;
@@ -947,6 +1002,7 @@ const OUTCOME_LABELS = {
   'no-rule-set': 'no set   ',
   budget: 'budget   ',
   'cli-error': 'error    ',
+  'no-cli': 'old CLI   ',
   unresolved: 'no match ',
   'no-paths': 'no path  ',
   'not-read-only': 'writes   ',
@@ -991,6 +1047,12 @@ async function endOfTurn($, e) {
   //
   // Nothing to show if nothing was read.
   if (outcomesFor(sessionId).size === 0) return;
+
+  // Only when the turn left something worth looking at: a brief, one held back
+  // or a failure. Every Bash call in a governed repository leaves a row, a
+  // write's included, so "any row" opened the pane -- and took focus -- at the
+  // end of every turn. `/rules-brief` still shows the rest.
+  if (!needsAttention.delete(sessionId)) return;
 
   // The same arguments the command uses, focus included: the host refuses
   // `focus: false` ("ui.open: focus is true or left out"). Focus is granted
@@ -1121,6 +1183,14 @@ export function register(on, options = {}) {
   on('tool.call', { tool: ['Bash', 'Read'] }, async ($, e, next) => {
     // Let the command run first. Briefing is advisory, so it must never delay
     // or gate the tool, and a command that fails has nothing worth briefing.
+    //
+    // The directory the call starts in is read first: Claude Code moves the
+    // shell's directory while the command runs, so after next() a relative
+    // `cd` target is already applied to what `$.session.cwd()` reports.
+    let startCwd = null;
+    try {
+      startCwd = (await $.session.cwd()) || null;
+    } catch {}
     const result = await next(e);
 
     try {
@@ -1134,19 +1204,12 @@ export function register(on, options = {}) {
       const rulesDir = await governedRulesDir($, sessionId, cwd);
       if (!rulesDir) return result;
 
-      // The shell's directory is tracked before any gate below it, because the
-      // command that moves the shell is usually not one that briefs: `cd x &&
-      // npm test` is not read-only, and `cd apps/web` names no file at all.
-      // Both used to return before this, so the shell moved and the mod did
-      // not, and every later relative path resolved against the wrong base.
+      // The command that moves the shell is usually not one that briefs
+      // (`cd x && npm test` is not read-only), and a failed one moves it too,
+      // so the directory is not read from anything the command's outcome
+      // gates: it is the live cwd, or the start-of-call cwd plus the `cd`.
       // Parsing is pure, so doing it here costs nothing on a write.
       const found = e.tool === 'Bash' ? candidateTokens(e.command) : null;
-      if (found?.cdTarget) {
-        shellCwds.set(
-          sessionId,
-          normalizePath(joinPath(shellCwds.get(sessionId) ?? cwd, found.cdTarget))
-        );
-      }
 
       // Claude Code's own read/write verdict. Absent (not false) for a write,
       // and absent for anything it could not classify -- both mean no brief.
@@ -1172,7 +1235,11 @@ export function register(on, options = {}) {
         recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-paths' });
         return withContext(result, await debugNote($, 'not briefed', 'the command named no path-shaped token'));
       }
-      const shellCwd = shellCwds.get(sessionId) ?? cwd;
+      // Where the command ran. With a `cd` in it, its target is relative to
+      // where the call started; without one, the shell is where it ended.
+      const shellCwd = found.cdTarget
+        ? normalizePath(joinPath(startCwd ?? cwd, found.cdTarget))
+        : cwd;
 
       // Resolve each token against the bases it could plausibly be relative
       // to, nearest first, and let the filesystem decide. The shell's own

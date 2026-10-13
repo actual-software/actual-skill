@@ -1198,7 +1198,8 @@ fi
 # The mod is not shell, so the jq/python/node rule does not apply to it -- it
 # runs inside Claude Code and adds no system dependency. The invariant that
 # does apply is narrower: the only processes it may spawn are the `actual` CLI
-# and the one read-only `git` query it needs -- `rev-parse` for the
+# (the brief itself, and the once-a-session `rules brief --help` probe for the
+# subcommand) and the one read-only `git` query it needs -- `rev-parse` for the
 # repository root.
 # `claude plugin validate` reports that it calls $.process.run at all; this
 # pins what it runs. Comment lines are stripped first, or the file's own
@@ -1207,7 +1208,7 @@ MOD_CODE="${WORK}/register.nocomments.js"
 grep -vE '^[[:space:]]*(//|\*|/\*)' "${HOOKS_DIR}/register.js" > "$MOD_CODE"
 SPAWNS=$(grep -c '\$\.process\.run(' "$MOD_CODE" || true)
 ALLOWED=$(grep -cE "'actual', 'rules', 'brief'|'git', 'rev-parse'" "$MOD_CODE" || true)
-if [ "$SPAWNS" = "2" ] && [ "$ALLOWED" = "2" ]; then
+if [ "$SPAWNS" = "3" ] && [ "$ALLOWED" = "3" ]; then
   pass "the mod spawns nothing but the actual CLI and git rev-parse"
 else
   fail "the mod spawns an unexpected process" \

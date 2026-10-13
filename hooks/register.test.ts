@@ -49,6 +49,15 @@ function harness(
     listed?: string[];
     // Collects every spawn, git and CLI alike, as `{ argv, init }`.
     spawns?: any[];
+    // The shell's directory moves with each `cd` in a Bash command, as it does
+    // on Claude Code 2.1.296: `session.cwd` then answers where the last
+    // command ended, a failed one included. Off, it answers `cwd` throughout.
+    liveShell?: boolean;
+    // What `actual rules brief --help` exits with. Default 0.
+    helpExit?: number;
+    // `process.run` rejects instead of returning, as it does past `timeoutMs`.
+    // Receives the brief spawn's 1-based ordinal; return true to reject it.
+    rejectBrief?: (n: number) => boolean;
   } = {}
 ) {
   const runs: any[] = [];
@@ -64,7 +73,8 @@ function harness(
   };
   for (const [k, v] of Object.entries(opts.config ?? {})) cfgEnv[envName[k]] = String(v);
   mock.env(on, { ...cfgEnv, ...(opts.env ?? {}) });
-  on('session.cwd', async () => ({ value: opts.cwd ?? '/repo' }));
+  let shellDir = opts.cwd ?? '/repo';
+  on('session.cwd', async () => ({ value: shellDir }));
   on('session.root', async () => ({ value: opts.root ?? '/repo' }));
   on('session.id', async () => ({ value: 'sess-1' }));
   on('session.usage', async () => ({
@@ -87,7 +97,18 @@ function harness(
   // Shaped like a real Bash tool result, probed from a live session: `text`
   // is the string Claude reads, `result` is a structured object, and
   // `isReadOnly` is Claude Code's own read/write verdict.
-  on('tool.call', async () =>
+  on('tool.call', async (_$: any, e: any) => {
+    if (opts.liveShell && typeof e?.command === 'string') {
+      for (const part of e.command.split('&&')) {
+        const m = /^\s*cd\s+(\S+)\s*$/.exec(part);
+        if (!m) continue;
+        const dir = m[1];
+        shellDir = dir.startsWith('/') ? dir : `${shellDir.replace(/\/+$/, '')}/${dir}`;
+      }
+    }
+    return bottom();
+  });
+  const bottom = () =>
     (typeof opts.tool === 'function' ? opts.tool() : opts.tool) ??
     (opts.readShaped
       ? {
@@ -101,14 +122,20 @@ function harness(
           result: { stdout: 'TOOL OUTPUT', stderr: '', interrupted: false, isImage: false },
           text: 'TOOL OUTPUT',
           isReadOnly: true,
-        }));
+        });
+  let briefSpawns = 0;
   on('process.run', async (_$: any, e: any) => {
     opts.spawns?.push(e);
+    // The once-a-session probe for the subcommand is not a brief either.
+    if (e.argv?.includes('--help')) {
+      return { value: { exitCode: opts.helpExit ?? 0, stdout: '', stderr: '' } };
+    }
     // The repo-root query is not a brief; answer it without recording a run.
     if (e.argv?.[0] === 'git') {
       return { value: { exitCode: 0, stdout: `${opts.gitRoot ?? opts.root ?? '/repo'}\n`, stderr: '' } };
     }
     runs.push(e);
+    if (opts.rejectBrief?.(++briefSpawns)) throw new Error('timed out');
     const cli = typeof opts.cli === 'function' ? opts.cli() : opts.cli;
     return { value: cli ?? { exitCode: 0, stdout: reply(BRIEF), stderr: '' } };
   });
@@ -667,6 +694,7 @@ test('a path relative to a cd from an EARLIER call still resolves', async (fire:
   // exist, so the existence filter dropped them and two briefs were lost.
   const runs = harness(on, {
     existing: ['/repo/apps/actual/lib/oauth/verify-token.ts'],
+    liveShell: true,
   });
 
   await fire.tool.call({ tool: 'Bash', command: 'cd /repo/apps/actual && ls lib/oauth/' });
@@ -1588,7 +1616,7 @@ test('a bare cd moves the tracked directory', async (fire: any, on: any) => {
   // `cd apps/web` on its own needed no separator, so the parser never matched
   // it, the ambiguity check threw the command away, and the shell moved while
   // the mod did not.
-  const runs = harness(on, { root: '/repo' });
+  const runs = harness(on, { root: '/repo', liveShell: true });
 
   await fire.tool.call({ tool: 'Bash', command: 'cd apps/web', tool_use_id: 'cd_1' });
   await fire.tool.call({ tool: 'Bash', command: 'cat a.ts', tool_use_id: 'cd_2' });
@@ -1602,6 +1630,7 @@ test('a cd in a command that cannot brief is still tracked', async (fire: any, o
   let call = 0;
   const runs = harness(on, {
     root: '/repo',
+    liveShell: true,
     // The first command is a write-shaped one; the read follows it.
     tool: () => ({ ref: 1, result: { stdout: 'x' }, isReadOnly: ++call > 1 }),
   });
@@ -1616,7 +1645,7 @@ test('a cd in a command that cannot brief is still tracked', async (fire: any, o
 test('successive cds compose, as the shell composes them', async (fire: any, on: any) => {
   // `cd a && cd b` ends in `a/b`. Overwriting put the base one level too
   // shallow for every later path in the session.
-  const runs = harness(on, { root: '/repo' });
+  const runs = harness(on, { root: '/repo', liveShell: true });
 
   await fire.tool.call({ tool: 'Bash', command: 'cd apps && cd web && cat a.ts', tool_use_id: 'cd_4' });
 
@@ -1724,7 +1753,10 @@ test('the mod states the root, so the CLI cannot infer it from a moved shell', a
 });
 
 test('the stated root survives a cd into a subdirectory', async (fire: any, on: any) => {
-  const runs = harness(on, { cwd: '/repo', root: '/repo', gitRoot: '/repo' });
+  // The shell moves as the command runs, so the cwd read afterwards already
+  // includes the `cd`: joining the target onto it again looked for
+  // /repo/apps/actual/apps/actual/lib/a.ts and skipped the read without a word.
+  const runs = harness(on, { cwd: '/repo', root: '/repo', gitRoot: '/repo', liveShell: true });
 
   await fire.tool.call({ tool: 'Bash', command: 'cd apps/actual && cat lib/a.ts', tool_use_id: 'repo_2' });
 
@@ -1732,4 +1764,94 @@ test('the stated root survives a cd into a subdirectory', async (fire: any, on: 
   // The file resolves against the moved shell; the root does not move with it.
   expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/apps/actual/lib/a.ts');
   expect(runs[0].argv[runs[0].argv.indexOf('--repo') + 1]).toBe('/repo');
+});
+
+// ── the second review ───────────────────────────────────────────────────────
+
+test('a failed cd still moves the base for the next relative cd', async (fire: any, on: any) => {
+  // The shell moved although the command failed, and the read-side gates
+  // return on an error before looking at the command. Reading the live cwd
+  // keeps the base right; a copy kept by the mod went stale here.
+  let call = 0;
+  const runs = harness(on, {
+    root: '/repo',
+    liveShell: true,
+    tool: () => ({ ref: 1, result: { stdout: 'x' }, isReadOnly: true, isError: ++call === 1 }),
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cd apps && npm test', tool_use_id: 'fc_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'cd web && cat a.ts', tool_use_id: 'fc_2' });
+
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/apps/web/a.ts');
+});
+
+test('a CLI without rules brief is probed once and spawned never', async (fire: any, on: any) => {
+  // actual-cli v0.6.2 answers `unrecognized subcommand` with exit 2. Every
+  // read used to log a CLI ERROR row for that.
+  const logs: string[] = [];
+  const spawns: any[] = [];
+  const runs = harness(on, { logs, spawns, helpExit: 2 });
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'old_1' });
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/src/b.ts', tool_use_id: 'old_2' });
+
+  expect(runs.length).toBe(0);
+  expect(logs.filter((l) => l.includes('CLI ERROR'))).toEqual([]);
+  expect(briefed(r)).toBe('');
+  expect(spawns.filter((s) => s.argv.includes('--help')).length).toBe(1);
+});
+
+test('a spawn that rejects is a CLI error, and an earlier brief survives', async (fire: any, on: any) => {
+  // `$.process.run` rejects past its timeout. The first file's brief was
+  // already recorded by the CLI as shown, so dropping it loses it for good.
+  const logs: string[] = [];
+  const runs = harness(on, { logs, rejectBrief: (n) => n === 2 });
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts src/b.ts', tool_use_id: 'rej_1' });
+
+  expect(runs.length).toBe(2);
+  expect(briefed(r)).toContain(BRIEF);
+});
+
+test('a spawn that rejects with nothing collected reports a CLI error', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  harness(on, { logs, rejectBrief: () => true });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'rej_2' });
+
+  expect(logs.some((l) => l.includes('CLI ERROR'))).toBe(true);
+});
+
+test('a turn that only wrote opens no pane', async (fire: any, on: any) => {
+  // Every Bash call in a governed repo leaves a row, a write's included. Only
+  // a brief, a held-back one or a failure is worth taking focus for.
+  const opens: any[] = [];
+  stopBase(on);
+  harness(on, { tool: () => ({ ref: 1, result: { stdout: 'x' }, isReadOnly: false }) });
+  on('ui.open', async (_$: any, e: any) => {
+    opens.push(e);
+    return { value: undefined };
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'npm test', tool_use_id: 'w_1' });
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(opens).toEqual([]);
+});
+
+test('the pane opens once for a brief, then not again until there is another', async (fire: any, on: any) => {
+  const opens: any[] = [];
+  stopBase(on);
+  harness(on);
+  on('ui.open', async (_$: any, e: any) => {
+    opens.push(e);
+    return { value: undefined };
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'p_1' });
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(opens.length).toBe(1);
 });
