@@ -117,9 +117,19 @@ function resolveBase(command) {
   let rest = command.trim();
   let base = null;
   for (;;) {
-    const m = /^cd\s+("[^"]+"|'[^']+'|[^\s&|;]+)\s*&&\s*/.exec(rest);
+    // `&&` or `;`, and a `cd` that ends the command has neither. A bare
+    // `cd apps/web` was previously not a base at all: the regex needed a
+    // separator, so the loop never matched, the `cd` was still in `rest`, and
+    // the ambiguity check below threw the whole command away. The shell kept
+    // the new directory and this mod did not, so every later relative path
+    // resolved against the wrong base.
+    const m = /^cd\s+("[^"]+"|'[^']+'|[^\s&|;]+)\s*(?:&&|;|$)\s*/.exec(rest);
     if (!m) break;
-    base = m[1].replace(/^["']|["']$/g, '');
+    const target = m[1].replace(/^["']|["']$/g, '');
+    // Successive `cd`s compose, as the shell composes them: `cd a && cd b`
+    // ends in `a/b`, not `b`. Overwriting made the second one win, which put
+    // the base one directory too shallow for the rest of the session.
+    base = base === null || target.startsWith('/') ? target : joinPath(base, target);
     rest = rest.slice(m[0].length);
   }
   // A `cd` anywhere in what is left makes the base ambiguous.
@@ -253,15 +263,30 @@ const QUIET_OUTCOMES = {
   'no-rules': 'no-rule-set',
 };
 
+// Per session, not per process. `spent`, `shellCwds` and `repoRoots` are all
+// keyed by session and this was not, so a pane headed "this session" listed
+// reads from before a `/clear` -- and from any other session sharing the
+// process -- as though they were this one's.
+// Sessions that have already been told the budget is spent.
+const budgetAnnounced = new Set();
+
 const outcomes = new Map();
 
+function outcomesFor(sessionId) {
+  let own = outcomes.get(sessionId);
+  if (!own) {
+    own = new Map();
+    outcomes.set(sessionId, own);
+  }
+  return own;
+}
 
-function recordOutcome(toolUseId, record) {
+function recordOutcome(sessionId, toolUseId, record) {
   if (!toolUseId) return;
-  outcomes.set(toolUseId, { at: Date.now(), ...record });
-  while (outcomes.size > MAX_OUTCOMES) {
-    const oldest = outcomes.keys().next().value;
-    outcomes.delete(oldest);
+  const own = outcomesFor(sessionId);
+  own.set(toolUseId, { at: Date.now(), ...record });
+  while (own.size > MAX_OUTCOMES) {
+    own.delete(own.keys().next().value);
   }
 }
 
@@ -369,7 +394,8 @@ function reportLine(record) {
       // names all four.
       return null;
     case 'budget':
-      return row('BUDGET', 'spent for this session');
+      // Reported once by deliverBrief when the budget runs out, not per read.
+      return null;
     case 'cli-error':
       return row('CLI ERROR', record.detail ?? 'CLI error', files);
     default:
@@ -562,6 +588,25 @@ function deeperOf(projectDir, gitRoot) {
   return g; // unrelated: the active checkout wins
 }
 
+// `~` expanded once per session. PATH_TOKEN accepts a `~/` token, and without
+// this `joinPath` made it `<base>/~/repos/...`, which exists nowhere -- so the
+// pattern offered a candidate that could never resolve. It matters because a
+// checkout usually does sit under the home directory, so `cat ~/repos/x/a.ts`
+// names a file this mod governs.
+const homeDirs = new Map();
+
+async function resolveHome($, sessionId) {
+  if (homeDirs.has(sessionId)) return homeDirs.get(sessionId);
+  let home = null;
+  try {
+    home = (await $.env.get('HOME')) || null;
+  } catch {
+    // No HOME: a `~` token simply stays unresolvable, as before.
+  }
+  homeDirs.set(sessionId, home);
+  return home;
+}
+
 async function resolveRepoRoot($, sessionId, cwd) {
   if (repoRoots.has(sessionId)) return repoRoots.get(sessionId);
   let gitRoot = null;
@@ -707,9 +752,22 @@ async function deliverBrief($, e, result, paths, ctx) {
     ? resolved.maxSessionChars
     : DEFAULT_MAX_SESSION_CHARS;
 
+  // A cap of 0 turns briefing off, which `maxSessionChars` documents. Off has
+  // to mean silent: this used to fall through to the budget row below, so the
+  // switch that disables the feature made it report on every single read.
+  if (cap <= 0) return result;
+
   let remaining = spendable(sessionId, cap);
   if (remaining <= 0) {
-    recordOutcome(e.tool_use_id, { outcome: 'budget', files: paths });
+    recordOutcome(sessionId, e.tool_use_id, { outcome: 'budget', files: paths });
+    // Said once a session, not once a read. The budget is spent for the rest
+    // of the session, so every later read of any file in the repository --
+    // including the ungoverned ones this promises to stay quiet about --
+    // repeated the same row. The pane still lists each one.
+    if (!budgetAnnounced.has(sessionId)) {
+      budgetAnnounced.add(sessionId);
+      $.ui.log(row('BUDGET', `${cap} chars spent; quiet for the rest of this session`));
+    }
     return withContext(result, await debugNote($, 'not briefed', `session budget of ${cap} chars is spent`));
   }
 
@@ -780,7 +838,7 @@ async function deliverBrief($, e, result, paths, ctx) {
 
   if (appended) {
     // One record for the call, merging what each file contributed.
-    recordOutcome(e.tool_use_id, {
+    recordOutcome(sessionId, e.tool_use_id, {
       outcome: exhausted ? 'budget' : 'delivered',
       files: briefedFiles,
       // Kept so the pane can still show what resolved but said nothing.
@@ -793,7 +851,7 @@ async function deliverBrief($, e, result, paths, ctx) {
       },
     });
   } else if (cliError) {
-    recordOutcome(e.tool_use_id, { outcome: 'cli-error', files: paths, detail: cliError });
+    recordOutcome(sessionId, e.tool_use_id, { outcome: 'cli-error', files: paths, detail: cliError });
   } else {
     // Resolved a governed file and the CLI said nothing: every applicable
     // decision has already been briefed this session. The single most
@@ -807,13 +865,19 @@ async function deliverBrief($, e, result, paths, ctx) {
     // mixed call stays `deduped`, whose line names each group.
     const kinds = new Set(paths.map((f) => reasons.get(f) ?? 'unknown'));
     const only = kinds.size === 1 ? [...kinds][0] : null;
-    recordOutcome(e.tool_use_id, {
+    recordOutcome(sessionId, e.tool_use_id, {
       outcome: QUIET_OUTCOMES[only] ?? 'deduped',
       files: paths,
       reasons: Object.fromEntries(reasons),
     });
-    const note = await debugNote($, 'not briefed',
-      `every decision for ${paths.join(', ')} was already briefed this session`);
+    // The reason the CLI gave, per file, rather than one guess for all of
+    // them. This said "already briefed" whatever the token was, so a debug
+    // session chasing an ungoverned or outside-root file was told the
+    // opposite of what the CLI had reported.
+    const why = paths
+      .map((f) => `${f}: ${reasons.get(f) ?? 'no reason given'}`)
+      .join('; ');
+    const note = await debugNote($, 'not briefed', `nothing new for ${why}`);
     if (note) appended = note;
   }
 
@@ -840,7 +904,7 @@ async function deliverBrief($, e, result, paths, ctx) {
   // deliberate line per brief is the report itself.
   // $.ui.log already prefixes the plugin's name, so the line carried its own
   // prefix twice: `actual-cli: actual: briefed 2 ADRs...`.
-  const report = reportLine(outcomes.get(e.tool_use_id));
+  const report = reportLine(outcomesFor(sessionId).get(e.tool_use_id));
   if (report) $.ui.log(report);
 
 
@@ -890,8 +954,12 @@ async function endOfTurn($, e) {
   // The same switches the read path honours. ACTUAL_CLI_SUBPROCESS matters
   // most here: the conformance judge is a nested `claude -p` that stops too.
   if (await optedOut($)) return;
-  const sessionId = e?.session_id ?? (await $.session.id());
-  const cwd = e?.cwd ?? (await $.session.cwd());
+  // `$.session.id()` first, not the envelope's `session_id`. The read path
+  // files its records under the former, and keying this path off the latter
+  // is the same mistake four earlier bugs were: two paths computing one key
+  // differently, with the records invisible to whichever used the other.
+  const sessionId = (await $.session.id()) ?? e?.session_id;
+  const cwd = (await $.session.cwd()) ?? e?.cwd;
   if (!(await governedRulesDir($, sessionId, cwd))) return;
 
   // `/rules-brief`, run for you. Literally the same call the command makes,
@@ -900,11 +968,21 @@ async function endOfTurn($, e) {
   // the labels came to disagree across surfaces before.
   //
   // Nothing to show if nothing was read.
-  if (outcomes.size > 0) {
-    // The same arguments the command uses, focus included: the host refuses
-    // `focus: false` ("ui.open: focus is true or left out"), so a pane that
-    // opens is a pane that takes focus. Escape closes it.
-    await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
+  if (outcomesFor(sessionId).size === 0) return;
+
+  // The same arguments the command uses, focus included: the host refuses
+  // `focus: false` ("ui.open: focus is true or left out"). Focus is granted
+  // only while the prompt is empty and nothing else holds it, so this does
+  // not take keystrokes from someone mid-sentence.
+  const opened = await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
+
+  // A pane a mod opens on its own initiative needs a terminal at least 144
+  // columns wide -- 110 once the person has opened that pane themselves --
+  // and below that it waits, undrawn, reporting `isPlaced: false`. Without
+  // this the end of a turn was simply silent in a narrower terminal, and the
+  // README promised a pane that would never arrive.
+  if (opened && opened.isPlaced === false) {
+    $.ui.log(row('BRIEFING', `${outcomesFor(sessionId).size} reads this session; /rules-brief to see them`));
   }
 }
 
@@ -915,9 +993,9 @@ async function endOfTurn($, e) {
 // makes sense once the delivered row above it has stated the rules it is
 // suppressing. Newest first put every explanation below the thing it
 // explained.
-function paneRows(elements) {
+function paneRows(elements, sessionId) {
   const { Box, Text } = elements;
-  const rows = [...outcomes.entries()];
+  const rows = [...outcomesFor(sessionId).entries()];
   if (rows.length === 0) {
     return [Text({ dimColor: true, children: ['No reads yet in this session.'] })];
   }
@@ -986,7 +1064,7 @@ export function register(on, options = {}) {
       children: [
         Text({ bold: true, children: ['Rule briefing this session'] }),
         Text({ children: [' '] }),
-        ...paneRows(elements),
+        ...paneRows(elements, await $.session.id()),
       ],
     });
   });
@@ -1034,10 +1112,24 @@ export function register(on, options = {}) {
       const rulesDir = await governedRulesDir($, sessionId, cwd);
       if (!rulesDir) return result;
 
+      // The shell's directory is tracked before any gate below it, because the
+      // command that moves the shell is usually not one that briefs: `cd x &&
+      // npm test` is not read-only, and `cd apps/web` names no file at all.
+      // Both used to return before this, so the shell moved and the mod did
+      // not, and every later relative path resolved against the wrong base.
+      // Parsing is pure, so doing it here costs nothing on a write.
+      const found = e.tool === 'Bash' ? candidateTokens(e.command) : null;
+      if (found?.cdTarget) {
+        shellCwds.set(
+          sessionId,
+          normalizePath(joinPath(shellCwds.get(sessionId) ?? cwd, found.cdTarget))
+        );
+      }
+
       // Claude Code's own read/write verdict. Absent (not false) for a write,
       // and absent for anything it could not classify -- both mean no brief.
       if (result?.isReadOnly !== true) {
-        recordOutcome(e.tool_use_id, { outcome: 'not-read-only' });
+        recordOutcome(sessionId, e.tool_use_id, { outcome: 'not-read-only' });
         return withContext(result, await debugNote($, 'not briefed', 'Claude Code did not mark this command read-only'));
       }
 
@@ -1048,27 +1140,14 @@ export function register(on, options = {}) {
       if (e.tool === 'Read') {
         const named = typeof e.file_path === 'string' ? normalizePath(e.file_path) : null;
         if (!named) {
-          recordOutcome(e.tool_use_id, { outcome: 'no-paths' });
+          recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-paths' });
           return withContext(result, await debugNote($, 'not briefed', 'the Read named no file'));
         }
         return await deliverBrief($, e, result, [named], { cwd, sessionId, rulesDir, repoRoot, options });
       }
 
-      const found = candidateTokens(e.command);
-
-      // Record the `cd` before deciding whether there is anything to brief.
-      // The command that moves the shell usually names no file of its own --
-      // `cd <repo>/apps/actual && ls lib/oauth/` was the real one -- so
-      // returning early on "no candidates" would drop the directory and every
-      // later relative path would resolve against the wrong base.
-      if (found?.cdTarget) {
-        shellCwds.set(
-          sessionId,
-          normalizePath(joinPath(shellCwds.get(sessionId) ?? cwd, found.cdTarget))
-        );
-      }
       if (!found || found.tokens.length === 0) {
-        recordOutcome(e.tool_use_id, { outcome: 'no-paths' });
+        recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-paths' });
         return withContext(result, await debugNote($, 'not briefed', 'the command named no path-shaped token'));
       }
       const shellCwd = shellCwds.get(sessionId) ?? cwd;
@@ -1094,11 +1173,18 @@ export function register(on, options = {}) {
       const bases = found.cdTarget
         ? [shellCwd]
         : [...new Set([shellCwd, cwd, repoRoot].filter(Boolean))];
+      const home = found.tokens.some((t) => t.startsWith('~/'))
+        ? await resolveHome($, sessionId)
+        : null;
       const paths = [];
       for (const token of found.tokens) {
         if (paths.length >= MAX_PATHS_PER_COMMAND) break;
+        // A `~/` token names one absolute path, so it is resolved against the
+        // home directory and not against each base in turn.
+        const expanded = token.startsWith('~/') ? (home ? `${home}/${token.slice(2)}` : null) : token;
+        if (expanded === null) continue;
         for (const base of bases) {
-          const candidate = normalizePath(joinPath(base, token));
+          const candidate = normalizePath(joinPath(base, expanded));
           if (!isWithin(repoRoot ?? cwd, candidate)) continue;
           // A rule document is not governed by itself, and agents read their
           // own rules unprompted -- session 9dc24b52 did it in its second Bash
@@ -1114,7 +1200,7 @@ export function register(on, options = {}) {
       if (paths.length === 0) {
         // Tokens that looked like paths but resolved to nothing inside the
         // repository. Common and uninteresting on its own; the pane shows it.
-        recordOutcome(e.tool_use_id, { outcome: 'unresolved', tokens: found.tokens });
+        recordOutcome(sessionId, e.tool_use_id, { outcome: 'unresolved', tokens: found.tokens });
         return withContext(result, await debugNote($, 'not briefed',
           `no token resolved to a governed file inside the repo: ${found.tokens.join(', ')}`));
       }

@@ -28,7 +28,7 @@ function harness(
   opts: {
     env?: Record<string, string>;
     cli?: any | (() => any);
-    tool?: any;
+    tool?: any | (() => any);
     cwd?: string;
     root?: string;
     // Paths $.fs.exists should answer true for. Default: everything under the
@@ -88,7 +88,7 @@ function harness(
   // is the string Claude reads, `result` is a structured object, and
   // `isReadOnly` is Claude Code's own read/write verdict.
   on('tool.call', async () =>
-    opts.tool ??
+    (typeof opts.tool === 'function' ? opts.tool() : opts.tool) ??
     (opts.readShaped
       ? {
           ref: 1,
@@ -1264,15 +1264,15 @@ test('an absolute path in a command is a candidate', async (fire: any, on: any) 
   expect(reported(logs)).toContain('query-keys.ts');
 });
 
-test('a home-relative path is a candidate', async (fire: any, on: any) => {
-  const logs: string[] = [];
-  const runs = harness(on, { logs, root: '/repo' });
+test('a ~/ path with no HOME is declined, not mangled', async (fire: any, on: any) => {
+  // This replaces a test that asserted only that the token "reached
+  // resolution". It passed while `joinPath` was turning `~/x` into
+  // `<base>/~/x`, which is the bug it was meant to cover.
+  const runs = harness(on, { env: {}, root: '/repo' });
 
-  await fire.tool.call({ tool: 'Bash', command: 'cat ~/notes/a.ts', tool_use_id: 'abs_2' });
-  // `~` is not expanded here, so where it resolves is another question. What
-  // this holds is that the token reached resolution at all: the CLI was asked
-  // about it rather than the command being discarded as naming no path.
-  expect(runs.length).toBeGreaterThan(0);
+  await fire.tool.call({ tool: 'Bash', command: 'cat ~/notes/a.ts', tool_use_id: 'home_3' });
+
+  expect(runs.length).toBe(0);
 });
 
 test('a version string is still not a path', async (fire: any, on: any) => {
@@ -1549,3 +1549,129 @@ for (const [name, env] of [
     expect(spawns).toEqual([]);
   });
 }
+
+// ── the review's follow-ups ─────────────────────────────────────────────────
+
+test('a bare cd moves the tracked directory', async (fire: any, on: any) => {
+  // `cd apps/web` on its own needed no separator, so the parser never matched
+  // it, the ambiguity check threw the command away, and the shell moved while
+  // the mod did not.
+  const runs = harness(on, { root: '/repo' });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cd apps/web', tool_use_id: 'cd_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat a.ts', tool_use_id: 'cd_2' });
+
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/apps/web/a.ts');
+});
+
+test('a cd in a command that cannot brief is still tracked', async (fire: any, on: any) => {
+  // `cd x && npm test` is not read-only, and the read-only gate returned
+  // before the directory was recorded, so the shell moved and the mod did not.
+  let call = 0;
+  const runs = harness(on, {
+    root: '/repo',
+    // The first command is a write-shaped one; the read follows it.
+    tool: () => ({ ref: 1, result: { stdout: 'x' }, isReadOnly: ++call > 1 }),
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cd apps/web && npm test', tool_use_id: 'cd_3a' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat a.ts', tool_use_id: 'cd_3b' });
+
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/apps/web/a.ts');
+});
+
+test('successive cds compose, as the shell composes them', async (fire: any, on: any) => {
+  // `cd a && cd b` ends in `a/b`. Overwriting put the base one level too
+  // shallow for every later path in the session.
+  const runs = harness(on, { root: '/repo' });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cd apps && cd web && cat a.ts', tool_use_id: 'cd_4' });
+
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/apps/web/a.ts');
+});
+
+test('a spent budget is reported once a session, not once a read', async (fire: any, on: any) => {
+  // Every later read of any file in the repository repeated the row, the
+  // ungoverned ones this promises to stay quiet about included.
+  const logs: string[] = [];
+  harness(on, { logs, config: { maxSessionChars: 1 } });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'bg_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts', tool_use_id: 'bg_2' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/c.ts', tool_use_id: 'bg_3' });
+
+  expect(logs.filter((l) => l.includes('BUDGET')).length).toBe(1);
+});
+
+test('a cap of zero turns briefing off and says nothing', async (fire: any, on: any) => {
+  // `maxSessionChars: 0` is documented as off. Off used to report on every read.
+  const logs: string[] = [];
+  const runs = harness(on, { logs, config: { maxSessionChars: 0 } });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'off_1' });
+
+  expect(logs).toEqual([]);
+  expect(runs.length).toBe(0);
+});
+
+test('a pane that cannot be placed says so in the transcript', async (fire: any, on: any) => {
+  // A pane a mod opens by itself needs 144 columns and waits undrawn below
+  // that, so the end of a turn was silent in a narrower terminal.
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, { logs });
+  on('ui.open', async () => ({ value: { isPlaced: false, reason: 'terminal too narrow' } }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'np_1' });
+  logs.length = 0;
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/repo' });
+
+  expect(logs.join('\n')).toContain('/rules-brief');
+});
+
+test('a placed pane adds no transcript line', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  stopBase(on);
+  harness(on, { logs });
+  on('ui.open', async () => ({ value: { isPlaced: true } }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'np_2' });
+  logs.length = 0;
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 'sess-1', cwd: '/repo' });
+
+  expect(logs).toEqual([]);
+});
+
+test('the debug note names the reason the CLI gave', async (fire: any, on: any) => {
+  // It said "already briefed" whatever the token was, so a debug session
+  // chasing an ungoverned file was told the opposite of what the CLI reported.
+  harness(on, {
+    env: { ACTUAL_HOOK_DEBUG: '1' },
+    cli: { exitCode: 0, stdout: '', stderr: 'actual rules brief: no-brief=ungoverned src/a.ts' },
+  });
+
+  const out = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'dbg_1' });
+  expect(JSON.stringify(out)).toContain('ungoverned');
+  expect(JSON.stringify(out)).not.toContain('already briefed this session');
+});
+
+test('a ~/ path resolves against the home directory', async (fire: any, on: any) => {
+  // PATH_TOKEN accepted `~/` and joinPath made it `<base>/~/...`, which exists
+  // nowhere, so the pattern offered a candidate that could never resolve. A
+  // checkout usually does sit under home, so such a path names a real file.
+  const runs = harness(on, { env: { HOME: '/Users/x' }, root: '/Users/x/repo' });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat ~/repo/src/a.ts', tool_use_id: 'home_1' });
+
+  expect(runs.length).toBe(1);
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/Users/x/repo/src/a.ts');
+});
+
+test('a ~/ path outside the repository is still declined', async (fire: any, on: any) => {
+  const runs = harness(on, { env: { HOME: '/Users/x' }, root: '/Users/x/repo' });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat ~/notes/a.ts', tool_use_id: 'home_2' });
+
+  expect(runs.length).toBe(0);
+});
