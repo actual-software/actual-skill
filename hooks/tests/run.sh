@@ -721,11 +721,12 @@ st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json
 ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
 if [ "$st" = "0" ] \
    && printf '%s' "$ctx" | grep -q "governance is active" \
-   && printf '%s' "$ctx" | grep -q "surfaced to you when you read it" \
-   && ! printf '%s' "$ctx" | grep -q "brew upgrade"; then
-  pass "rules + full CLI: success message also reports briefing active, with no upgrade note"
+   && ! printf '%s' "$ctx" | grep -q "surfaced to you" \
+   && ! printf '%s' "$ctx" | grep -q "brew upgrade" \
+   && [ "${ctx% }" = "$ctx" ]; then
+  pass "rules + full CLI: success message makes no briefing promise a compaction would break, and no upgrade note"
 else
-  fail "healthy preflight missing the briefing sentence" "status=$st ctx=$ctx"
+  fail "healthy preflight promises briefing, carries an upgrade note, or ends in a space" "status=$st ctx=$ctx"
 fi
 
 echo

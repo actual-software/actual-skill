@@ -1,5 +1,5 @@
 // register.js - Claude mod: brief the agent on the rules governing a file it
-// read through Bash.
+// read, through the Read tool or through Bash.
 //
 // Why this exists beside hooks/rules-brief.sh rather than replacing it.
 // PostToolUse:Read is the delivery point rules-brief.sh uses, and it is the
@@ -17,8 +17,10 @@
 // the command string as data, runs in-process, and spends its CLI time inside
 // $.process.run, which the hook time limit explicitly excludes.
 //
-// Division of labour with rules-brief.sh: that hook owns Read, this mod owns
-// Bash, and they never both fire for one tool call. The mod deliberately
+// Division of labour with rules-brief.sh: this mod hooks both Read and Bash,
+// and where it loads it stands the hook down for Read (STAND_DOWN_FIELD, below)
+// so one brief is delivered once, by the path that has a budget and a record.
+// The hook remains for versions of Claude Code that cannot load a mod. The mod deliberately
 // synthesizes a PostToolUse:Read envelope and calls `actual rules brief
 // --claude-hook` rather than the simpler `--file` direct mode, because
 // --claude-hook is what consults brief memory. Both paths therefore share one
@@ -240,16 +242,16 @@ function withContext(result, text) {
 // The brief itself has to reach Claude, so it rides in the tool result and
 // costs context -- which is why there is a session budget at all. What a
 // *person* needs is different: whether a brief happened, what it covered, and
-// when one did not, why. A drawn tree costs nothing, because `ui.render`
-// output goes to the terminal and the Desktop app and Claude never reads it.
-// So everything below is free, and none of it is in the budget.
+// when one did not, why. A `$.ui.log` row or the pane costs nothing,
+// because they go to the terminal and the Desktop app and Claude never reads
+// them. So everything below is free, and none of it is in the budget.
 //
-// It is also not a substitute for the brief: nothing draws in `claude -p`, the
-// SDK, the VS Code chat panel or a cloud session (hooks still run there). A
-// drawing is for the person watching, and there is no person watching those.
+// It is also not a substitute for the brief: nothing shows in `claude -p`, the
+// SDK, the VS Code chat panel or a cloud session (hooks still run there). The
+// report is for the person watching, and there is no person watching those.
 
-// One record per Bash tool call, keyed by its tool_use_id so the ToolResult
-// drawing can find the call it belongs to. Bounded: a long session makes
+// One record per Bash tool call, keyed by its tool_use_id, so a call's
+// report and the pane's row are the same record. Bounded: a long session makes
 // thousands of tool calls and this is a convenience, not a log.
 const MAX_OUTCOMES = 200;
 // A quiet read's own outcome name, when every file was quiet for one reason.
@@ -329,7 +331,7 @@ function summarize(brief) {
   };
 }
 
-// The line drawn under a tool result. Null for the calls worth saying nothing
+// The transcript row for one call. Null for the calls worth saying nothing
 // about -- a command that read no governed file is the overwhelming majority,
 // and a line on every one of them would be noise rather than information.
 // The sentence for one call's outcome, without a prefix: $.ui.log adds the
@@ -963,17 +965,11 @@ async function deliverBrief($, e, result, paths, ctx) {
     if (line) appended += (appended ? '\n\n' : '') + line;
   }
 
-  // Report through $.ui.log as well as by drawing.
-  //
-  // A drawn line depends on which render site Claude Code uses, and it
-  // collapses some calls into a summary row whose own id is not any member
-  // call's tool_use_id -- so the lookup misses and nothing appears. Observed
-  // twice: a session where two delivered briefs drew no line while a deduped
-  // one did, and again after widening the matcher to ToolGroup and ToolUse,
-  // because the id a group carries is not the id the record is under.
-  //
-  // $.ui.log writes a dim transcript line the model does not read. It depends
-  // on no render site, so collapsing cannot hide it.
+  // Report through $.ui.log. An earlier version drew a line under the tool
+  // result, which depends on the render site Claude Code uses and collapses
+  // some calls into a summary row whose id is not any member call's
+  // tool_use_id, so reports went missing. $.ui.log writes a dim transcript
+  // line the model does not read and depends on no render site.
   //
   // This reverses an invariant added two commits earlier -- that the mod logs
   // nothing unless debugging. That rule was about leftover debug noise
@@ -1153,18 +1149,15 @@ export function register(on, options = {}) {
     });
   });
 
-  // One dim line under the tool result that caused a brief. Keeps Claude
-  // Code's own drawing and adds to it, rather than replacing it -- the command
-  // output is the point and this is a footnote to it.
   // The Read tool and the shell, through one path. A brief is the same brief
-  // either way, and so are the budget, the dedup record and the line drawn
-  // under the call -- which is the point: two implementations of one feature
+  // either way, and so are the budget, the dedup record and the report row
+  // -- which is the point: two implementations of one feature
   // produced four separate bugs where they computed the same key differently.
   // hooks/rules-brief.sh is registered on PostToolUse:Read and does the same
   // job as this mod, for versions of Claude Code that cannot load a mod. Where
   // the mod does load, it stands the hook down rather than briefing beside it:
   // two deliveries of the same brief, one of them with no budget, no record
-  // and nothing drawn.
+  // and nothing reported.
   //
   // It stands down that one hook, not the event. The chain beneath a module is
   // every non-managed settings hook, so answering without calling next would

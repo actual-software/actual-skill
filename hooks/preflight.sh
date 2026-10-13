@@ -66,4 +66,5 @@ fi
 # is supposed to block and silently is not; `rules brief` is advisory, so its
 # absence is a sentence appended to the success message rather than a message
 # that replaces it. See rules_brief_note for the full reasoning.
-emit_sessionstart_context "Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable. $(rules_brief_note)"
+note=$(rules_brief_note)
+emit_sessionstart_context "Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable.${note:+ $note}"

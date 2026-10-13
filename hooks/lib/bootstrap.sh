@@ -336,8 +336,12 @@ EOF
 # important thing the agent needs to know, and the advisory must not push it
 # out. Hence a suffix, chosen by have_rules_brief, rather than an early exit.
 rules_brief_note() {
+  # Nothing to say when the subcommand is present. This used to promise that
+  # rules are surfaced on a read, which a compaction makes untrue: brief
+  # memory and the mod's budget survive it, so every decision briefed before
+  # the compaction stays quiet afterwards while the model has lost the text.
+  # Say it again when `--claude-session-start` resets that memory.
   if have_rules_brief; then
-    printf '%s' "Rules that govern a file are also surfaced to you when you read it."
     return 0
   fi
   printf '%s' "Rule briefing -- surfacing the rules that govern a file when you read it -- needs a newer \`actual\` CLI than the one installed. It is advisory only and the checks above are unaffected, so do not interrupt anything for it: mention it in passing when convenient, and upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\` only if the user asks."

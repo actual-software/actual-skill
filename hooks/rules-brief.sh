@@ -25,6 +25,24 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/bootstrap.sh
 . "${SCRIPT_DIR}/lib/bootstrap.sh"
 
+# Whether the span between the prefix and the closing "}} is one JSON string.
+# C locale, as the guards in bootstrap.sh run: the two substitutions walk the
+# whole brief, and under a UTF-8 locale on bash 3.2 that cost about 0.18s of CPU
+# at 3.5KB and 0.32s at 4.2KB, against 0.02-0.03s here, inside a 2-second
+# timeout. The result is the same either way: UTF-8 continuation bytes never
+# equal a backslash or a quote.
+is_single_json_string() {
+  local LC_ALL=C
+  local body=${1#"$2"}
+  body=${body%\"\}\}}
+  body=${body//\\\\/}
+  body=${body//\\\"/}
+  case "$body" in
+    *'"'*) return 1 ;;
+  esac
+  return 0
+}
+
 # Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
 
@@ -134,16 +152,11 @@ if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
    && ! has_permission_decision "$trimmed" \
    && ! has_unicode_escape "$trimmed" \
    && ! has_duplicate_permission_decision "$trimmed"; then
-  body=${trimmed#"$prefix"}
-  body=${body%\"\}\}}
-  unescaped=${body//\\\\/}
-  unescaped=${unescaped//\\\"/}
-  case "$unescaped" in
-    *'"'*)
-      [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
-        printf 'actual-rules-brief: dropped (content is not a single JSON string)\n' >&2
-      exit 0 ;;
-  esac
+  if ! is_single_json_string "$trimmed" "$prefix"; then
+    [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
+      printf 'actual-rules-brief: dropped (content is not a single JSON string)\n' >&2
+    exit 0
+  fi
   printf '%s\n' "$trimmed"
 elif [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && [ -n "$trimmed" ]; then
   printf 'actual-rules-brief: dropped (reply is not the allowlisted shape)\n' >&2

@@ -153,9 +153,9 @@ repository. They are registered automatically on install — there is no manual 
 | `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough for `plan-check` and `impl-check`. Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes vs `HEAD`, plus untracked, non-ignored files) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
-| `hooks/rules-brief.sh` | `PostToolUse` on `Read` | Read-time briefing (AK-793), for versions of Claude Code that cannot load a mod. Hands the envelope to `actual rules brief --claude-hook` and forwards only an allowlisted `additionalContext` reply. Advisory: never denies, never decides, silent on any failure. **Where the mod loads it stands down**: the mod answers `classic.PostToolUse` for `Read` without calling `next`, so the brief is delivered once, by the path that also has a budget, a record and a drawn line |
+| `hooks/rules-brief.sh` | `PostToolUse` on `Read` | Read-time briefing (AK-793), for versions of Claude Code that cannot load a mod. Hands the envelope to `actual rules brief --claude-hook` and forwards only an allowlisted `additionalContext` reply. Advisory: never denies, never decides, silent on any failure. **Where the mod loads it stands down**: the mod answers `classic.PostToolUse` for `Read` by calling `next` with `actual_rules_brief_by_mod` set, which this script exits on. The event still reaches every other `PostToolUse:Read` hook, and the brief is delivered once, by the path that also has a budget and a record. It has no budget, no session cap and none of the four limits below: it forwards none of them |
 | `hooks/register.js` | Claude mod, `$.ui.log` per read and a `/rules-brief` pane | What briefing did, for the person watching. One line per read names the ADRs and rule counts; a read that briefed nothing says why (nothing new, budget spent, CLI error), from the reason the CLI names on stderr. A read of only ungoverned files reports nothing, since most files are ungoverned. `/rules-brief` lists the session oldest first, because a suppressed row only makes sense after the delivered row it refers to. The model reads none of it, so none of it is charged against the context budget — and nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session |
-| `hooks/register.js` | Claude mod, `tool.call` on `Bash` and `Read`, `classic.Stop` for the turn report | Briefing for both the Read tool and reads that bypass it. Measured across 212 local sessions, 80% of file reads went through `cat`/`head`/`sed -n`/`grep`, which fires no Read hook. Briefs only a command Claude Code reports as `isReadOnly`, and appends to the command's output. Requires Claude Code 2.1.287+, or 2.1.285/2.1.286 with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
+| `hooks/register.js` | Claude mod, `tool.call` on `Bash` and `Read`, `classic.Stop` for the end-of-turn pane | Briefing for both the Read tool and reads that bypass it. Measured across 212 local sessions, 80% of file reads went through `cat`/`head`/`sed -n`/`grep`, which fires no Read hook. Briefs only a command Claude Code reports as `isReadOnly`, and hands the brief to the model in the call's `context`, beside a tool result it leaves untouched. The pane opens at a turn's end only if the turn briefed, held back or failed to brief something. Requires Claude Code 2.1.287+, or 2.1.285/2.1.286 with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
 
 `PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
 user's plan-approval dialog, so a blocked plan is revised by the agent rather than
@@ -322,15 +322,19 @@ place that distinction is applied.
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). Each hook forwards the resolved path to the CLI as `--rules-dir`; `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_IMPL_CHECK_MAX_ROUNDS` | Override `impl-check --claude-hook`'s round limit (default 3) |
-| `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the Bash mod — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
+| `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the mod — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
 | `ACTUAL_CLI_SUBPROCESS=1` | Set by actual-cli on the nested `claude -p` it runs as its conformance judge. Every hook and the mod exit silently when it is set: without it the judge's own `Stop` hook reruns `impl-check` and recurses, and briefing would inject rules into the judge's prompt that it was never asked to weigh |
-| `ACTUAL_HOOK_DEBUG=1` | Report what briefing did, on stderr for the hook and in the transcript plus the brief for the mod: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |
-| `ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS` | Characters of rule context briefing may inject in one session before it stops and says so (default 48000). Measured basis: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is ~2.5x an ordinary session. `0` disables briefing |
-| `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE` | Forwarded to `actual rules brief` as `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`, and only when set, so the CLI keeps owning its own defaults. `_MIN_SCORE` especially: unset it defers to the repository's `rules_min_score`, and a score measures how narrowly a rule's `verify` glob is written rather than how relevant the rule is, so no cross-repository default is correct |
+| `ACTUAL_HOOK_DEBUG=1` | Report what briefing did, on stderr for the hook and in the transcript plus the model's context for the mod, which also adds a note when it does not brief: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |
+| `ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS` | Characters of rule context briefing may inject in one session before it stops and says so (default 48000). Measured basis: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is ~2.5x an ordinary session. `0` disables briefing where the mod loads; `rules-brief.sh` enforces no cap |
+| `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE` | Forwarded by the mod to `actual rules brief` as `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`, and only when set (`rules-brief.sh` forwards none of them), so the CLI keeps owning its own defaults. `_MIN_SCORE` especially: unset it defers to the repository's `rules_min_score`, and a score measures how narrowly a rule's `verify` glob is written rather than how relevant the rule is, so no cross-repository default is correct |
 
-Each variable above also appears as a labelled `userConfig` row under `/plugin`.
-An environment variable wins over the row: the row is the durable preference,
-the variable is the override for one session.
+The briefing limits (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, `_LIMIT`,
+`_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`) and `debug` also appear as
+labelled `userConfig` rows under `/plugin`; the other variables have none, and
+all of them are read by the mod only. An environment variable wins over its
+row: the row is the durable preference, the variable is the override for one
+session. The exception is `debug`, which is ORed with `ACTUAL_HOOK_DEBUG`
+rather than overridden by it.
 
 ### `--claude-hook` plan resolution
 
@@ -366,9 +370,9 @@ Fixtures under `hooks/tests/fixtures/` encode the three envelopes:
 
 ### Briefing: two paths, one dedup store
 
-Briefing is delivered twice over, by `hooks/rules-brief.sh` on `Read` and by the
-mod on `Bash`, and they are split by matcher so neither sees the other's tool
-call. Both call `actual rules brief --claude-hook` rather than the simpler
+Briefing has two implementations. The mod hooks both `Read` and `Bash`; where it
+loads it stands `hooks/rules-brief.sh` down for `Read` (see the hook table), and
+the hook is the only path on a Claude Code that cannot load a mod. Both call `actual rules brief --claude-hook` rather than the simpler
 `--file` direct mode, because only `--claude-hook` consults brief memory —
 direct mode is stateless and returns the full brief every time. That is what
 keeps a file read with the Read tool and then `cat` from being briefed twice.
@@ -401,11 +405,12 @@ Two instances of that have already been fixed, both invisible at runtime:
 - The mod derived the rules directory from `$.session.root()`. No single mods
   API call matches `resolve_repo_root`: `$.session.root()` tracks the session's
   working directory, so it is right inside a worktree and wrong one directory
-  below the repo root, where briefing pointed at a `.actual/rules` that does not
-  exist and went silently dead; `$.session.repo().root` is the main checkout, so
-  it is wrong in exactly the opposite cases. The mod now runs
-  `git rev-parse --show-toplevel` and applies the same deeper-of-the-two rule as
-  `bootstrap.sh`, cached per session.
+  below the repo root; `$.session.repo().root` is the main checkout, so it is
+  wrong in exactly the opposite cases. A mod also cannot read
+  `CLAUDE_PROJECT_DIR`, which Claude Code sets for hook processes only. The mod
+  now runs `git rev-parse --show-toplevel` and applies the same deeper-of-the-two
+  rule as `bootstrap.sh`, with `$.session.root()` standing in for the variable
+  (it names the directory the session was launched in), cached per session.
 
 - The mod did not forward `agent_id`, the third component of the key. The Read
   hook's envelope carries it inside a subagent and the mod's event carries the
@@ -417,14 +422,15 @@ Two instances of that have already been fixed, both invisible at runtime:
 
 A fourth divergence is not about the key but about the same question — which
 directory a relative path belongs to. The Bash tool runs every command in one
-persistent shell, so a `cd` in any call changes where every later call runs,
-while `$.session.cwd()` keeps reporting the session's own directory, which does
-not move. Session 9dc24b52 did `cd <repo>/apps/actual && ls lib/oauth/` and then
+persistent shell, so a `cd` in any call changes where every later call runs, and
+on Claude Code 2.1.296 `$.session.cwd()` follows it. Session 9dc24b52 did `cd <repo>/apps/actual && ls lib/oauth/` and then
 read `lib/oauth/verify-token.ts` twice; resolved against the session cwd those
 became `<repo>/lib/oauth/...`, which does not exist, so the existence filter
-dropped them and two briefs were lost. The mod now tracks the shell's directory
-across calls, and where no `cd` states a base it tries the tracked directory,
-the session cwd and the repo root in that order, letting the filesystem decide.
+dropped them and two briefs were lost. The mod keeps no copy of the shell's
+directory: it reads `$.session.cwd()` before the call and joins a stated `cd`
+onto that, since by the time the call returns the cwd already includes the `cd`.
+Where no `cd` states a base it tries the live cwd, the session cwd and the repo
+root in that order, letting the filesystem decide.
 A `cd` the command *does* state is authoritative and gets no fallback, or
 `cd /elsewhere && cat a.ts` would brief a same-named file inside the repository.
 

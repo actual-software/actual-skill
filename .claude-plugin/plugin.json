@@ -21,7 +21,7 @@
       "type": "number",
       "title": "Rule brief: per-session character budget",
       "default": 48000,
-      "description": "Stop briefing once this many characters of rule context have been injected in one session. Measured: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is about 2.5x an ordinary session and exists to catch runaway accumulation, not to tune relevance. Set 0 to turn briefing off entirely."
+      "description": "Stop briefing once this many characters of rule context have been injected in one session. Measured: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is about 2.5x an ordinary session and exists to catch runaway accumulation, not to tune relevance. Set 0 to turn briefing off entirely where the mod loads; the Read hook used on older Claude Code has no cap."
     },
     "maxChars": {
       "type": "number",
@@ -47,7 +47,7 @@
       "type": "boolean",
       "title": "Rule brief: log the budget each call",
       "default": false,
-      "description": "Write a dim transcript line with the characters injected so far and the session's context usage. Equivalent to ACTUAL_HOOK_DEBUG=1."
+      "description": "Write a dim transcript line with the characters injected so far and the session's context usage, and add the same line to the model's context. Like ACTUAL_HOOK_DEBUG=1, which it is ORed with, but it does not turn on the not-briefed notes that variable adds."
     }
   }
 }
