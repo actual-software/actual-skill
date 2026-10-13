@@ -1106,8 +1106,82 @@ function paneRows(elements, sessionId) {
   });
 }
 
+// ── the count above the prompt ──────────────────────────────────────────────
+//
+// "Actual AI: X of Y ADRs added to context": of the Y decisions the rules
+// hold, the X briefed into this session so far, as `actual session summary`
+// reads them from brief memory. Drawn in the band above the prompt, so the
+// model never reads it.
+//
+// Read in the background at session start, after each main-loop turn, and on
+// /clear, compaction, resume and fork. Nothing waits on the CLI, and a call
+// that fails or outlasts SPAWN_TIMEOUT_MS keeps the count already shown.
+
+// Per session: the sentence its band shows, and the refresh that set it. An
+// `undefined` sentence shows nothing (no rule files, or no decision in them).
+const sessionCounts = new Map();
+let countRefreshes = 0;
+
+function countSentence(x, y) {
+  if (y === 0) return undefined;
+  return `Actual AI: ${x} of ${y} ${y === 1 ? 'ADR' : 'ADRs'} added to context`;
+}
+
+function isCount(n) {
+  return Number.isInteger(n) && n >= 0;
+}
+
+// One row: cut at the band's width, never wrapped onto a second.
+function fitTo(text, columns) {
+  if (!Number.isFinite(columns) || text.length <= columns) return text;
+  return columns > 1 ? `${text.slice(0, columns - 1)}\u2026` : '';
+}
+
+// A CLI too old to have the subcommand exits non-zero.
+async function sessionSummary($, sessionId, rulesDir, repoRoot) {
+  const run = await $.process.run(
+    ['actual', 'session', 'summary', '--session', sessionId, '--rules-dir', rulesDir, '--json'],
+    { cwd: repoRoot, timeoutMs: SPAWN_TIMEOUT_MS }
+  );
+  if (run.exitCode !== 0) return null;
+  const { x, y } = JSON.parse(run.stdout);
+  return isCount(x) && isCount(y) ? { x, y } : null;
+}
+
+// Never rejects. The rules directory is the one the briefs are filed under,
+// so X counts what this session was actually briefed. A refresh that lands
+// after a newer one leaves the newer count, and the band is asked to redraw
+// only when its sentence changes, because a render answer is cached until
+// $.ui.invalidate.
+async function refreshCount($) {
+  const ticket = ++countRefreshes;
+  try {
+    if ((await $.env.get('ACTUAL_CLI_SUBPROCESS')) === '1') return;
+    const [cwd, sessionId] = await Promise.all([$.session.cwd(), $.session.id()]);
+    if (!sessionId) return;
+    const rulesDir = await governedRulesDir($, sessionId, cwd);
+    let text;
+    if (rulesDir) {
+      const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+      const counts = await sessionSummary($, sessionId, rulesDir, repoRoot);
+      if (!counts) return;
+      text = countSentence(counts.x, counts.y);
+    }
+    const last = sessionCounts.get(sessionId);
+    if (last && ticket < last.ticket) return;
+    sessionCounts.set(sessionId, { ticket, text });
+    if (text !== last?.text) $.ui.invalidate('ui.render');
+  } catch {
+    // A spawn that rejected (no CLI, past the timeout) or output that did not
+    // parse: the band keeps what it showed.
+  }
+}
+
 export function register(on, options = {}) {
   on('session.start', async ($, e, next) => {
+    // The count's first reading belongs here: at startup classic.SessionStart
+    // fires before the session binds.
+    void refreshCount($);
     try {
       await $.command.register({
         name: 'rules-brief',
@@ -1117,6 +1191,31 @@ export function register(on, options = {}) {
       // A mod that cannot register its command still has to brief.
     }
     return next(e);
+  });
+
+  // A subagent's turn ends inside its parent's, whose own end refreshes.
+  on('turn.complete', ($, e, next) => {
+    if (e.agentId === undefined) void refreshCount($);
+    return next(e);
+  });
+
+  // Every later start in this process: /clear, compaction, resume and fork.
+  // session.start fires once per process and sees none of them.
+  on('classic.SessionStart', ($, e, next) => {
+    if (e.source !== 'startup') void refreshCount($);
+    return next(e);
+  });
+
+  // Claude Code's surveys and every other plugin share this band: the rows
+  // beneath are kept, and a survey has the band to itself.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const theirs = await next(e);
+    if (e.props.hasSurvey) return theirs;
+    const text = sessionCounts.get(await $.session.id())?.text;
+    const row = text ? fitTo(text, e.props.bodyColumns) : '';
+    if (!row) return theirs;
+    const { Box, Text } = $.ui.resolve(e);
+    return Box({ flexDirection: 'column', children: [Text({ children: [row] }), theirs] });
   });
 
   on('command.run', { command: 'rules-brief' }, async ($) => {
