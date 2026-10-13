@@ -705,13 +705,36 @@ else
   fail "missing binary: expected a silent exit 0" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
 fi
 
+# The fake CLI reads stdin before every mode, so its usage-error case never
+# breaks the pipe. A real CLI too old for --turn-start rejects the flag without
+# reading anything; with a prompt larger than the pipe buffer and SIGPIPE
+# ignored, the hook's own write then fails.
+EARLY_EXIT_BIN="${WORK}/early-exit-bin"
+mkdir -p "$EARLY_EXIT_BIN"
+cat > "${EARLY_EXIT_BIN}/actual" <<'EOF'
+#!/bin/sh
+echo "error: unexpected argument '--turn-start' found" >&2
+exit 2
+EOF
+chmod +x "${EARLY_EXIT_BIN}/actual"
+{ printf '{"session_id":"test-session-turn-start","hook_event_name":"UserPromptSubmit","prompt":"'
+  head -c 262144 /dev/zero | tr '\0' x
+  printf '"}'
+} > "${WORK}/userpromptsubmit-large.json"
+st=$(trap '' PIPE; run_hook "${HOOKS_DIR}/turn-start.sh" "${WORK}/userpromptsubmit-large.json" "$REPO_WITH_RULES" PATH="${EARLY_EXIT_BIN}:${PATH}")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "a CLI that exits before reading a large prompt: silent, even with SIGPIPE ignored"
+else
+  fail "a broken pipe reached the hook's output" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
 for switch in ACTUAL_PLAN_GATE=off ACTUAL_CLI_SUBPROCESS=1; do
   rm -f "$CAPTURE_TURN" "${CAPTURE_TURN}.argv"
   st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_TURN" "$switch")
-  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${CAPTURE_TURN}.argv" ]; then
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ] && [ ! -e "${CAPTURE_TURN}.argv" ]; then
     pass "${switch}: silent no-op that never invokes the CLI"
   else
-    fail "${switch} did not disable turn-start" "status=$st stdout=$(cat "${WORK}/out") argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
+    fail "${switch} did not disable turn-start" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err") argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
   fi
 done
 

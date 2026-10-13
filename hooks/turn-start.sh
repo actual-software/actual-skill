@@ -40,5 +40,7 @@ dir=$(rules_dir)
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 
-printf '%s' "$payload" | actual impl-check --claude-hook --turn-start --rules-dir "$dir" >/dev/null 2>&1
+# printf is silenced too: a CLI that exits before reading the payload breaks the
+# pipe, and bash reports the failed write on stderr when SIGPIPE is ignored.
+printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --turn-start --rules-dir "$dir" >/dev/null 2>&1
 exit 0
