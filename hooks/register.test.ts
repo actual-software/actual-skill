@@ -37,6 +37,14 @@ function harness(
     readShaped?: boolean;
     // `git status --porcelain` output, for the end-of-turn report.
     gitStatus?: string;
+    // Entry names $.fs.list returns for the rules directory. Default: one rule
+    // file, so the repo is governed; `[]` is a repo with nothing to govern, and
+    // `null` a rules directory that does not exist, so the listing rejects.
+    rules?: string[] | null;
+    // Collects every $.fs.list path, so a test can see the rules dir checked.
+    listed?: string[];
+    // Collects the argv of every git spawn.
+    gitCalls?: string[][];
   } = {}
 ) {
   const runs: any[] = [];
@@ -66,6 +74,12 @@ function harness(
     const existing = typeof opts.existing === 'function' ? opts.existing() : opts.existing;
     return { value: existing ? existing.includes(e.path) : true };
   });
+  on('fs.list', async (_$: any, e: any) => {
+    opts.listed?.push(e.path);
+    if (opts.rules === null) throw new Error(`ENOENT: ${e.path}`);
+    const names = opts.rules ?? ['R-001.md'];
+    return { value: names.map((name) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) };
+  });
   // Shaped like a real Bash tool result, probed from a live session: `text`
   // is the string Claude reads, `result` is a structured object, and
   // `isReadOnly` is Claude Code's own read/write verdict.
@@ -87,6 +101,7 @@ function harness(
   on('process.run', async (_$: any, e: any) => {
     // Neither git query is a brief; answer both without recording a run.
     if (e.argv?.[0] === 'git') {
+      opts.gitCalls?.push(e.argv);
       const stdout =
         e.argv?.[1] === 'status'
           ? opts.gitStatus ?? ''
@@ -1401,3 +1416,111 @@ test('the pane names a quiet read by its reason', async (fire: any, on: any) => 
 
   expect(await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 })).toContain('no rules');
 });
+
+// ── unrelated repositories ──────────────────────────────────────────────────
+//
+// The README's promise: outside a repository with committed rules, nothing
+// happens. rules_present in bootstrap.sh keeps it for the hooks; these keep it
+// for the mod, on every surface it has.
+
+test('a repo with no rule files is never briefed, by Read or by Bash', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  const runs = harness(on, { rules: [], logs });
+
+  const viaBash = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'u_1' });
+  expect(viaBash.result.stdout).toBe('TOOL OUTPUT');
+  expect(runs.length).toBe(0);
+  expect(logs).toEqual([]);
+});
+
+test('a Read in a repo with no rule files spawns nothing', async (fire: any, on: any) => {
+  const runs = harness(on, { rules: [], readShaped: true });
+
+  const r = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts', tool_use_id: 'u_2' });
+  expect(r.result.file.content).toBe('TOOL OUTPUT');
+  expect(runs.length).toBe(0);
+});
+
+test('only *.md entries count as rule files', async (fire: any, on: any) => {
+  // The same count rules_count makes: a README.txt or a stray directory does
+  // not make a repository governed.
+  const runs = harness(on, { rules: ['README.txt', '.DS_Store'] });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'u_3' });
+  expect(runs.length).toBe(0);
+});
+
+test('a missing rules directory is the same as an empty one', async (fire: any, on: any) => {
+  const runs = harness(on, { rules: null });
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'u_4' });
+  expect(r.result.stdout).toBe('TOOL OUTPUT');
+  expect(runs.length).toBe(0);
+});
+
+test('ACTUAL_RULES_DIR is the directory checked for rule files', async (fire: any, on: any) => {
+  const listed: string[] = [];
+  harness(on, { env: { ACTUAL_RULES_DIR: '/elsewhere/rules' }, listed });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'u_5' });
+  expect(listed).toEqual(['/elsewhere/rules']);
+});
+
+test('a write in a repo with no rule files leaves no record to open a pane for', async (fire: any, on: any) => {
+  // Recording a `not-read-only` row is harmless in a governed repo; here it
+  // would be the thing that opened the pane at the end of every turn.
+  const opens: any[] = [];
+  stopBase(on);
+  harness(on, {
+    rules: [],
+    tool: { ref: 1, result: { stdout: '', stderr: '' }, text: '', isReadOnly: undefined },
+  });
+  on('ui.open', async (_$: any, e: any) => {
+    opens.push(e);
+    return { value: undefined };
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'npx tsc', tool_use_id: 'u_6' });
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(opens).toEqual([]);
+});
+
+test('the end of a turn in a repo with no rule files does nothing', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  const gitArgs: string[][] = [];
+  stopBase(on);
+  const runs = harness(on, { rules: [], logs, gitCalls: gitArgs, gitStatus: ' M app/lib/discover.ts\n' });
+
+  const out = await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(out).toEqual({ value: {} });
+  expect(logs).toEqual([]);
+  expect(runs.length).toBe(0);
+  expect(gitArgs.some((a) => a[1] === 'status')).toBe(false);
+});
+
+for (const [name, env] of [
+  ['ACTUAL_PLAN_GATE=off', { ACTUAL_PLAN_GATE: 'off' }],
+  ['ACTUAL_RULES_BRIEF=off', { ACTUAL_RULES_BRIEF: 'off' }],
+  ['ACTUAL_CLI_SUBPROCESS=1', { ACTUAL_CLI_SUBPROCESS: '1' }],
+] as const) {
+  test(`${name} turns off the end-of-turn report and pane too`, async (fire: any, on: any) => {
+    // ACTUAL_CLI_SUBPROCESS above all: the conformance judge is a nested
+    // `claude -p` that reaches Stop too, and must not run git and the CLI.
+    const logs: string[] = [];
+    const opens: any[] = [];
+    stopBase(on);
+    const runs = harness(on, { env, logs, gitStatus: ' M app/lib/discover.ts\n' });
+    on('ui.open', async (_$: any, e: any) => {
+      opens.push(e);
+      return { value: undefined };
+    });
+
+    await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+    expect(logs).toEqual([]);
+    expect(opens).toEqual([]);
+    expect(runs.length).toBe(0);
+  });
+}

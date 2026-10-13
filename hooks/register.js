@@ -605,6 +605,27 @@ async function resolveRulesDir($, sessionId, cwd) {
   return `${root.replace(/\/+$/, '')}/.actual/rules`;
 }
 
+// The rules directory, but only when it holds a rule file -- rules_present in
+// bootstrap.sh, counting the same way: top-level `*.md` entries. Null means
+// this repository has nothing to govern against, and every handler below must
+// then be a silent no-op: no CLI spawn, no record, no transcript line, no
+// pane. Installing the plugin must not be visible in unrelated repositories.
+//
+// Not cached: a session can commit its first rule file partway through, and
+// the hook re-checks on every Read for the same reason. A listing is in-process
+// and cheap; the repo root underneath it is already cached per session.
+async function governedRulesDir($, sessionId, cwd) {
+  const rulesDir = await resolveRulesDir($, sessionId, cwd);
+  if (!rulesDir) return null;
+  let entries;
+  try {
+    entries = await $.fs.list(rulesDir);
+  } catch {
+    return null;
+  }
+  return (entries ?? []).some((entry) => entry.name.endsWith('.md')) ? rulesDir : null;
+}
+
 // Which keys exist, and the CLI flag each one forwards to. maxSessionChars has
 // no flag: it is this mod's own budget, enforced here, not something the CLI
 // knows about.
@@ -902,15 +923,8 @@ function changedPaths(stdout) {
   return paths;
 }
 
-async function reportTurn($, e) {
-  // A gate continuation, not a new turn: the gate blocks and the turn runs on,
-  // and reporting again at each stop would repeat the same list.
-  if (e?.stop_hook_active) return;
-
-  const sessionId = e?.session_id ?? (await $.session.id());
-  const cwd = e?.cwd ?? (await $.session.cwd());
+async function reportTurn($, { sessionId, cwd, rulesDir }) {
   const root = await resolveRepoRoot($, sessionId, cwd);
-  const rulesDir = await resolveRulesDir($, sessionId, cwd);
 
   const status = await $.process.run(['git', 'status', '--porcelain'], { cwd: root });
   if (status.exitCode !== 0) return;
@@ -946,6 +960,35 @@ async function reportTurn($, e) {
 }
 
 const PANE = 'rules-brief';
+
+async function endOfTurn($, e) {
+  // A gate continuation, not a new turn: the gate blocks and the turn runs
+  // on, and reporting again at each stop would repeat the same list and
+  // reopen the pane at every stop of a turn already sent back.
+  if (e?.stop_hook_active) return;
+  // The same switches the read path honours. ACTUAL_CLI_SUBPROCESS matters
+  // most here: the conformance judge is a nested `claude -p` that stops too,
+  // and this report would otherwise run git and the CLI inside it.
+  if (await optedOut($)) return;
+  const sessionId = e?.session_id ?? (await $.session.id());
+  const cwd = e?.cwd ?? (await $.session.cwd());
+  const rulesDir = await governedRulesDir($, sessionId, cwd);
+  if (!rulesDir) return;
+
+  // `/rules-brief`, run for you. Literally the same call the command makes,
+  // so there is one renderer and one set of words -- a second, text-only
+  // summary was assembled here first, and a hand-built copy of a view is how
+  // the labels came to disagree across surfaces before.
+  //
+  // Nothing to show if nothing was read.
+  if (outcomes.size > 0) {
+    // The same arguments the command uses, focus included: the host refuses
+    // `focus: false` ("ui.open: focus is true or left out"), so a pane that
+    // opens is a pane that takes focus. Escape closes it.
+    await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
+  }
+  await reportTurn($, { sessionId, cwd, rulesDir });
+}
 
 // Rows for the pane, oldest first: what each Bash call did about briefing,
 // including the calls that did nothing and why.
@@ -1008,20 +1051,7 @@ export function register(on, options = {}) {
   on('classic.Stop', async ($, e, next) => {
     // The gate's verdict is untouched whatever happens here.
     try {
-      // `/rules-brief`, run for you. Literally the same call the command
-      // makes, so there is one renderer and one set of words -- a second,
-      // text-only summary was assembled here first, and a hand-built copy of
-      // a view is how the labels came to disagree across surfaces before.
-      //
-      // Nothing to show if nothing was read, and not at a gate continuation,
-      // which would reopen it at every stop of a turn already sent back.
-      if (!e?.stop_hook_active && outcomes.size > 0) {
-        // The same arguments the command uses, focus included: the host
-        // refuses `focus: false` ("ui.open: focus is true or left out"), so a
-        // pane that opens is a pane that takes focus. Escape closes it.
-        await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
-      }
-      await reportTurn($, e);
+      await endOfTurn($, e);
     } catch {}
     return next(e);
   });
@@ -1068,6 +1098,14 @@ export function register(on, options = {}) {
     try {
       if (await optedOut($)) return result;
       if (result?.deny || result?.isError) return result;
+
+      const [cwd, sessionId] = await Promise.all([$.session.cwd(), $.session.id()]);
+      if (!cwd || !sessionId) return result;
+      // Before anything is recorded: in a repository with no rules, even a
+      // `not-read-only` record would make the pane open at the end of the turn.
+      const rulesDir = await governedRulesDir($, sessionId, cwd);
+      if (!rulesDir) return result;
+
       // Claude Code's own read/write verdict. Absent (not false) for a write,
       // and absent for anything it could not classify -- both mean no brief.
       if (result?.isReadOnly !== true) {
@@ -1081,15 +1119,6 @@ export function register(on, options = {}) {
         return result;
       }
 
-      const [cwd, root, sessionId] = await Promise.all([
-        $.session.cwd(),
-        $.session.root(),
-        $.session.id(),
-      ]);
-      if (!cwd || !sessionId) return result;
-
-      const rulesDir = await resolveRulesDir($, sessionId, cwd);
-      if (!rulesDir) return result;
       const repoRoot = await resolveRepoRoot($, sessionId, cwd);
 
       // A Read names its file outright, already absolute. Only the shell
