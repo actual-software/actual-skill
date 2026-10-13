@@ -554,13 +554,19 @@ async function readEnvSettings($) {
 //   worktree under the project root  worktree    worktree   OK     main repo  X
 //   worktree + CLAUDE_PROJECT_DIR    worktree    worktree   OK     main repo  X
 //   monorepo subproject as project   subproject  subproject OK     outer repo X
-//   launched in a subdirectory       git root    that subdir X      git root   OK
+//   launched in a subdirectory       that subdir that subdir OK     git root   X
 //
 // $.session.root() tracks the session's working directory, so it is right for
-// a worktree and wrong one directory down; repo().root is the main checkout,
-// so it is the reverse. The last row is not academic -- running `claude` from
-// a subdirectory pointed the mod at a .actual/rules that does not exist, and
-// briefing went silently dead while the hook kept working.
+// a worktree and right one directory down too: the hook resolves that
+// subdirectory as well, because CLAUDE_PROJECT_DIR names it. repo().root is
+// the main checkout, so it is wrong in every row.
+//
+// The last row was recorded the other way round here, on the assumption that
+// the hook picks the git root. It does not, and a test that asserted it kept
+// the error in place. Measured in a live session: with the subproject as the
+// project directory, a Read briefed the subproject's decision and a `cat` of
+// the same file briefed two of the root's, 3,296 characters, and the model
+// received both.
 //
 // So the mod asks git the same question the hook asks, and applies the same
 // rule: when CLAUDE_PROJECT_DIR and the git toplevel are nested, the deeper
@@ -619,7 +625,12 @@ async function resolveRepoRoot($, sessionId, cwd) {
   } catch {
     // Not a repository, or no git. Fall through to the project dir.
   }
-  const projectDir = await $.env.get('CLAUDE_PROJECT_DIR');
+  // CLAUDE_PROJECT_DIR is set for hook processes, not for a mod, so this read
+  // returns nothing in a live session and `deeperOf` fell back to the git root
+  // every time -- which is how the mod came to brief a monorepo subproject
+  // from the root's rule set while the hook briefed it from the subproject's.
+  // $.session.root() is the same directory the variable would have named.
+  const projectDir = (await $.env.get('CLAUDE_PROJECT_DIR')) || (await $.session.root());
   const root = deeperOf(projectDir || null, gitRoot) ?? cwd;
   repoRoots.set(sessionId, root);
   return root;
@@ -746,7 +757,7 @@ async function optedOut($) {
 // model. Shared by the shell path and the Read path so neither can drift
 // from the other -- the divergence that produced every key bug in this mod.
 async function deliverBrief($, e, result, paths, ctx) {
-  const { cwd, sessionId, rulesDir, options } = ctx;
+  const { cwd, sessionId, rulesDir, repoRoot, options } = ctx;
   const resolved = mergeSettings(await readEnvSettings($), options);
   const cap = Number.isFinite(resolved.maxSessionChars)
     ? resolved.maxSessionChars
@@ -790,6 +801,17 @@ async function deliverBrief($, e, result, paths, ctx) {
     const run = await $.process.run(
       [
         'actual', 'rules', 'brief', '--claude-hook',
+        // The root, stated rather than inferred. The CLI takes it from
+        // `--repo` first and from the envelope's `cwd` otherwise, and that cwd
+        // follows the agent's `cd`: measured on 2.1.296, after
+        // `cd apps/actual && ls lib/oauth` the next call ran in
+        // `<repo>/apps/actual`. The CLI then placed every file against that
+        // subdirectory -- files inside it matched as `lib/...` against
+        // repository-relative globs, files outside it refused as "not under"
+        // -- so four governed reads in one session briefed nothing while this
+        // mod had resolved all four correctly. 11 of the 35 Bash calls in the
+        // reference session began with `cd <dir> &&`.
+        '--repo', repoRoot,
         '--rules-dir', rulesDir,
         ...cliLimits(resolved),
       ],

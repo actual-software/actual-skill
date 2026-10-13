@@ -74,7 +74,13 @@ trap 'rm -f "$stderr_file"' EXIT
 
 cd "$repo_root" 2>/dev/null || true
 
-reply=$(printf '%s' "$payload" | actual rules brief --claude-hook --rules-dir "$dir" 2>"$stderr_file")
+# `--repo` states the root rather than letting the CLI infer it. Without it
+# the root comes from the envelope's `cwd`, which follows the agent's `cd`, so
+# after `cd apps/actual` every file was placed against that subdirectory: ones
+# inside it matched against repository-relative globs, ones outside it refused
+# as not under the root. `$repo_root` is resolved above, before the cd, by the
+# same `resolve_repo_root` the gates use, so both paths name one root.
+reply=$(printf '%s' "$payload" | actual rules brief --claude-hook --repo "$repo_root" --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 
 # Silence is the whole contract here: on stdout a brief that never arrives

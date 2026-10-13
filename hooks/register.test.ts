@@ -128,8 +128,12 @@ test('the synthesized envelope carries the two load-bearing fields', async (fire
   const runs = harness(on);
   await fire.tool.call({ tool: 'Bash', command: 'sed -n 1,40p src/persistence/user_store.ts' });
 
-  expect(runs[0].argv.slice(0, 6)).toEqual([
-    'actual', 'rules', 'brief', '--claude-hook', '--rules-dir', '/repo/.actual/rules',
+  expect(runs[0].argv.slice(0, 8)).toEqual([
+    'actual', 'rules', 'brief', '--claude-hook',
+    // The root is stated, not left for the CLI to infer from a cwd that
+    // follows the agent's `cd`.
+    '--repo', '/repo',
+    '--rules-dir', '/repo/.actual/rules',
   ]);
   const sent = JSON.parse(runs[0].init.stdin);
   // Without hook_event_name the CLI returns nothing at all; without session_id
@@ -473,6 +477,7 @@ test('only the limits an operator set are passed to the CLI', async (fire: any, 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(bare[0].argv).toEqual([
     'actual', 'rules', 'brief', '--claude-hook',
+    '--repo', '/repo',
     '--rules-dir', '/repo/.actual/rules',
   ]);
 });
@@ -484,6 +489,7 @@ test('configured limits reach the CLI as flags', async (fire: any, on: any) => {
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(runs[0].argv).toEqual([
     'actual', 'rules', 'brief', '--claude-hook',
+    '--repo', '/repo',
     '--rules-dir', '/repo/.actual/rules',
     '--limit', '1',
     '--rules-per-decision', '3',
@@ -526,15 +532,22 @@ test('ACTUAL_RULES_DIR is honoured, as the Read hook honours it', async (fire: a
   expect(runs.length).toBe(1);
   expect(runs[0].argv).toEqual([
     'actual', 'rules', 'brief', '--claude-hook',
+    '--repo', '/repo',
     '--rules-dir', '/repo/pkg/api/.actual/rules',
   ]);
 });
 
-test('launched in a subdirectory, the rules dir is the git root', async (fire: any, on: any) => {
-  // The case that caught this: $.session.root() tracks the session's working
-  // directory, so one directory down it named a .actual/rules that does not
-  // exist and briefing went silently dead, while the hook -- which falls back
-  // to the git toplevel -- kept working.
+test('launched in a subdirectory, the mod resolves that subdirectory', async (fire: any, on: any) => {
+  // This asserted the git root, on the belief that the hook picks it. The hook
+  // does not: CLAUDE_PROJECT_DIR names the subdirectory the session started in,
+  // and the hook resolves that. The mod read the variable too, but Claude Code
+  // sets it for hook processes and not for a mod, so the read returned nothing
+  // and the git root always won -- the two paths disagreeing about one
+  // component of the brief-memory key, which is this module's recurring bug.
+  //
+  // With $.session.root() as the fallback they agree. Whether a session
+  // launched below the rules should govern against the root's is a separate
+  // question, and it applies to the gates the same way.
   const runs = harness(on, {
     cwd: '/repo/pkg/api/src',
     root: '/repo/pkg/api/src',
@@ -543,9 +556,28 @@ test('launched in a subdirectory, the rules dir is the git root', async (fire: a
   await fire.tool.call({ tool: 'Bash', command: 'cat a.ts' });
 
   expect(runs.length).toBe(1);
-  expect(runs[0].argv).toContain('/repo/.actual/rules');
+  expect(runs[0].argv).toContain('/repo/pkg/api/src/.actual/rules');
   // The file still resolves against the directory the command ran in.
   expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/pkg/api/src/a.ts');
+});
+
+test('a monorepo subproject is briefed from its own rules, as the hook briefs it', async (fire: any, on: any) => {
+  // Measured in a live session before the fallback: a Read briefed the
+  // subproject's decision and a `cat` of the same file briefed two of the
+  // root's, 3,296 characters, and the model received both.
+  const runs = harness(on, {
+    env: {},
+    cwd: '/repo/apps/actual',
+    root: '/repo/apps/actual',
+    gitRoot: '/repo',
+  });
+
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/apps/actual/lib/a.ts', tool_use_id: 'sub_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat lib/a.ts', tool_use_id: 'sub_2' });
+
+  // Both calls, whichever path they came down, asked about the same rule set.
+  const dirs = new Set(runs.map((r: any) => r.argv[r.argv.indexOf('--rules-dir') + 1]));
+  expect([...dirs]).toEqual(['/repo/apps/actual/.actual/rules']);
 });
 
 test('a worktree nested under CLAUDE_PROJECT_DIR wins over it', async (fire: any, on: any) => {
@@ -1674,4 +1706,30 @@ test('a ~/ path outside the repository is still declined', async (fire: any, on:
   await fire.tool.call({ tool: 'Bash', command: 'cat ~/notes/a.ts', tool_use_id: 'home_2' });
 
   expect(runs.length).toBe(0);
+});
+
+test('the mod states the root, so the CLI cannot infer it from a moved shell', async (fire: any, on: any) => {
+  // The CLI takes its root from `--repo` first and the envelope's `cwd`
+  // otherwise, and that cwd follows the agent's `cd`. Without the flag, after
+  // `cd apps/actual` every file was placed against that subdirectory: ones
+  // inside it matched as `lib/...` against repository-relative globs, ones
+  // outside it refused as not under the root. Four governed reads in one
+  // measured session briefed nothing while the mod had resolved all four.
+  const runs = harness(on, { cwd: '/repo/apps/actual', root: '/repo', gitRoot: '/repo' });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat lib/a.ts', tool_use_id: 'repo_1' });
+
+  expect(runs.length).toBe(1);
+  expect(runs[0].argv[runs[0].argv.indexOf('--repo') + 1]).toBe('/repo');
+});
+
+test('the stated root survives a cd into a subdirectory', async (fire: any, on: any) => {
+  const runs = harness(on, { cwd: '/repo', root: '/repo', gitRoot: '/repo' });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cd apps/actual && cat lib/a.ts', tool_use_id: 'repo_2' });
+
+  expect(runs.length).toBe(1);
+  // The file resolves against the moved shell; the root does not move with it.
+  expect(JSON.parse(runs[0].init.stdin).tool_input.file_path).toBe('/repo/apps/actual/lib/a.ts');
+  expect(runs[0].argv[runs[0].argv.indexOf('--repo') + 1]).toBe('/repo');
 });

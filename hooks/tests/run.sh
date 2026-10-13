@@ -955,10 +955,20 @@ if [ "$(jq -r '.tool_name' "$CAPTURE_RB")" = "Read" ] \
    && grep -q "src/persistence/user_store.ts" "$CAPTURE_RB" \
    && grep -Fxq -- '--claude-hook' "${CAPTURE_RB}.argv" \
    && [ "$(argv_after --rules-dir "${CAPTURE_RB}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ] \
-   && [ "$(sed -n 1,2p "${CAPTURE_RB}.argv" | tr '\n' ' ')" = "--claude-hook --rules-dir " ]; then
-  pass "raw envelope, --claude-hook and --rules-dir reach 'actual rules brief'"
+   && [ "$(argv_after --repo "${CAPTURE_RB}.argv")" = "${REPO_WITH_RULES}" ] \
+   && [ "$(sed -n 1,2p "${CAPTURE_RB}.argv" | tr '\n' ' ')" = "--claude-hook --repo " ]; then
+  pass "raw envelope, --claude-hook, --repo and --rules-dir reach 'actual rules brief'"
 else
   fail "rules-brief invocation wrong" "argv=$(cat "${CAPTURE_RB}.argv" 2>/dev/null)"
+fi
+
+# The root must be stated, not inferred. Without `--repo` the CLI takes it from
+# the envelope's `cwd`, which follows the agent's `cd`, and places every file
+# against whatever directory the shell happens to be in.
+if [ "$(argv_after --repo "${CAPTURE_RB}.argv")" = "${REPO_WITH_RULES}" ]; then
+  pass "the root is passed explicitly, so a cd cannot move it"
+else
+  fail "--repo missing or wrong" "argv=$(cat "${CAPTURE_RB}.argv" 2>/dev/null)"
 fi
 
 st=$(run_hook "$RB" "$UNGOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief)

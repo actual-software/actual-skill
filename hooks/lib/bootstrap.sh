@@ -414,6 +414,14 @@ has_system_message() {
 # notice. Fail-safe means the notice path requires proven absence of this field,
 # not merely a failed match against "allow" or "deny".
 has_permission_decision() {
+  # C locale for the three substitutions below. In a UTF-8 locale bash walks
+  # the string by character, and on stock macOS bash 3.2 that cost a median
+  # 0.98s of CPU and 1.38s of wall time on a 3,508-byte brief -- against this
+  # hook's 2-second timeout, which 2 of 12 runs under load exceeded. A
+  # cancelled brief is not merely late: the CLI records its decisions in
+  # session memory before returning, so a later read of the same file is
+  # deduped against a brief the agent never saw. C locale makes it 0.19s.
+  local LC_ALL=C
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}
@@ -439,6 +447,8 @@ has_permission_decision() {
 # uninterpretable and the turn would end unblocked. An escaped backslash followed
 # by a real escape (\\p) still leaves the p behind to be caught.
 has_unicode_escape() {
+  # C locale, as above: see has_permission_decision.
+  local LC_ALL=C
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}
@@ -460,6 +470,8 @@ has_unicode_escape() {
 # escaped -- so check for the duplicate explicitly, on the same fail-safe
 # footing: cut at the first permissionDecision key and look for a second.
 has_duplicate_permission_decision() {
+  # C locale, as above: see has_permission_decision.
+  local LC_ALL=C
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}
