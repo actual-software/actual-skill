@@ -28,6 +28,16 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
 
+# Where the Claude Code mod (hooks/register.js) loads, it briefs Reads itself
+# and marks the event it passes down, so this hook stands down rather than
+# briefing first -- settings hooks run before the mod's own brief. The mod
+# cannot simply skip this hook without skipping every other PostToolUse:Read
+# hook too. File content cannot forge the marker: inside tool_response every
+# quote is escaped, so an unescaped `"key":true` can only be structure.
+case "$payload" in
+  *'"actual_rules_brief_by_mod":true'*) exit 0 ;;
+esac
+
 # Two switches, because they answer different questions. ACTUAL_PLAN_GATE is the
 # master off switch every hook in this plugin honours. ACTUAL_RULES_BRIEF turns
 # off read-time briefing alone, leaving the plan and Stop gates running: briefing

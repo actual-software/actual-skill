@@ -1417,6 +1417,52 @@ test('the pane names a quiet read by its reason', async (fire: any, on: any) => 
   expect(await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 })).toContain('no rules');
 });
 
+// ── the Read hook standing down ─────────────────────────────────────────────
+//
+// The settings hooks beneath this module are everyone's, not just
+// rules-brief.sh. The mod marks the event for that hook and lets it through.
+
+test('a Read event reaches every settings hook beneath, marked for rules-brief.sh', async (fire: any, on: any) => {
+  const seen: any[] = [];
+  on('classic.PostToolUse', async (_$: any, e: any) => {
+    seen.push(e);
+    return { value: { additionalContext: ['another plugin says hi'] } };
+  });
+  harness(on);
+
+  const out = await fire.classic.PostToolUse({
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Read',
+    tool_input: { file_path: '/repo/src/a.ts' },
+    tool_response: { type: 'text' },
+    tool_use_id: 'pt_1',
+  });
+
+  expect(seen.length).toBe(1);
+  expect(seen[0].actual_rules_brief_by_mod).toBe(true);
+  expect(out).toEqual({ value: { additionalContext: ['another plugin says hi'] } });
+});
+
+test('a non-Read event passes through unmarked', async (fire: any, on: any) => {
+  const seen: any[] = [];
+  on('classic.PostToolUse', async (_$: any, e: any) => {
+    seen.push(e);
+    return { value: {} };
+  });
+  harness(on);
+
+  await fire.classic.PostToolUse({
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Bash',
+    tool_input: { command: 'ls' },
+    tool_response: {},
+    tool_use_id: 'pt_2',
+  });
+
+  expect(seen.length).toBe(1);
+  expect('actual_rules_brief_by_mod' in seen[0]).toBe(false);
+});
+
 // ── unrelated repositories ──────────────────────────────────────────────────
 //
 // The README's promise: outside a repository with committed rules, nothing

@@ -961,6 +961,11 @@ async function reportTurn($, { sessionId, cwd, rulesDir }) {
 
 const PANE = 'rules-brief';
 
+// Set on a PostToolUse:Read event this mod is briefing, so hooks/rules-brief.sh
+// stands down for it. The hook matches the literal bytes, so a rename here
+// must be made there too.
+const STAND_DOWN_FIELD = 'actual_rules_brief_by_mod';
+
 async function endOfTurn($, e) {
   // A gate continuation, not a new turn: the gate blocks and the turn runs
   // on, and reporting again at each stop would repeat the same list and
@@ -1083,10 +1088,17 @@ export function register(on, options = {}) {
   // two deliveries of the same brief, one of them with no budget, no record
   // and nothing drawn.
   //
-  // Verified both ways on 2.1.287: answering this event without calling next
-  // stops the settings hook running, and passing it through lets it run.
+  // It stands down that one hook, not the event. The chain beneath a module is
+  // every non-managed settings hook, so answering without calling next would
+  // silence the person's own PostToolUse:Read hooks and every other plugin's
+  // too. Instead the event goes on with STAND_DOWN_FIELD set, and
+  // rules-brief.sh exits on seeing it.
+  //
+  // Probed on 2.1.287: settings hooks run inside this mod's tool.call next(e),
+  // before the mod briefs, so the hook would otherwise always brief first; and
+  // a field added here reaches the settings hook's stdin as written.
   on('classic.PostToolUse', async ($, e, next) => {
-    if (e?.tool_name === 'Read') return {};
+    if (e?.tool_name === 'Read') return next({ ...e, [STAND_DOWN_FIELD]: true });
     return next(e);
   });
 
