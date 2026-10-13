@@ -808,6 +808,26 @@ test('the report states the decision and rule counts', async (fire: any, on: any
   expect(drawn).toContain('2 of 35 rules');
 });
 
+test('a brief of one rule counts it in the singular, in the line and the pane', async (fire: any, on: any) => {
+  // Seen live: a Write briefed one ADR with one rule reported `1 rules`.
+  const brief = [
+    "This repository's own rules that apply to `src/a.ts`:",
+    '',
+    '## Server-Gated Invite Code and Waitlist Auth Verification Seam',
+    '- [doc-a/R-AUTH-001] MUST one.',
+  ].join('\n');
+  const logs: string[] = [];
+  harness(on, { logs, cli: { exitCode: 0, stdout: reply(brief), stderr: '' } });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'one_1' });
+
+  expect(reported(logs)).toContain('1 ADR · 1 rule ');
+  expect(reported(logs)).not.toContain('1 rules');
+  const pane = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  expect(pane).toContain('1 ADR, 1 of 1 rule,');
+});
+
 test('a governed file already briefed says so rather than nothing', async (fire: any, on: any) => {
   // The one case where silence is correct, and therefore the one most worth
   // making visible: every bug in this mod looked exactly like this.

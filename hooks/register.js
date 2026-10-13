@@ -332,6 +332,11 @@ function summarize(brief) {
   };
 }
 
+// `1 rule`, `2 rules`: the brief that names one rule says so.
+function counted(n, noun) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
 // The transcript row for one call. Null for the calls worth saying nothing
 // about -- a command that read no governed file is the overwhelming majority,
 // and a line on every one of them would be noise rather than information.
@@ -380,9 +385,9 @@ function reportLine(record) {
       if (n === 0) return row('BRIEFED', `${s.chars ?? 0} chars`, files);
       const rules =
         s.total && s.total > s.shown
-          ? `${s.shown} of ${s.total} rules`
-          : `${s.shown ?? 0} rules`;
-      return row('BRIEFED', `${n} ADR${n === 1 ? '' : 's'} \u00b7 ${rules}`, files);
+          ? `${s.shown} of ${counted(s.total, 'rule')}`
+          : counted(s.shown ?? 0, 'rule');
+      return row('BRIEFED', `${counted(n, 'ADR')} \u00b7 ${rules}`, files);
     }
     case 'deduped': {
       // Only the files this row can speak for. `unknown` is a CLI too old to
@@ -1075,7 +1080,7 @@ function paneRows(elements, sessionId) {
     const label = OUTCOME_LABELS[record.outcome] ?? record.outcome;
     const detail =
       record.outcome === 'delivered'
-        ? `${record.summary?.decisions?.length ?? 0} ADR(s), ${record.summary?.shown ?? 0} of ${record.summary?.total || record.summary?.shown || 0} rules, ${record.summary?.chars ?? 0} chars`
+        ? `${counted(record.summary?.decisions?.length ?? 0, 'ADR')}, ${record.summary?.shown ?? 0} of ${counted(record.summary?.total || record.summary?.shown || 0, 'rule')}, ${record.summary?.chars ?? 0} chars`
         : record.detail ?? files ?? '';
     return Box({
       key: `row-${i}-${id}`,
