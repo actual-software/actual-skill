@@ -15,6 +15,12 @@ function reply(context: string) {
   });
 }
 
+// What the mod handed the model beside a tool result: its `context`, joined.
+// '' when it handed nothing. The tool result itself is never the place.
+function briefed(r: any): string {
+  return (r?.context ?? []).join('\n\n');
+}
+
 // One harness per test. `env` seeds $.env.get, `cli` decides what the spawned
 // CLI appears to return, and `tool` is the tool result the mod sees from next().
 function harness(
@@ -120,12 +126,13 @@ function harness(
   return runs;
 }
 
-test('a read-shaped Bash command gets the brief appended to its output', async (fire: any, on: any) => {
+test('a read-shaped Bash command gets the brief beside its output', async (fire: any, on: any) => {
   const runs = harness(on);
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/user_store.ts' });
 
   expect(runs.length).toBe(1);
-  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+  expect(r.context).toEqual([BRIEF]);
+  expect(r.result.stdout).toBe('TOOL OUTPUT');
 });
 
 test('the synthesized envelope carries the two load-bearing fields', async (fire: any, on: any) => {
@@ -155,6 +162,7 @@ test('a command that is not read-shaped never spawns the CLI', async (fire: any,
   for (const command of ['npx tsc --noEmit', 'pnpm test', 'ls apps/', 'git status']) {
     const r = await fire.tool.call({ tool: 'Bash', command });
     expect(r.result.stdout).toBe('TOOL OUTPUT');
+    expect(briefed(r)).toBe('');
   }
   expect(runs.length).toBe(0);
 });
@@ -172,19 +180,33 @@ test('a write-shaped command is not briefed: Claude Code marks it not read-only'
   });
   expect(runs.length).toBe(0);
   expect(r.result.stdout).toBe('');
+  expect(briefed(r)).toBe('');
 });
 
-test('the brief lands in result.stdout and the rest of the result survives', async (fire: any, on: any) => {
-  // result.stdout is the only field that reaches the model -- a marker in the
-  // sibling `text` field never arrived in a live session. Assigning a string
-  // to `result` itself would render "[object Object]" over the output.
+test('the brief lands in context and the tool result is untouched', async (fire: any, on: any) => {
+  // Probed live: context reaches the model as its own system reminder, and
+  // the transcript keeps the tool result exactly as the tool produced it.
   const runs = harness(on);
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/user_store.ts' });
   expect(runs.length).toBe(1);
-  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
-  expect(r.result.stderr).toBe('');
-  expect(r.result.interrupted).toBe(false);
+  expect(r.context).toEqual([BRIEF]);
+  expect(r.result).toEqual({ stdout: 'TOOL OUTPUT', stderr: '', interrupted: false, isImage: false });
+  expect(r.text).toBe('TOOL OUTPUT');
   expect(r.ref).toBe(1);
+});
+
+test('context a hook beneath already set is kept', async (fire: any, on: any) => {
+  harness(on, {
+    tool: {
+      ref: 1,
+      result: { stdout: 'TOOL OUTPUT', stderr: '' },
+      text: 'TOOL OUTPUT',
+      isReadOnly: true,
+      context: ['from below'],
+    },
+  });
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/user_store.ts' });
+  expect(r.context).toEqual(['from below', BRIEF]);
 });
 
 test('only additionalContext is read, so no other field can act', async (fire: any, on: any) => {
@@ -202,7 +224,7 @@ test('only additionalContext is read, so no other field can act', async (fire: a
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/user_store.ts' });
 
   expect(runs.length).toBe(1);
-  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+  expect(r.context).toEqual([BRIEF]);
   expect(r.continue).toBe(undefined);
   expect(r.decision).toBe(undefined);
   expect(r.stopReason).toBe(undefined);
@@ -225,6 +247,7 @@ test('a CLI that fails, crashes or prints junk leaves the result untouched', asy
   for (; i < shapes.length; i++) {
     const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/user_store.ts' });
     expect(r.result.stdout).toBe('TOOL OUTPUT');
+    expect(briefed(r)).toBe('');
   }
 });
 
@@ -357,7 +380,8 @@ test('two briefs from one command are joined, with the output kept', async (fire
   const runs = harness(on);
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts src/b.ts' });
   expect(runs.length).toBe(2);
-  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}\n\n${BRIEF}`);
+  expect(r.context).toEqual([`${BRIEF}\n\n${BRIEF}`]);
+  expect(r.result.stdout).toBe('TOOL OUTPUT');
 });
 
 // Commands lifted verbatim from sprintreview session fb5061e2, which
@@ -411,10 +435,10 @@ test('a brief that does not fit the remaining budget is dropped whole', async (f
   });
 
   const first = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
-  expect(first.result.stdout).toContain(LONG);
+  expect(briefed(first)).toContain(LONG);
 
   const second = await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts' });
-  expect(second.result.stdout).not.toContain(LONG);
+  expect(briefed(second)).not.toContain(LONG);
   // Two spawns: the budget is spent on what came back, not guessed beforehand.
   expect(runs.length).toBe(2);
 });
@@ -429,10 +453,10 @@ test('exhausting the budget says so once, not on every later read', async (fire:
 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   const crossing = await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts' });
-  expect(crossing.result.stdout).toContain('per-session context budget');
+  expect(briefed(crossing)).toContain('per-session context budget');
 
   const after = await fire.tool.call({ tool: 'Bash', command: 'cat src/c.ts' });
-  expect(after.result.stdout).toBe('TOOL OUTPUT');
+  expect(briefed(after)).toBe('');
   // And no further spawns once the budget is gone.
   expect(runs.length).toBe(2);
 });
@@ -441,14 +465,14 @@ test('maxSessionChars: 0 turns briefing off without touching the gates', async (
   const runs = harness(on, { config: { maxSessionChars: 0 } });
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(runs.length).toBe(0);
-  expect(r.result.stdout).toBe('TOOL OUTPUT');
+  expect(briefed(r)).toBe('');
 });
 
 test('the default budget leaves an ordinary brief untouched', async (fire: any, on: any) => {
   const runs = harness(on);
   for (const f of ['a', 'b', 'c', 'd']) {
     const r = await fire.tool.call({ tool: 'Bash', command: `cat src/${f}.ts` });
-    expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+    expect(r.context).toEqual([BRIEF]);
   }
   expect(runs.length).toBe(4);
 });
@@ -486,16 +510,17 @@ test('ACTUAL_HOOK_DEBUG reports the budget where a headless run can see it', asy
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
 
   expect(runs.length).toBe(1);
-  expect(r.result.stdout).toContain(BRIEF);
-  expect(r.result.stdout).toMatch(/injected \d+\/\d+ chars this session/);
-  expect(r.result.stdout).toContain('context 1000/200000 (1%)');
+  expect(briefed(r)).toContain(BRIEF);
+  expect(briefed(r)).toMatch(/injected \d+\/\d+ chars this session/);
+  expect(briefed(r)).toContain('context 1000/200000 (1%)');
+  expect(r.result.stdout).toBe('TOOL OUTPUT');
 });
 
 test('without the debug switch no budget line is injected', async (fire: any, on: any) => {
   const runs = harness(on);
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
   expect(runs.length).toBe(1);
-  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
+  expect(r.context).toEqual([BRIEF]);
 });
 
 // --- Phase 4: coexistence with the Read hook ----------------------------
@@ -587,14 +612,6 @@ test('the repo root is probed once per session, not once per command', async (fi
     await fire.tool.call({ tool: 'Bash', command: `cat src/${f}.ts` });
   }
   expect(gitCalls).toBe(1);
-});
-
-test('the mod never fires for a Read tool call: that is the hook’s job', async (fire: any, on: any) => {
-  // The two paths are split by matcher, which is what makes the double-brief
-  // suppression Phase 4 was originally scoped around unnecessary.
-  const runs = harness(on);
-  await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
-  expect(runs.length).toBe(0);
 });
 
 test('a subagent read is filed under its own agent id', async (fire: any, on: any) => {
@@ -785,8 +802,8 @@ test('the drawing never reaches Claude', async (fire: any, on: any) => {
 
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'tu_7' });
   expect(runs.length).toBe(1);
-  expect(r.result.stdout).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
-  expect(r.result.stdout).not.toContain('actual: briefed');
+  expect(r.context).toEqual([BRIEF]);
+  expect(r.result.stdout).toBe('TOOL OUTPUT');
 });
 
 test('/rules-brief lists what briefing did, including where it stayed quiet', async (fire: any, on: any) => {
@@ -826,7 +843,7 @@ test('exhausting the budget toasts the user and still tells Claude', async (fire
   const crossing = await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts', tool_use_id: 'b_2' });
 
   expect(runs.length).toBe(2);
-  expect(crossing.result.stdout).toContain('per-session context budget');
+  expect(briefed(crossing)).toContain('per-session context budget');
   expect(toasts.join(' ')).toContain('per-session context budget');
 });
 
@@ -906,8 +923,9 @@ test('ACTUAL_HOOK_DEBUG explains a non-brief, not only a brief', async (fire: an
     });
     const r = await fire.tool.call({ tool: 'Bash', command });
     expect(runs.length).toBe(0);
-    expect(r.result.stdout).toContain('actual rules brief [debug]: not briefed');
-    expect(r.result.stdout).toContain(expected);
+    expect(briefed(r)).toContain('actual rules brief [debug]: not briefed');
+    expect(briefed(r)).toContain(expected);
+    expect(r.result.stdout).toBe('OUT');
     break; // one harness per test; the second shape is covered below
   }
 });
@@ -917,15 +935,15 @@ test('a path that resolves to nothing says which tokens were tried', async (fire
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/missing.ts' });
 
   expect(runs.length).toBe(0);
-  expect(r.result.stdout).toContain('no token resolved to a governed file');
-  expect(r.result.stdout).toContain('src/missing.ts');
+  expect(briefed(r)).toContain('no token resolved to a governed file');
+  expect(briefed(r)).toContain('src/missing.ts');
 });
 
-test('nothing is appended when the debug switch is off', async (fire: any, on: any) => {
+test('nothing is added when the debug switch is off', async (fire: any, on: any) => {
   const runs = harness(on, { existing: [] });
   const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/missing.ts' });
   expect(runs.length).toBe(0);
-  expect(r.result.stdout).toBe('TOOL OUTPUT');
+  expect(briefed(r)).toBe('');
 });
 
 test('a briefed call reports exactly one line to the transcript', async (fire: any, on: any) => {
@@ -977,11 +995,10 @@ test('with the debug switch on, the only logged line is the budget', async (fire
 
 // --- The Read tool, through the same path ---------------------------------
 
-test('a Read is briefed, into the field a Read result carries', async (fire: any, on: any) => {
-  // Probed in a live session: Bash results carry result.stdout, Read results
-  // carry result.file.content, and the `text` field on both reaches the model
-  // on neither. Appending to the wrong one is silent -- the brief simply never
-  // arrives -- which is why each is pinned.
+test('a Read is briefed beside the file, never inside it', async (fire: any, on: any) => {
+  // Appended to file.content, the rules read as the file's last lines. In
+  // context they arrive as their own system reminder, and the content the
+  // transcript keeps is the file's.
   const runs = harness(on, { readShaped: true });
   const r = await fire.tool.call({
     tool: 'Read',
@@ -990,10 +1007,8 @@ test('a Read is briefed, into the field a Read result carries', async (fire: any
   });
 
   expect(runs.length).toBe(1);
-  expect(r.result.file.content).toBe(`TOOL OUTPUT\n\n${BRIEF}`);
-  // The rest of the result is passed through untouched.
-  expect(r.result.type).toBe('text');
-  expect(r.result.file.filePath).toBe('/repo/src/a.ts');
+  expect(r.context).toEqual([BRIEF]);
+  expect(r.result).toEqual({ type: 'text', file: { filePath: '/repo/src/a.ts', content: 'TOOL OUTPUT' } });
 });
 
 test('a Read takes its path from the event, not from parsing', async (fire: any, on: any) => {
@@ -1014,11 +1029,11 @@ test('a Read and a cat of one file share the budget and the dedup record', async
   });
 
   const first = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
-  expect(first.result.file.content).toContain(BRIEF);
+  expect(briefed(first)).toContain(BRIEF);
 
   // The CLI now reports nothing new, as it would for a decision already briefed.
   const second = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
-  expect(second.result.file.content).toBe('TOOL OUTPUT');
+  expect(briefed(second)).toBe('');
   expect(runs.length).toBe(2);
 });
 
@@ -1033,16 +1048,18 @@ test('a Read draws the same line a Bash read draws', async (fire: any, on: any) 
   expect(drawn).toContain('a.ts');
 });
 
-test('a result whose readable field is missing is left alone', async (fire: any, on: any) => {
-  // A tool shape this mod does not know. Guessing where the text lives could
-  // overwrite a result rather than annotate it, so it declines.
+test('a result of any shape is briefed, and left exactly as it was', async (fire: any, on: any) => {
+  // Writing the brief into the result meant knowing where its text lived, so
+  // an image read went unbriefed. Context does not depend on the shape.
+  const image = { type: 'image', file: { base64: 'AAAA', type: 'image/png' } };
   const runs = harness(on, {
-    tool: { ref: 1, result: { type: 'image', file: {} }, text: 'x', isReadOnly: true },
+    tool: { ref: 1, result: image, text: 'x', isReadOnly: true },
   });
-  const r = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.ts' });
+  const r = await fire.tool.call({ tool: 'Read', file_path: '/repo/src/a.png' });
 
-  expect(runs.length).toBe(0);
-  expect(r.result.type).toBe('image');
+  expect(runs.length).toBe(1);
+  expect(r.context).toEqual([BRIEF]);
+  expect(r.result).toEqual(image);
 });
 
 test('a suppressed brief reports its reason, not silence', async (fire: any, on: any) => {

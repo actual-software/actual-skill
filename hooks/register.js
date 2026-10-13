@@ -28,8 +28,9 @@
 // dedup store in the mod.
 //
 // Advisory by construction, like the hook. It never denies, never rewrites a
-// command, and never changes a tool result except to append context. Every
-// failure path leaves the result exactly as the tool produced it. There is
+// command, and never changes a tool result: a brief goes beside the result, in
+// the call's `context`. Every failure path leaves the result exactly as the
+// tool produced it. There is
 // deliberately no .catch handler: a .catch makes a hook fail closed, which is
 // right for a gate and wrong for this.
 
@@ -37,13 +38,15 @@
 // that no amount of reasoning would have. Both were found by probing an actual
 // `claude -p` run, and both corrected a guess:
 //
-//  1. A Bash tool result's `result` field is an OBJECT ({stdout, stderr,
-//     interrupted, isImage, ...}) and the string Claude actually reads is
-//     `result.stdout`. The sibling `text` field looks like the obvious answer
-//     and is not: a marker appended to `text` never reached the model, while
-//     the same marker in `result.stdout` did. Assigning a string to `result`
-//     would have replaced the whole object and rendered "[object Object]" in
-//     place of the command's output -- the brief destroying what it annotates.
+//  1. Where a brief goes. A tool.call result's `context` is what the model
+//     reads after the tool's result. Probed on 2.1.287 with a marker for both
+//     Read and Bash: the model received each as its own system reminder
+//     ("tool.call hook additional context"), and the transcript recorded it
+//     as a hook_additional_context attachment beside an untouched tool result
+//     -- the channel a PostToolUse hook's additionalContext uses. An earlier
+//     version appended the brief to result.stdout and result.file.content
+//     instead, which put rule text inside the file as the model read it and
+//     inside the tool result the transcript kept.
 //  2. Claude Code already classifies each Bash command: `isReadOnly` is true
 //     for `cat a.txt` and `sed -n 1p a.txt`, and absent for `echo written >
 //     b.txt`. That is the read-vs-write signal Phase 2 was going to build a
@@ -205,52 +208,22 @@ function candidateTokens(command) {
 // case worth debugging silent: a command that was not read-only, a token that
 // resolved to nothing, a spent budget, and a mod that never loaded all looked
 // identical from a transcript. Three sessions were spent unable to tell them
-// apart. The line rides out on the tool result, because $.ui.log does not
-// reach `claude -p`, and it is debug-gated for that reason.
-// Where each tool's result carries the text Claude reads, and where a brief
-// therefore has to go.
-//
-// Both were established by appending a distinct marker to every candidate
-// field in a live session and asking which came back, because both times the
-// obvious answer was wrong. A `text` field sits on both results and reaches
-// the model on neither.
-//
-//   Bash  ->  result.stdout            (result is {stdout, stderr, ...})
-//   Read  ->  result.file.content      (result is {type, file})
-//
-// A tool whose shape is not one of these returns null and is left alone: the
-// brief is advisory, and a guess at where to put it could overwrite a tool
-// result instead of annotating it.
-function readableField(result, tool) {
-  if (tool === 'Bash' && typeof result?.result?.stdout === 'string') return 'stdout';
-  if (tool === 'Read' && typeof result?.result?.file?.content === 'string') return 'content';
-  return null;
-}
-
-function appendToResult(result, tool, text) {
-  const field = readableField(result, tool);
-  if (!text || field === null) return result;
-  if (field === 'stdout') {
-    return { ...result, result: { ...result.result, stdout: `${result.result.stdout}\n\n${text}` } };
-  }
-  const file = result.result.file;
-  return {
-    ...result,
-    result: { ...result.result, file: { ...file, content: `${file.content}\n\n${text}` } },
-  };
-}
-
-// Append a debug line to a tool result, leaving everything else as it was.
-// Returns the result untouched when there is no line, so the non-debug path
-// allocates nothing.
-function withNote(result, tool, note) {
-  return appendToResult(result, tool, note);
-}
-
+// apart. The line rides out in the call's context, which the session
+// transcript records even under `claude -p`, where $.ui.log does not reach.
+// The model reads it too, so it is debug-gated.
 async function debugNote($, outcome, detail) {
   const enabled = await $.env.get('ACTUAL_HOOK_DEBUG');
   if (!enabled) return '';
   return `actual rules brief [debug]: ${outcome}${detail ? ` -- ${detail}` : ''}`;
+}
+
+// Hand text to the model beside a tool's result, never inside it, so the
+// result is the same whatever the tool's shape. Entries already there are
+// kept: a hook beneath hands its context over whole. Returns the result
+// untouched when there is no text, so the quiet path allocates nothing.
+function withContext(result, text) {
+  if (!text) return result;
+  return { ...result, context: [...(result.context ?? []), text] };
 }
 
 // --- What the user sees ---------------------------------------------------
@@ -681,9 +654,10 @@ function cliLimits(resolved) {
 // session -- measuring must not itself change what the session sees. But it
 // does not reach `claude -p` stdout, and headless is exactly where a scripted
 // measurement over many files would run, so the first attempt at this produced
-// nothing at all. The second channel appends the same line to the brief, where
-// it rides out on the tool result and is visible anywhere. That one does enter
-// the model's context, so it is strictly debug-only.
+// nothing at all. The second channel adds the same line to the brief, where it
+// rides out in the call's context and the session transcript records it, even
+// headless. That one does enter the model's context, so it is strictly
+// debug-only.
 //
 // Neither channel writes a file. A durable log would mean declaring $.fs.write
 // on a governance plugin whose audit surface is the thing that makes it
@@ -723,8 +697,8 @@ async function optedOut($) {
 }
 
 // Everything that happens once a set of governed files is in hand: the
-// budget, the CLI call per file, the record, and the text appended to the
-// result. Shared by the shell path and the Read path so neither can drift
+// budget, the CLI call per file, the record, and the context handed to the
+// model. Shared by the shell path and the Read path so neither can drift
 // from the other -- the divergence that produced every key bug in this mod.
 async function deliverBrief($, e, result, paths, ctx) {
   const { cwd, sessionId, rulesDir, options } = ctx;
@@ -736,7 +710,7 @@ async function deliverBrief($, e, result, paths, ctx) {
   let remaining = spendable(sessionId, cap);
   if (remaining <= 0) {
     recordOutcome(e.tool_use_id, { outcome: 'budget', files: paths });
-    return withNote(result, e.tool, await debugNote($, 'not briefed', `session budget of ${cap} chars is spent`));
+    return withContext(result, await debugNote($, 'not briefed', `session budget of ${cap} chars is spent`));
   }
 
   let appended = '';
@@ -872,7 +846,7 @@ async function deliverBrief($, e, result, paths, ctx) {
 
   if (!appended) return result;
 
-  return appendToResult(result, e.tool, appended);
+  return withContext(result, appended);
 }
 
 // One label per outcome, shared by the pane and the end-of-turn summary. Two
@@ -1152,13 +1126,7 @@ export function register(on, options = {}) {
       // and absent for anything it could not classify -- both mean no brief.
       if (result?.isReadOnly !== true) {
         recordOutcome(e.tool_use_id, { outcome: 'not-read-only' });
-        return withNote(result, e.tool, await debugNote($, 'not briefed', 'Claude Code did not mark this command read-only'));
-      }
-      // The field Claude reads differs per tool and is never the obvious one.
-      // Bail before any work if this result does not carry it.
-      if (readableField(result, e.tool) === null) {
-        recordOutcome(e.tool_use_id, { outcome: 'no-readable-field' });
-        return result;
+        return withContext(result, await debugNote($, 'not briefed', 'Claude Code did not mark this command read-only'));
       }
 
       const repoRoot = await resolveRepoRoot($, sessionId, cwd);
@@ -1169,7 +1137,7 @@ export function register(on, options = {}) {
         const named = typeof e.file_path === 'string' ? normalizePath(e.file_path) : null;
         if (!named) {
           recordOutcome(e.tool_use_id, { outcome: 'no-paths' });
-          return withNote(result, e.tool, await debugNote($, 'not briefed', 'the Read named no file'));
+          return withContext(result, await debugNote($, 'not briefed', 'the Read named no file'));
         }
         return await deliverBrief($, e, result, [named], { cwd, sessionId, rulesDir, repoRoot, options });
       }
@@ -1189,7 +1157,7 @@ export function register(on, options = {}) {
       }
       if (!found || found.tokens.length === 0) {
         recordOutcome(e.tool_use_id, { outcome: 'no-paths' });
-        return withNote(result, e.tool, await debugNote($, 'not briefed', 'the command named no path-shaped token'));
+        return withContext(result, await debugNote($, 'not briefed', 'the command named no path-shaped token'));
       }
       const shellCwd = shellCwds.get(sessionId) ?? cwd;
 
@@ -1235,7 +1203,7 @@ export function register(on, options = {}) {
         // Tokens that looked like paths but resolved to nothing inside the
         // repository. Common and uninteresting on its own; the pane shows it.
         recordOutcome(e.tool_use_id, { outcome: 'unresolved', tokens: found.tokens });
-        return withNote(result, e.tool, await debugNote($, 'not briefed',
+        return withContext(result, await debugNote($, 'not briefed',
           `no token resolved to a governed file inside the repo: ${found.tokens.join(', ')}`));
       }
 

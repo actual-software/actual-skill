@@ -75,6 +75,9 @@ for line in lines:
         ids = set(re.findall(r'"tool_use_id":\s*"([^"]+)"', line)) | set(
             re.findall(r'"toolUseID":\s*"([^"]+)"', line)
         )
+        # The mod's brief is recorded as a hook_additional_context attachment
+        # whose toolUseID is the call's own id with `-context` appended.
+        ids = {re.sub(r"-context$", "", i) for i in ids}
         via = sorted({names.get(i, ("?",))[0] for i in ids}) or ["?"]
         briefs.append((via, files, titles, slugs, shown, total or shown))
         for pair in re.findall(r"\[([a-z0-9-]+)/(R-[A-Z0-9]+-\d+)\]", text):
