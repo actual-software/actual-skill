@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # bootstrap.sh - Shared preflight helpers for the actual plan-stage governance hooks.
 #
-# Sourced by hooks/plan-gate.sh (PreToolUse:ExitPlanMode) and hooks/preflight.sh
+# Sourced by all four hooks: plan-gate.sh (PreToolUse:ExitPlanMode),
+# impl-gate.sh (Stop), rules-brief.sh (PostToolUse:Read) and preflight.sh
 # (SessionStart). Read-only: never modifies files, config, or state.
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
@@ -95,12 +96,17 @@ resolve_repo_root() {
 # Directory holding the committed rule files. ACTUAL_RULES_DIR overrides it, which
 # is how a monorepo points the gate at a subproject's rules. plan-gate.sh passes
 # this path to the CLI as --rules-dir so scoring uses the same directory.
+#
+# $1 is an already-resolved repo root. Optional, and resolve_repo_root is called
+# when it is absent -- but that call spawns `git rev-parse`, so a caller that
+# needs the root anyway should resolve it once and pass it here rather than pay
+# for a second spawn. rules-brief.sh runs on every Read and does exactly that.
 rules_dir() {
   if [ -n "${ACTUAL_RULES_DIR:-}" ]; then
     printf '%s' "${ACTUAL_RULES_DIR}"
     return 0
   fi
-  printf '%s/.actual/rules' "$(resolve_repo_root)"
+  printf '%s/.actual/rules' "${1:-$(resolve_repo_root)}"
 }
 
 # Count the *.md rule files in a directory. Top level only -- the observed
@@ -120,8 +126,12 @@ rules_count() {
 # True when this repo has committed rules to govern against. When false every hook
 # must be a completely silent no-op, so installing the plugin never affects
 # unrelated repositories.
+#
+# $1 is an already-resolved rules directory, for the same reason rules_dir takes
+# a root: without it this re-resolves the directory, and therefore the repo root,
+# from scratch.
 rules_present() {
-  [ "$(rules_count "$(rules_dir)")" -gt 0 ]
+  [ "$(rules_count "${1:-$(rules_dir)}")" -gt 0 ]
 }
 
 # True inside a `claude` subprocess that actual-cli itself spawned (its
@@ -195,6 +205,12 @@ is_cli_usage_error() {
     'error: '*) return 0 ;;
   esac
   return 1
+}
+
+# `rules brief` (AK-789..AK-791) post-dates impl-check, so a CLI can have both
+# gates and still lack it. Probed separately, for the same reason as the others.
+have_rules_brief() {
+  actual rules brief --help >/dev/null 2>&1
 }
 
 # --- Operator-facing messages ---
@@ -298,6 +314,39 @@ actually answered either way.
 EOF
 }
 
+# rules brief's counterpart of the *_upgrade_message functions above -- and
+# deliberately NOT one of them. A sentence folded into preflight's success
+# message, not a message that replaces it.
+#
+# The escalation those three share ("interrupt the current task", "do not
+# continue until they respond", AskUserQuestion) is earned by what their
+# absence costs: a missing CLI, plan-check or impl-check means a gate that is
+# supposed to BLOCK is silently not blocking, so the user believes they are
+# governed when they are not. That false sense of safety is worth a turn.
+#
+# A missing `rules brief` costs none of it. Briefing is advisory by
+# construction -- it never blocks anything, so its absence cannot create a
+# false sense of safety; the gates keep working exactly as before. Reusing the
+# blocking wording for it would also land badly on cadence: SessionStart fires
+# on startup, resume, clear, compact AND fork, so a user one release behind
+# would face a blocking question after every compaction to enable a nicety.
+#
+# It must also never displace the success message. Briefing is the optional
+# feature here; the fact that plan and diff checking ARE running is the more
+# important thing the agent needs to know, and the advisory must not push it
+# out. Hence a suffix, chosen by have_rules_brief, rather than an early exit.
+rules_brief_note() {
+  # Nothing to say when the subcommand is present. This used to promise that
+  # rules are surfaced on a read, which a compaction makes untrue: brief
+  # memory and the mod's budget survive it, so every decision briefed before
+  # the compaction stays quiet afterwards while the model has lost the text.
+  # Say it again when `--claude-session-start` resets that memory.
+  if have_rules_brief; then
+    return 0
+  fi
+  printf '%s' "Rule briefing -- surfacing the rules that govern a file when you read it -- needs a newer \`actual\` CLI than the one installed. It is advisory only and the checks above are unaffected, so do not interrupt anything for it: mention it in passing when convenient, and upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\` only if the user asks."
+}
+
 # User-facing counterparts of install_message and impl_upgrade_message, for
 # impl-gate.sh only. Stop's systemMessage is shown to the user and does not
 # reach Claude, and it is emitted again at the end of every turn until the CLI
@@ -369,6 +418,14 @@ has_system_message() {
 # notice. Fail-safe means the notice path requires proven absence of this field,
 # not merely a failed match against "allow" or "deny".
 has_permission_decision() {
+  # C locale for the three substitutions below. In a UTF-8 locale bash walks
+  # the string by character, and on stock macOS bash 3.2 that cost a median
+  # 0.98s of CPU and 1.38s of wall time on a 3,508-byte brief -- against this
+  # hook's 2-second timeout, which 2 of 12 runs under load exceeded. A
+  # cancelled brief is not merely late: the CLI records its decisions in
+  # session memory before returning, so a later read of the same file is
+  # deduped against a brief the agent never saw. C locale makes it 0.19s.
+  local LC_ALL=C
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}
@@ -394,6 +451,8 @@ has_permission_decision() {
 # uninterpretable and the turn would end unblocked. An escaped backslash followed
 # by a real escape (\\p) still leaves the p behind to be caught.
 has_unicode_escape() {
+  # C locale, as above: see has_permission_decision.
+  local LC_ALL=C
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}
@@ -415,6 +474,8 @@ has_unicode_escape() {
 # escaped -- so check for the duplicate explicitly, on the same fail-safe
 # footing: cut at the first permissionDecision key and look for a second.
 has_duplicate_permission_decision() {
+  # C locale, as above: see has_permission_decision.
+  local LC_ALL=C
   local s="$1"
   s=${s// /}
   s=${s//$'\n'/}

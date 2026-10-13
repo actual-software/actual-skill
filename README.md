@@ -145,9 +145,31 @@ When your agent hits an architecture question, the skill asks the Actual advisor
 
 In Claude Code, the skill checks your agent's work against the architecture rules committed in `.actual/rules/`. When your agent leaves plan mode, its plan is checked before you see the approval dialog. At the end of every turn, its changes are checked too. A conflict goes back to the agent with the reason, and the turn continues until it's fixed.
 
+Your agent is also briefed as it reads. When it opens a file covered by a rule, the rules governing that file are surfaced before it makes its first edit. Briefing is advisory: it never blocks anything, and it needs a CLI new enough to have `actual rules brief` — if yours isn't, the two checks above still run and the session start tells you so.
+
+Reads through the shell count too, and they are most of them. Measured across 212 local sessions, four in five file reads went through `cat`, `head`, `sed -n` or `grep` rather than the Read tool, and a hook never sees those. A Claude Code mod covers them, and where it loads it takes over the Read tool too, so both kinds of read go through one path with one context budget, one record of what has already been said, and one way of reporting it. Reading a file twice does not brief it twice, whichever way you read it. The mod needs Claude Code 2.1.287 or later; on 2.1.285 and 2.1.286 set `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` to load it. Without it the Read path still works on its own, without the cap or the report below.
+
+Where the mod loads, briefing is capped so it cannot crowd out your agent's context: 48,000 characters per session by default, which is roughly two and a half times what a 40-file session was measured to use against a 425-rule repository. When the cap is reached your agent is told once, rather than briefing going quietly dead.
+
+You can see briefing happen. Each read of a governed file reports one line to the transcript, the same shape every time — a state in caps at a fixed column, then what arrived, then the files:
+
+```
+actual-cli: ▌ BRIEFED    2 ADRs · 8 of 35 rules    tokens.ts
+actual-cli: ▌ NO CHANGE  briefed earlier  tokens.ts
+```
+
+- **A governed file that briefs nothing says why**, rather than leaving you to guess: nothing new for it, the budget spent, or the CLI could not answer.
+- **A read of files nothing governs reports nothing, once the CLI says so.** Most files in a repository are ungoverned, and a line on each would bury the reads that matter. Until that ships in the CLI (actual-cli#867), such a read logs a "briefed earlier, or ungoverned" row instead.
+- **`/rules-brief` lists the session**, in the order it happened, those quiet reads included, with the reason beside each one: the last 40 of at most 200 records.
+- **The pane opens by itself when a turn ends in which something was briefed, held back or failed**, so those turns are accounted for without your asking. Escape closes it, and it takes keyboard focus only while your prompt is empty. A pane a plugin opens on its own initiative needs a terminal at least 144 columns wide — 110 once you have opened that pane yourself — and waits undrawn below that, so a narrower terminal gets a transcript line pointing at `/rules-brief` instead.
+
+None of this governs: the Stop verdict is the implementation gate's, and the pane opens after it, where a failure cannot affect it. None of it costs your agent context either, because the model never reads these lines — they are not counted against the cap above. It does need a terminal or the desktop app: nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session, though briefing itself still runs there.
+
 Governance never gets in the way of unrelated work. Outside a repository with `.actual/rules/`, the checks do nothing. If the CLI is missing, outdated, or crashes, you get a message instead of a block. A rule that stays unresolved stops blocking after three denied rounds per session. To clear a denied rule for the rest of the session, run `actual check-override --session <id> --rule <doc-slug>::<rule-id> --reason "..."` from a terminal.
 
-Set `ACTUAL_PLAN_GATE=off` to turn governance off, or `ACTUAL_RULES_DIR` to use a different rules directory. The hooks also stay silent inside the `claude` subprocesses `actual` itself spawns (marked with `ACTUAL_CLI_SUBPROCESS=1`), so the judge's own Stop hook can't rerun `impl-check` and recurse. Run `bash hooks/tests/run.sh` to test the hooks locally; it needs no network or CLI install. Governance relies on Claude Code hooks, so it isn't available in Codex, ChatGPT, Cursor, or OpenCode.
+Set `ACTUAL_PLAN_GATE=off` to turn governance off, `ACTUAL_RULES_BRIEF=off` to turn off briefing alone while the checks keep running, or `ACTUAL_RULES_DIR` to use a different rules directory. The briefing limits have their own variables — `ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS` for the per-session cap and `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS` and `_MIN_SCORE` for `actual rules brief`'s own limits — and the same settings appear as labelled rows under `/plugin`. `_MIN_SCORE` is worth knowing about if briefing feels noisy: a rule's score reflects how narrowly its `verify` path is written, so the useful floor differs per repository and there is no good default.
+
+The hooks also stay silent inside the `claude` subprocesses `actual` itself spawns (marked with `ACTUAL_CLI_SUBPROCESS=1`), so the judge's own Stop hook can't rerun `impl-check` and recurse. Failures are silent by design, so if you need to see why briefing isn't appearing, set `ACTUAL_HOOK_DEBUG=1` and run `claude --debug`; it reports the rules directory, the CLI's exit status, why a reply was dropped, and how much context briefing has used. Run `bash hooks/tests/run.sh` to test the hooks locally, and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .` to test the mod; neither needs the network or a CLI install. Governance relies on Claude Code hooks, so it isn't available in Codex, ChatGPT, Cursor, or OpenCode.
 
 ### Troubleshooting
 
