@@ -151,7 +151,19 @@ Reads through the shell count too, and they are most of them. Measured across 21
 
 Briefing is capped so it cannot crowd out your agent's context: 48,000 characters per session by default, which is roughly two and a half times what a 40-file session was measured to use against a 425-rule repository. When the cap is reached your agent is told once, rather than briefing going quietly dead.
 
-You can see briefing happen. Each read of a governed file reports one line to the transcript — `actual-cli: ▌ BRIEFED    2 ADRs · 8 of 35 rules    tokens.ts` — a state in caps at a fixed column, then what arrived, then the files, so a scan down the transcript lands on the state without reading the sentence — and when a governed file is read but nothing arrives, it says why instead of leaving you to guess: nothing new for it, the budget spent, or the CLI could not answer. A read of files nothing governs reports nothing at all — most files in a repo are ungoverned, so a line on each would bury the reads that matter; `/rules-brief` lists those too. Run `/rules-brief` for the whole session in the order it happened, including the reads that briefed nothing. At the end of a turn the `/rules-brief` pane opens by itself, so the reads are accounted for without asking: the same call the command makes, so Escape closes it, and it takes keyboard focus only while your prompt is empty. A pane a plugin opens on its own initiative needs a terminal at least 144 columns wide — 110 once you have opened that pane yourself — and waits undrawn below that, so a narrower terminal gets a transcript line pointing at `/rules-brief` instead. It reports; it does not govern — the Stop verdict is the implementation gate's, and the pane opens after it, where a failure cannot affect it. None of it costs your agent any context: the model does not read these lines, so they are not counted against the cap above. It needs a terminal or the desktop app — nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session, though briefing itself still runs there.
+You can see briefing happen. Each read of a governed file reports one line to the transcript, the same shape every time — a state in caps at a fixed column, then what arrived, then the files:
+
+```
+actual-cli: ▌ BRIEFED    2 ADRs · 8 of 35 rules    tokens.ts
+actual-cli: ▌ NO CHANGE  briefed earlier  tokens.ts
+```
+
+- **A governed file that briefs nothing says why**, rather than leaving you to guess: nothing new for it, the budget spent, or the CLI could not answer.
+- **A read of files nothing governs reports nothing at all.** Most files in a repository are ungoverned, and a line on each would bury the reads that matter.
+- **`/rules-brief` lists the whole session**, in the order it happened, those quiet reads included, with the reason beside each one.
+- **The pane opens by itself when a turn ends**, so the session is accounted for without your asking. Escape closes it, and it takes keyboard focus only while your prompt is empty. A pane a plugin opens on its own initiative needs a terminal at least 144 columns wide — 110 once you have opened that pane yourself — and waits undrawn below that, so a narrower terminal gets a transcript line pointing at `/rules-brief` instead.
+
+None of this governs: the Stop verdict is the implementation gate's, and the pane opens after it, where a failure cannot affect it. None of it costs your agent context either, because the model never reads these lines — they are not counted against the cap above. It does need a terminal or the desktop app: nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session, though briefing itself still runs there.
 
 Governance never gets in the way of unrelated work. Outside a repository with `.actual/rules/`, the checks do nothing. If the CLI is missing, outdated, or crashes, you get a message instead of a block. A rule that stays unresolved stops blocking after three denied rounds per session. To clear a denied rule for the rest of the session, run `actual check-override --session <id> --rule <doc-slug>::<rule-id> --reason "..."` from a terminal.
 
