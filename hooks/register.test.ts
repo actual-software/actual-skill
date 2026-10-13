@@ -1840,6 +1840,32 @@ test('an Edit or Write announces the mod to rules-brief.sh once per session, bef
   expect(envSets).toEqual([{ name: 'ACTUAL_SKILL_MOD_SESSION', value: 'sess-1' }]);
 });
 
+test('a repository with no rule files is not announced to', async (fire: any, on: any) => {
+  // Outside a governed repository the plugin does nothing -- not even a
+  // variable carried into every process the session starts.
+  const envSets: any[] = [];
+  harness(on, { tool: WRITE_RESULT, envSets, rules: [] });
+  await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'pre_nr' });
+  expect(envSets).toEqual([]);
+});
+
+test('briefing switched off is not announced either', async (fire: any, on: any) => {
+  const envSets: any[] = [];
+  harness(on, { tool: WRITE_RESULT, envSets, env: { ACTUAL_RULES_BRIEF: 'off' } });
+  await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'pre_off' });
+  expect(envSets).toEqual([]);
+});
+
+test('a session cap of zero still announces, so the hook stays silent too', async (fire: any, on: any) => {
+  // The hook knows nothing of the cap. Not announcing would hand briefing to
+  // it, and the setting that turns briefing off would turn it back on.
+  const envSets: any[] = [];
+  const runs = harness(on, { tool: WRITE_RESULT, envSets, config: { maxSessionChars: 0 } });
+  await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'pre_cap' });
+  expect(runs.length).toBe(0);
+  expect(envSets).toEqual([{ name: 'ACTUAL_SKILL_MOD_SESSION', value: 'sess-1' }]);
+});
+
 test('an announcement that cannot be set never stops the call', async (fire: any, on: any) => {
   harness(on, { tool: WRITE_RESULT, failEnvSets: true });
   const r = await fire.tool.call({ tool: 'Write', file_path: '/repo/src/a.ts', tool_use_id: 'pre_w' });

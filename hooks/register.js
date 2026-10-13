@@ -1046,6 +1046,14 @@ let announced;
 async function announce($) {
   const sessionId = await $.session.id();
   if (!sessionId || sessionId === announced) return;
+  // The same gates as the tool.call path, so a repository with no rules, or
+  // briefing switched off, sees nothing of this mod -- not even a variable in
+  // every process it starts. Not the maxSessionChars cap: at 0 the mod is
+  // still in charge and silent, and announcing is what keeps the hook silent
+  // too. Skipping here never costs a brief: the hook runs its own checks.
+  if (await optedOut($)) return;
+  const cwd = await $.session.cwd();
+  if (!cwd || !(await governedRulesDir($, sessionId, cwd))) return;
   // A literal name, so `claude plugin validate` lists exactly this one write.
   await $.env.set('ACTUAL_SKILL_MOD_SESSION', sessionId);
   announced = sessionId;
