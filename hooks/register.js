@@ -571,6 +571,13 @@ async function readEnvSettings($) {
 
 const repoRoots = new Map();
 
+// Every spawn's timeout: the PostToolUse:Read hook's own budget in hooks.json.
+// $.process.run waits 30 seconds when given none, and the hook time limit does
+// not cover it, so a CLI that hangs would stall every read -- and the end of
+// every turn -- for that long. A spawn that times out reads as exit 1, which
+// every caller already treats as no answer.
+const SPAWN_TIMEOUT_MS = 2000;
+
 function deeperOf(projectDir, gitRoot) {
   if (!projectDir) return gitRoot;
   if (!gitRoot) return projectDir;
@@ -586,7 +593,10 @@ async function resolveRepoRoot($, sessionId, cwd) {
   if (repoRoots.has(sessionId)) return repoRoots.get(sessionId);
   let gitRoot = null;
   try {
-    const run = await $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd });
+    const run = await $.process.run(['git', 'rev-parse', '--show-toplevel'], {
+      cwd,
+      timeoutMs: SPAWN_TIMEOUT_MS,
+    });
     if (run.exitCode === 0) gitRoot = (run.stdout ?? '').trim() || null;
   } catch {
     // Not a repository, or no git. Fall through to the project dir.
@@ -751,7 +761,11 @@ async function deliverBrief($, e, result, paths, ctx) {
         '--rules-dir', rulesDir,
         ...cliLimits(resolved),
       ],
-      { stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }), cwd }
+      {
+        stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }),
+        cwd,
+        timeoutMs: SPAWN_TIMEOUT_MS,
+      }
     );
     if (run.exitCode !== 0) {
       cliError = `exit ${run.exitCode}`;
@@ -900,6 +914,11 @@ const OUTCOME_LABELS = {
 // it here just as it is on a read.
 const TURN_FILE_CAP = 20;
 
+// The whole report's time, on top of each spawn's own timeout: twenty files at
+// SPAWN_TIMEOUT_MS each is forty seconds of a turn that has otherwise ended.
+// Files not reached in time are counted as unchecked, as the cap's are.
+const TURN_REPORT_BUDGET_MS = 5000;
+
 // Rule ids out of a brief's text: each rule line reads `- [doc-slug/R-ID] ...`.
 // A bare regex for the id itself would also match ids quoted inside prose.
 function rulesIn(text) {
@@ -926,7 +945,11 @@ function changedPaths(stdout) {
 async function reportTurn($, { sessionId, cwd, rulesDir }) {
   const root = await resolveRepoRoot($, sessionId, cwd);
 
-  const status = await $.process.run(['git', 'status', '--porcelain'], { cwd: root });
+  const deadline = (await $.clock.now()) + TURN_REPORT_BUDGET_MS;
+  const status = await $.process.run(['git', 'status', '--porcelain'], {
+    cwd: root,
+    timeoutMs: SPAWN_TIMEOUT_MS,
+  });
   if (status.exitCode !== 0) return;
 
   const all = changedPaths(status.stdout).filter((p) => !isWithin(rulesDir, `${root}/${p}`));
@@ -935,13 +958,16 @@ async function reportTurn($, { sessionId, cwd, rulesDir }) {
 
   const governed = [];
   const quiet = [];
+  let checked = 0;
   for (const path of paths) {
+    if ((await $.clock.now()) >= deadline) break;
+    checked += 1;
     // Direct mode, not `--claude-hook`: it is stateless, so this report neither
     // spends the session's brief memory nor claims a decision has been stated
     // to the agent when it has only been shown to the person.
     const run = await $.process.run(
       ['actual', 'rules', 'brief', '--file', path, '--rules-dir', rulesDir],
-      { cwd: root }
+      { cwd: root, timeoutMs: SPAWN_TIMEOUT_MS }
     );
     if (run.exitCode !== 0) continue;
     const ids = rulesIn(run.stdout ?? '');
@@ -949,7 +975,7 @@ async function reportTurn($, { sessionId, cwd, rulesDir }) {
     else quiet.push(path);
   }
 
-  const more = all.length > paths.length ? `, ${all.length - paths.length} more unchecked` : '';
+  const more = all.length > checked ? `, ${all.length - checked} more unchecked` : '';
   $.ui.log(
     row('TURN', `${all.length} file${all.length === 1 ? '' : 's'} changed \u00b7 ${governed.length} governed${more}`)
   );
@@ -1054,11 +1080,15 @@ export function register(on, options = {}) {
   });
 
   on('classic.Stop', async ($, e, next) => {
-    // The gate's verdict is untouched whatever happens here.
+    // The gate's verdict is untouched whatever happens here. It is also reached
+    // first: the implementation gate is a settings hook beneath this module, and
+    // a report run ahead of it would hold the verdict back by however long the
+    // report took.
+    const verdict = await next(e);
     try {
       await endOfTurn($, e);
     } catch {}
-    return next(e);
+    return verdict;
   });
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {

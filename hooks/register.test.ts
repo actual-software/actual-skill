@@ -21,7 +21,7 @@ function harness(
   on: any,
   opts: {
     env?: Record<string, string>;
-    cli?: any | (() => any);
+    cli?: any | ((clock: any) => any);
     tool?: any;
     cwd?: string;
     root?: string;
@@ -45,6 +45,8 @@ function harness(
     listed?: string[];
     // Collects the argv of every git spawn.
     gitCalls?: string[][];
+    // Collects every spawn, git and CLI alike, as `{ argv, init }`.
+    spawns?: any[];
   } = {}
 ) {
   const runs: any[] = [];
@@ -60,6 +62,8 @@ function harness(
   };
   for (const [k, v] of Object.entries(opts.config ?? {})) cfgEnv[envName[k]] = String(v);
   mock.env(on, { ...cfgEnv, ...(opts.env ?? {}) });
+  // Handed to a `cli` function, so a test can make the CLI take time.
+  const clock = mock.clock(on, { now: 1_000_000 });
   on('session.cwd', async () => ({ value: opts.cwd ?? '/repo' }));
   on('session.root', async () => ({ value: opts.root ?? '/repo' }));
   on('session.id', async () => ({ value: 'sess-1' }));
@@ -99,6 +103,7 @@ function harness(
           isReadOnly: true,
         }));
   on('process.run', async (_$: any, e: any) => {
+    opts.spawns?.push(e);
     // Neither git query is a brief; answer both without recording a run.
     if (e.argv?.[0] === 'git') {
       opts.gitCalls?.push(e.argv);
@@ -109,7 +114,7 @@ function harness(
       return { value: { exitCode: 0, stdout, stderr: '' } };
     }
     runs.push(e);
-    const cli = typeof opts.cli === 'function' ? opts.cli() : opts.cli;
+    const cli = typeof opts.cli === 'function' ? await opts.cli(clock) : opts.cli;
     return { value: cli ?? { exitCode: 0, stdout: reply(BRIEF), stderr: '' } };
   });
   return runs;
@@ -1415,6 +1420,69 @@ test('the pane names a quiet read by its reason', async (fire: any, on: any) => 
   await fire.tool.call({ tool: 'Bash', command: 'cat src/u.ts', tool_use_id: 'lbl_1' });
 
   expect(await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 })).toContain('no rules');
+});
+
+// ── time ────────────────────────────────────────────────────────────────────
+//
+// $.process.run waits 30 seconds unless told otherwise, and the hook time limit
+// does not cover it. A CLI that hangs must cost seconds, not minutes.
+
+test('every spawn, on a read and at the end of a turn, carries a short timeout', async (fire: any, on: any) => {
+  const spawns: any[] = [];
+  stopBase(on);
+  harness(on, {
+    spawns,
+    gitStatus: ' M src/a.ts\n',
+    cli: { exitCode: 0, stdout: reply(BRIEF), stderr: '' },
+  });
+  on('ui.open', async () => ({ value: undefined }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 't_1' });
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  const kinds = spawns.map((s) => s.argv.slice(0, 2).join(' '));
+  expect(kinds).toContain('git rev-parse');
+  expect(kinds).toContain('git status');
+  expect(kinds).toContain('actual rules');
+  for (const s of spawns) expect(s.init?.timeoutMs).toBe(2000);
+});
+
+test('the gate reaches its verdict before the report spawns anything', async (fire: any, on: any) => {
+  const order: string[] = [];
+  const spawns = {
+    push: (e: any) => order.push(`spawn ${e.argv.slice(0, 2).join(' ')}`),
+  };
+  on('classic.Stop', async () => {
+    order.push('gate');
+    return { value: {} };
+  });
+  harness(on, { spawns: spawns as any, gitStatus: ' M src/a.ts\n' });
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(order[0]).toBe('gate');
+  expect(order).toContain('spawn git status');
+});
+
+test('a slow CLI stops the report at its time budget, counting the rest unchecked', async (fire: any, on: any) => {
+  // Each CLI call takes 3s of the mocked clock against a 5s budget, so the
+  // second call crosses it and the remaining three files go unchecked.
+  const logs: string[] = [];
+  stopBase(on);
+  const runs = harness(on, {
+    logs,
+    gitStatus: [' M a.ts', ' M b.ts', ' M c.ts', ' M d.ts', ' M e.ts', ''].join('\n'),
+    cli: async (clock: any) => {
+      await clock.set(clock.now() + 3000);
+      return { exitCode: 0, stdout: '## H\n- [doc/R-1] MUST x.\n', stderr: '' };
+    },
+  });
+
+  await fire.classic.Stop({ hook_event_name: 'Stop', session_id: 's1', cwd: '/repo' });
+
+  expect(runs.length).toBe(2);
+  expect(logs.join('\n')).toContain('5 files changed');
+  expect(logs.join('\n')).toContain('3 more unchecked');
 });
 
 // ── the Read hook standing down ─────────────────────────────────────────────
