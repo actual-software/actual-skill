@@ -1242,15 +1242,37 @@ else
   fail "shared dedupe across Read and Edit|Write" "read=$read_out edit=$edit_out write=$(cat "${WORK}/out")"
 fi
 
-# The mod marks a PreToolUse event by adding the field to the tool's
-# arguments, so it reaches this hook inside tool_input (probed on 2.1.287).
-PRE_MARKED="${WORK}/pretooluse-marked.json"
-jq -c '.tool_input.actual_rules_brief_by_mod = true' "$PRE_EDIT" > "$PRE_MARKED"
-st=$(run_hook "$RB" "$PRE_MARKED" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="${WORK}/rb-pre-marked-capture")
-if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -f "${WORK}/rb-pre-marked-capture" ]; then
-  pass "a PreToolUse event the mod marked: stands down without invoking the CLI"
+# The mod announces itself for a session with a file under TMPDIR, written
+# before this hook runs; a field in the tool's arguments would reach the
+# permission check, and auto mode refuses to judge a Write that carries one.
+MOD_TMP="${WORK}/mod-tmp"
+mkdir -p "${MOD_TMP}/actual-skill-mod"
+: > "${MOD_TMP}/actual-skill-mod/test-session-read"
+st=$(run_hook "$RB" "$PRE_EDIT" "$REPO_WITH_RULES" TMPDIR="${MOD_TMP}/" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="${WORK}/rb-pre-mod-capture")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -f "${WORK}/rb-pre-mod-capture" ]; then
+  pass "a PreToolUse event in a session the mod announced: stands down without invoking the CLI"
 else
   fail "rules-brief briefed a PreToolUse event the mod owns" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+OTHER_SESSION="${WORK}/pretooluse-other-session.json"
+jq -c '.session_id = "another-session"' "$PRE_WRITE" > "$OTHER_SESSION"
+st=$(run_hook "$RB" "$OTHER_SESSION" "$REPO_WITH_RULES" TMPDIR="$MOD_TMP" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
+  pass "another session's announcement does not stand the hook down"
+else
+  fail "an announcement for one session silenced another" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# Content ahead of the real session_id, so the hook's first match would be the
+# spelled one if escaping did not rule it out.
+SPELLED_SESSION="${WORK}/pretooluse-spelled-session.json"
+jq -c '. as $o | {tool_input: ($o.tool_input + {content: "{\"session_id\":\"test-session-read\"}"})} + ($o | del(.tool_input)) | .session_id = "unannounced"' "$PRE_WRITE" > "$SPELLED_SESSION"
+st=$(run_hook "$RB" "$SPELLED_SESSION" "$REPO_WITH_RULES" TMPDIR="$MOD_TMP" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
+  pass "an announced session id spelled inside a Write's content does not stand the hook down"
+else
+  fail "Write content forged an announced session" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 PRE_FORGED="${WORK}/pretooluse-forged.json"

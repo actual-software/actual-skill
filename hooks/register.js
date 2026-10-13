@@ -1031,14 +1031,34 @@ const OUTCOME_LABELS = {
 const PANE = 'rules-brief';
 
 // Set on a PostToolUse:Read event this mod is briefing, so hooks/rules-brief.sh
-// stands down for it. The hook matches the literal bytes, so a rename here
+// stands down for it. Read only: PreToolUse uses MOD_ACTIVE_DIR instead. The hook matches the literal bytes, so a rename here
 // must be made there too.
 const STAND_DOWN_FIELD = 'actual_rules_brief_by_mod';
 
 // The tools briefed as a reminder when written, and the ones whose
-// PreToolUse event is marked for rules-brief.sh. Exactly the CLI's own list:
-// NotebookEdit names its file as notebook_path and the CLI does not answer it.
+// PreToolUse registration of rules-brief.sh this mod stands down. Exactly the
+// CLI's own list: NotebookEdit names its file as notebook_path and the CLI
+// does not answer it.
 const WRITE_TOOLS = ['Edit', 'Write'];
+
+// Where rules-brief.sh looks, on PreToolUse, for a file named after the session
+// to learn this mod is briefing its Edits and Writes. The hook builds the same
+// path, so a change here must be made there too.
+const MOD_ACTIVE_DIR = 'actual-skill-mod';
+
+// Sessions already announced by this load of the module. A hot reload starts
+// it over, which costs one rewrite of a file that already exists.
+const announced = new Set();
+
+async function announce($) {
+  const sessionId = await $.session.id();
+  // The hook only matches an id of these characters, and the id is a path
+  // segment here, so anything else is not written at all.
+  if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId) || announced.has(sessionId)) return;
+  const tmp = ((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '') || '/tmp';
+  await $.fs.write(`${tmp}/${MOD_ACTIVE_DIR}/${sessionId}`, '');
+  announced.add(sessionId);
+}
 
 // ── end of turn ──────────────────────────────────────────────────────────────
 //
@@ -1202,20 +1222,28 @@ export function register(on, options = {}) {
     return next(e);
   });
 
-  // The same stand-down for the PreToolUse:Edit|Write registration. This
-  // event's `e` is the call's envelope, the tool's arguments spread beside
-  // `tool`, so the marker can only ride as an argument: the settings hook
-  // receives it inside tool_input, which rules-brief.sh matches the same way.
-  // Probed on 2.1.287: it reached the hook as written, the Write and Edit both
-  // ran, and neither the transcript's tool input nor the file carried it. It
-  // is the input the permission check sees, though: a denied Write's entry in
-  // `claude -p`'s permission_denials lists it, as does every PreToolUse hook
-  // beneath, which receives it in tool_input.
+  // The same stand-down for the PreToolUse:Edit|Write registration, by another
+  // route. This event's `e` is the call's envelope, the tool's arguments
+  // spread beside `tool`, so a field could only ride as an argument -- and the
+  // arguments are what the permission check judges. Probed on 2.1.287: with
+  // one added, auto mode's classifier gave no verdict on the Write, so it
+  // never ran; without it, the same Write ran. So the event passes down
+  // untouched, and the mod says it is here by a file instead: written before
+  // next, so it exists by the time rules-brief.sh looks.
   //
-  // No decision is added: the result is whatever the hooks beneath return, so
-  // the normal permission flow is unchanged.
+  // Both sides find it through TMPDIR, the one location both can see: probed
+  // on 2.1.287, the hook gets CLAUDE_PLUGIN_DATA and this module does not, while
+  // TMPDIR and the session id agree. A write that fails costs a second brief,
+  // never the call. No decision is added either way, so the normal permission
+  // flow is unchanged.
   on('classic.PreToolUse', async ($, e, next) => {
-    if (WRITE_TOOLS.includes(e?.tool)) return next({ ...e, [STAND_DOWN_FIELD]: true });
+    if (WRITE_TOOLS.includes(e?.tool)) {
+      try {
+        await announce($);
+      } catch {
+        // rules-brief.sh briefs beside the mod: a duplicate, not a failure.
+      }
+    }
     return next(e);
   });
 

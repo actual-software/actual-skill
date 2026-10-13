@@ -58,14 +58,14 @@ is_single_json_string() {
 payload=$(cat)
 
 # Where the Claude Code mod (hooks/register.js) loads, it briefs Reads, Edits
-# and Writes itself and marks the event it passes down, so this hook stands
-# down rather than briefing first -- settings hooks run before the mod's own
-# brief. The mod cannot simply skip this hook without skipping every other hook
-# on the same event too. On PostToolUse the marker is a top-level field; on
-# PreToolUse the mod can only change the tool's arguments, so it arrives inside
-# tool_input (probed on 2.1.287; the tool itself never sees it). Neither can be
-# forged by content: inside tool_response or a Write's content every quote is
-# escaped, so an unescaped `"key":true` can only be structure.
+# and Writes itself, so this hook stands down rather than briefing first --
+# settings hooks run before the mod's own brief. The mod cannot simply skip this
+# hook without skipping every other hook on the same event too, so it signals
+# instead, a different way per event.
+#
+# PostToolUse: a top-level field on the event it passes down. It cannot be
+# forged by content: inside tool_response every quote is escaped, so an
+# unescaped `"key":true` can only be structure.
 case "$payload" in
   *'"actual_rules_brief_by_mod":true'*) exit 0 ;;
 esac
@@ -79,6 +79,24 @@ case "$payload" in
   *'"hook_event_name":"PreToolUse"'*|*'"hook_event_name": "PreToolUse"'*) event=PreToolUse ;;
   *) exit 0 ;;
 esac
+
+# PreToolUse: a file per session, which the mod writes before this hook runs.
+# A field cannot ride this event: the only thing the mod can change is the
+# tool's arguments, and those are what the permission check judges -- auto
+# mode's classifier refuses to judge a Write carrying one it does not know, so
+# the Write never runs. TMPDIR because both sides see the same one (the mod
+# cannot see CLAUDE_PLUGIN_DATA); trailing slashes stripped on both. The id is
+# the first top-level session_id, and a content-spelled one cannot match:
+# inside a string its quotes are escaped.
+if [ "$event" = PreToolUse ]; then
+  sid_re='"session_id": ?"([A-Za-z0-9_-]+)"'
+  if [[ $payload =~ $sid_re ]]; then
+    tmp=${TMPDIR:-/tmp}
+    while [ "${tmp%/}" != "$tmp" ]; do tmp=${tmp%/}; done
+    [ -n "$tmp" ] || tmp=/tmp
+    [ -e "${tmp}/actual-skill-mod/${BASH_REMATCH[1]}" ] && exit 0
+  fi
+fi
 
 # Two switches, because they answer different questions. ACTUAL_PLAN_GATE is the
 # master off switch every hook in this plugin honours. ACTUAL_RULES_BRIEF turns
