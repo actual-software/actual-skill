@@ -1137,8 +1137,7 @@ function fitTo(text, columns) {
   return columns > 1 ? `${text.slice(0, columns - 1)}\u2026` : '';
 }
 
-// Null for anything but two counts. A CLI too old to have the subcommand
-// exits non-zero.
+// A CLI too old to have the subcommand exits non-zero.
 async function sessionSummary($, sessionId, rulesDir, repoRoot) {
   const run = await $.process.run(
     ['actual', 'session', 'summary', '--session', sessionId, '--rules-dir', rulesDir, '--json'],
