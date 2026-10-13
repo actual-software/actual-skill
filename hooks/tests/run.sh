@@ -644,6 +644,88 @@ else
 fi
 
 echo
+echo "=== turn-start: UserPromptSubmit ==="
+# Silence is the contract on every path: UserPromptSubmit adds a hook's stdout
+# to the prompt. Each case therefore asserts empty stdout and stderr as well as
+# whether the CLI was reached.
+CAPTURE_TURN="${WORK}/captured-turn.json"
+
+rm -f "$CAPTURE_TURN" "${CAPTURE_TURN}.argv"
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_TURN")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ] && [ ! -e "${CAPTURE_TURN}.argv" ]; then
+  pass "no rules: silent no-op that never invokes the CLI"
+else
+  fail "no rules: expected a silent exit 0 without the CLI" "status=$st stdout=$(cat "${WORK}/out") argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
+fi
+
+rm -f "$CAPTURE_TURN" "${CAPTURE_TURN}.argv"
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_TURN")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ] \
+   && [ "$(jq -r '.hook_event_name' "$CAPTURE_TURN" 2>/dev/null)" = "UserPromptSubmit" ] \
+   && [ "$(jq -r '.session_id' "$CAPTURE_TURN" 2>/dev/null)" = "test-session-turn-start" ]; then
+  pass "rules present: the raw UserPromptSubmit envelope reaches the CLI, and the hook stays silent"
+else
+  fail "turn-start did not forward the envelope silently" "status=$st stdout=$(cat "${WORK}/out") captured=$(cat "$CAPTURE_TURN" 2>/dev/null)"
+fi
+
+if grep -Fxq -- '--claude-hook' "${CAPTURE_TURN}.argv" \
+   && grep -Fxq -- '--turn-start' "${CAPTURE_TURN}.argv" \
+   && [ "$(argv_after --rules-dir "${CAPTURE_TURN}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ]; then
+  pass "CLI is invoked with --claude-hook --turn-start and the rules dir impl-gate.sh uses"
+else
+  fail "turn-start argv wrong" "argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
+fi
+
+# The capture holds argv after the subcommand. A CLI with no impl-check refuses
+# before capturing, so an empty capture here proves the subcommand was
+# impl-check rather than plan-check.
+rm -f "$CAPTURE_TURN" "${CAPTURE_TURN}.argv"
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-impl-check ACTUAL_TEST_CAPTURE="$CAPTURE_TURN")
+if [ "$st" = "0" ] && [ ! -e "${CAPTURE_TURN}.argv" ]; then
+  pass "the subcommand is impl-check"
+else
+  fail "turn-start called a subcommand other than impl-check" "argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
+fi
+
+# A verdict, a notice, an older CLI rejecting --turn-start, a crash: none of
+# them may reach the prompt, and none may fail the hook.
+for mode in deny notice usage-error crash garbage no-impl-check; do
+  st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+    pass "$mode: exit 0 with nothing on stdout or stderr"
+  else
+    fail "$mode: expected a silent exit 0" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+  fi
+done
+
+st=$(run_hook_no_cli "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "missing binary: silent (impl-gate.sh reports a missing CLI at Stop)"
+else
+  fail "missing binary: expected a silent exit 0" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+for switch in ACTUAL_PLAN_GATE=off ACTUAL_CLI_SUBPROCESS=1; do
+  rm -f "$CAPTURE_TURN" "${CAPTURE_TURN}.argv"
+  st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_TURN" "$switch")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${CAPTURE_TURN}.argv" ]; then
+    pass "${switch}: silent no-op that never invokes the CLI"
+  else
+    fail "${switch} did not disable turn-start" "status=$st stdout=$(cat "${WORK}/out") argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
+  fi
+done
+
+# The shipped hooks' two standing rules, kept in this section so the shared
+# lists in "dependency hygiene" below stay as they are.
+if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' "${HOOKS_DIR}/turn-start.sh" \
+     | grep -vE '^[0-9]+:[[:space:]]*#' > "${WORK}/deps" 2>/dev/null; then
+  fail "turn-start.sh references a JSON/runtime dependency" "$(cat "${WORK}/deps")"
+else
+  pass "turn-start.sh references no jq/python/node"
+fi
+if [ -x "${HOOKS_DIR}/turn-start.sh" ]; then pass "turn-start.sh is executable"; else fail "turn-start.sh is not executable" ""; fi
+
+echo
 echo "=== preflight: SessionStart ==="
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=allow)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
@@ -1323,6 +1405,13 @@ if [ "$(jq -r '.hooks.Stop[0].hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"
   pass "hooks.json registers Stop -> impl-gate.sh, with no matcher (Stop has no matcher support)"
 else
   fail "hooks.json Stop registration wrong" "$(jq -c '.hooks.Stop' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
+fi
+
+if [ "$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/turn-start.sh' ] \
+   && [ "$(jq -r '.hooks.UserPromptSubmit[0].matcher // "none"' "${HOOKS_DIR}/hooks.json")" = "none" ]; then
+  pass "hooks.json registers UserPromptSubmit -> turn-start.sh, with no matcher"
+else
+  fail "hooks.json UserPromptSubmit registration wrong" "$(jq -c '.hooks.UserPromptSubmit' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
 fi
 
 echo
