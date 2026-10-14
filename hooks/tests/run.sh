@@ -738,6 +738,17 @@ for switch in ACTUAL_PLAN_GATE=off ACTUAL_CLI_SUBPROCESS=1; do
   fi
 done
 
+# Opt-in trace: the log gets the CLI's output and exit status, and the hook
+# itself stays silent.
+TURN_LOG="${WORK}/turn-start.log"
+rm -f "$TURN_LOG"
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=crash ACTUAL_TURN_START_LOG="$TURN_LOG")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ] && grep -q '^turn-start: exit=' "$TURN_LOG" 2>/dev/null; then
+  pass "ACTUAL_TURN_START_LOG: trace written to the file, hook still silent"
+else
+  fail "ACTUAL_TURN_START_LOG trace wrong" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err") log=$(cat "$TURN_LOG" 2>/dev/null)"
+fi
+
 # The shipped hooks' two standing rules, kept in this section so the shared
 # lists in "dependency hygiene" below stay as they are.
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' "${HOOKS_DIR}/turn-start.sh" \

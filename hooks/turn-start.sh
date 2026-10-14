@@ -48,5 +48,16 @@ cd "$repo_root" 2>/dev/null || true
 
 # printf is silenced too: a CLI that exits before reading the payload breaks the
 # pipe, and bash reports the failed write on stderr when SIGPIPE is ignored.
-printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" >/dev/null 2>&1
+#
+# ACTUAL_TURN_START_LOG=<file> opts in to a trace: the CLI's output and exit
+# status are appended to that file, so a record that never gets written can be
+# diagnosed. Nothing reaches stdout or stderr either way.
+if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
+  {
+    printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" 2>&1
+    printf 'turn-start: exit=%s rules-dir=%s\n' "${PIPESTATUS[1]}" "$dir"
+  } >>"$ACTUAL_TURN_START_LOG" 2>/dev/null
+else
+  printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" >/dev/null 2>&1
+fi
 exit 0
