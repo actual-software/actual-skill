@@ -4,15 +4,21 @@
 # impl-gate.sh checks the turn's diff at Stop. Diffed against HEAD, work the
 # agent committed during the turn, or committed and pushed, is already in
 # HEAD by then, so the tree is clean and the check reports nothing to check.
-# This hook runs as each turn starts and has the CLI record HEAD for the
-# session (`actual impl-check --claude-hook --turn-start`), and the Stop check
-# then diffs against the commit the turn started from instead.
+# This hook runs as each turn starts and hands the UserPromptSubmit envelope to
+# `actual impl-check --claude-hook`. The CLI dispatches on the envelope's
+# hook_event_name: on UserPromptSubmit it records HEAD for the session and
+# prints nothing, and the Stop check then diffs against the commit the turn
+# started from instead.
 #
 # Silent on every path, because a UserPromptSubmit hook's stdout is added to
-# the prompt. Nothing here can block the prompt either. A missing CLI, one
-# too old for --turn-start, or any other failure only leaves the Stop check
+# the prompt, so the CLI's output is discarded. Nothing here can block the
+# prompt either. A missing CLI or any other failure only leaves the Stop check
 # diffing against HEAD as it did before this hook existed, and impl-gate.sh
 # already tells the user about a missing or outdated CLI.
+#
+# Release order: a CLI without the UserPromptSubmit dispatch treats this call
+# as a full impl-check on every prompt. The output is discarded, but it costs
+# time and model calls, so ship this hook only with a CLI release that has it.
 
 set -uo pipefail
 
@@ -42,5 +48,5 @@ cd "$repo_root" 2>/dev/null || true
 
 # printf is silenced too: a CLI that exits before reading the payload breaks the
 # pipe, and bash reports the failed write on stderr when SIGPIPE is ignored.
-printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --turn-start --rules-dir "$dir" >/dev/null 2>&1
+printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" >/dev/null 2>&1
 exit 0

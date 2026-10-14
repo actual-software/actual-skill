@@ -669,9 +669,9 @@ else
 fi
 
 if grep -Fxq -- '--claude-hook' "${CAPTURE_TURN}.argv" \
-   && grep -Fxq -- '--turn-start' "${CAPTURE_TURN}.argv" \
+   && ! grep -Fxq -- '--turn-start' "${CAPTURE_TURN}.argv" \
    && [ "$(argv_after --rules-dir "${CAPTURE_TURN}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ]; then
-  pass "CLI is invoked with --claude-hook --turn-start and the rules dir impl-gate.sh uses"
+  pass "CLI is invoked with --claude-hook (no --turn-start) and the rules dir impl-gate.sh uses"
 else
   fail "turn-start argv wrong" "argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
 fi
@@ -687,7 +687,7 @@ else
   fail "turn-start called a subcommand other than impl-check" "argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
 fi
 
-# A verdict, a notice, an older CLI rejecting --turn-start, a crash: none of
+# A verdict, a notice, a usage error, a crash: none of
 # them may reach the prompt, and none may fail the hook.
 for mode in deny notice usage-error crash garbage no-impl-check; do
   st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
@@ -706,14 +706,14 @@ else
 fi
 
 # The fake CLI reads stdin before every mode, so its usage-error case never
-# breaks the pipe. A real CLI too old for --turn-start rejects the flag without
-# reading anything; with a prompt larger than the pipe buffer and SIGPIPE
+# breaks the pipe. A real CLI can exit on a usage error without reading
+# anything; with a prompt larger than the pipe buffer and SIGPIPE
 # ignored, the hook's own write then fails.
 EARLY_EXIT_BIN="${WORK}/early-exit-bin"
 mkdir -p "$EARLY_EXIT_BIN"
 cat > "${EARLY_EXIT_BIN}/actual" <<'EOF'
 #!/bin/sh
-echo "error: unexpected argument '--turn-start' found" >&2
+echo "error: unexpected argument found" >&2
 exit 2
 EOF
 chmod +x "${EARLY_EXIT_BIN}/actual"
