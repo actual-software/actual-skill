@@ -1,0 +1,8 @@
+{
+  "session_id": "test-session-turn-start",
+  "transcript_path": "__FIXTURE_DIR__/transcript-plan-file.jsonl",
+  "cwd": "__REPO_ROOT__",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Add a repository layer for orders."
+}
