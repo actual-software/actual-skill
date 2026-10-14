@@ -12,7 +12,7 @@
 # subcommands shipped in different CLI releases (plan-check at AK-672,
 # impl-check later at AK-755), so a CLI can have one without the other.
 #
-# rules brief (the PostToolUse:Read rule briefing) is probed last, after the two
+# rules brief (the PostToolUse:Read and PreToolUse:Edit|Write rule briefing) is probed last, after the two
 # gates: it is the newest subcommand, and unlike them it never short-circuits
 # this script -- it only decides which closing sentence the success message
 # carries.

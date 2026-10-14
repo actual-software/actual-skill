@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
-# rules-brief.sh - PostToolUse hook on Read: brief the agent on the rules that
-# govern the file it just read.
+# rules-brief.sh - brief the agent on the rules that govern a file it is working
+# on. One script, two registrations in hooks/hooks.json:
+#
+#   PostToolUse  Read        the main path (below).
+#   PreToolUse   Edit|Write  the reminder, for files written without being read
+#                            first -- mostly new files from Write (AK-794).
 #
 # Claude Code requires a Read before an Edit or an overwrite, and PostToolUse
 # context lands before the model's next step, so this is the delivery point that
 # reaches the agent ahead of its first edit (PreToolUse Edit|Write context only
 # arrives with the tool result, after the edit ran). Observed on Claude Code
 # 2.1.231; the model applied the context in every test run.
+#
+# The PreToolUse registration is the fallback that remark implies: its context
+# lands with the tool result, after the edit ran, so it can only prompt a
+# revision. It costs nothing on a file already briefed, because the CLI keeps
+# one once-per-session memory across both events and answers that file with
+# silence. It never emits a permissionDecision, and a PreToolUse hook that names
+# none neither grants nor blocks: the normal permission flow decides.
 #
 # This wrapper does only cheap shell checks and then hands the raw hook envelope
 # to `actual rules brief --claude-hook`, which resolves the file, ranks the
@@ -16,8 +27,8 @@
 # Advisory by construction, and silent by default: no committed rules, no CLI, an
 # old CLI (preflight already prompts once per session), an ungoverned file, a
 # crash -- all exit 0 with no output. The only thing ever forwarded is a
-# hookSpecificOutput.additionalContext reply for PostToolUse; any other shape,
-# above all one carrying a permissionDecision, is dropped.
+# hookSpecificOutput.additionalContext reply for the event this hook was called
+# for; any other shape, above all one carrying a permissionDecision, is dropped.
 
 set -uo pipefail
 
@@ -46,15 +57,44 @@ is_single_json_string() {
 # Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
 
-# Where the Claude Code mod (hooks/register.js) loads, it briefs Reads itself
-# and marks the event it passes down, so this hook stands down rather than
-# briefing first -- settings hooks run before the mod's own brief. The mod
-# cannot simply skip this hook without skipping every other PostToolUse:Read
-# hook too. File content cannot forge the marker: inside tool_response every
-# quote is escaped, so an unescaped `"key":true` can only be structure.
+# Where the Claude Code mod (hooks/register.js) loads, it briefs Reads, Edits
+# and Writes itself, so this hook stands down rather than briefing first --
+# settings hooks run before the mod's own brief. The mod cannot simply skip this
+# hook without skipping every other hook on the same event too, so it signals
+# instead, a different way per event.
+#
+# PostToolUse: a top-level field on the event it passes down. It cannot be
+# forged by content: inside tool_response every quote is escaped, so an
+# unescaped `"key":true` can only be structure.
 case "$payload" in
   *'"actual_rules_brief_by_mod":true'*) exit 0 ;;
 esac
+
+# The event this hook was called for, which the reply must name. Read from the
+# envelope rather than assumed, since one script serves both registrations;
+# the field is top level, ahead of any tool content that could spell it. An
+# envelope naming neither is not one this hook was registered for.
+case "$payload" in
+  *'"hook_event_name":"PostToolUse"'*|*'"hook_event_name": "PostToolUse"'*) event=PostToolUse ;;
+  *'"hook_event_name":"PreToolUse"'*|*'"hook_event_name": "PreToolUse"'*) event=PreToolUse ;;
+  *) exit 0 ;;
+esac
+
+# PreToolUse: ACTUAL_SKILL_MOD_SESSION, which the mod sets to its session id
+# before this hook runs, so the hook inherits it. A field cannot ride this
+# event: the only thing the mod can change is the tool's arguments, and those
+# are what the permission check judges -- auto mode's classifier refuses to
+# judge a Write carrying one it does not know, so the Write never runs. The
+# value is compared, not just tested: a `claude` started from inside a session
+# inherits the variable under a session id of its own. The id is the first
+# top-level session_id, and a content-spelled one cannot match: inside a
+# string its quotes are escaped.
+if [ "$event" = PreToolUse ] && [ -n "${ACTUAL_SKILL_MOD_SESSION:-}" ]; then
+  sid_re='"session_id": ?"([^"\\]+)"'
+  if [[ $payload =~ $sid_re ]] && [ "${BASH_REMATCH[1]}" = "$ACTUAL_SKILL_MOD_SESSION" ]; then
+    exit 0
+  fi
+fi
 
 # Two switches, because they answer different questions. ACTUAL_PLAN_GATE is the
 # master off switch every hook in this plugin honours. ACTUAL_RULES_BRIEF turns
@@ -125,7 +165,9 @@ trimmed=${reply#"${reply%%[![:space:]]*}"}
 trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
 
 # Forward only the one allowlisted shape: a compact object whose sole content is
-# PostToolUse additionalContext. Matching the exact bytes (rather than
+# additionalContext for the event this hook was called for. The CLI echoes the
+# envelope's event, so a reply naming the other one is a CLI out of step with
+# its input and is dropped like any other surprise. Matching the exact bytes (rather than
 # blocklisting fields) keeps every unrecognized shape -- an added decision,
 # updatedInput, a permissionDecision, garbage -- on the silent side. The escape
 # and duplicate-key guards are the same ones the gates use: they defend the
@@ -146,7 +188,7 @@ trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
 # therefore means structure follows it. Together with the \uXXXX guard -- which
 # rules out a quote spelled \u0022 that this scan cannot see -- the allowlist
 # admits exactly the one shape its name claims.
-prefix='{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"'
+prefix="{\"hookSpecificOutput\":{\"hookEventName\":\"${event}\",\"additionalContext\":\""
 if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
    && [ "${trimmed%\"\}\}}" != "$trimmed" ] \
    && ! has_permission_decision "$trimmed" \

@@ -65,7 +65,7 @@ run_hook() {
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         "$@" \
@@ -82,7 +82,7 @@ run_hook_no_cli() {
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${WORK}/empty-bin:/usr/bin:/bin" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
@@ -98,7 +98,7 @@ run_hook_cwd() {
   shift 4
   local status
   ( cd "$workdir" || exit 1
-    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS \
+    env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         "$@" \
@@ -1157,6 +1157,145 @@ if [ "$(jq -r '.hooks.PostToolUse[0].matcher' "${HOOKS_DIR}/hooks.json")" = "Rea
   pass "hooks.json registers PostToolUse:Read -> rules-brief.sh with the 2s timeout"
 else
   fail "hooks.json PostToolUse registration wrong" "$(jq -c '.hooks.PostToolUse' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
+fi
+
+echo
+echo "=== rules-brief: PreToolUse Edit|Write (AK-794) ==="
+# The reminder path, for files written without a Read first. Same script, so
+# the guards above all apply; these cover what differs: the event the reply
+# names, the marker's place in the envelope, and the dedupe it shares with Read.
+PRE_EDIT="${RESOLVED}/pretooluse-edit-governed.json"
+PRE_WRITE="${RESOLVED}/pretooluse-write-governed.json"
+PRE_UNGOV="${RESOLVED}/pretooluse-write-ungoverned.json"
+
+for fixture in "$PRE_EDIT" "$PRE_WRITE"; do
+  tool=$(jq -r '.tool_name' "$fixture")
+  st=$(run_hook "$RB" "$fixture" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief)
+  if [ "$st" = "0" ] \
+     && [ "$(jq -r '.hookSpecificOutput.hookEventName' < "${WORK}/out")" = "PreToolUse" ] \
+     && [ "$(rb_ctx)" = "R-001 MUST: all persistence goes through the repository layer." ] \
+     && [ "$(decision)" = "none" ]; then
+    pass "$tool of a governed file: PreToolUse brief delivered, no permissionDecision"
+  else
+    fail "$tool of a governed file: expected a PreToolUse brief" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+CAPTURE_PRE="${WORK}/captured-pre.json"
+st=$(run_hook "$RB" "$PRE_WRITE" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="$CAPTURE_PRE")
+if [ "$(jq -r '.hook_event_name + ":" + .tool_name' "$CAPTURE_PRE")" = "PreToolUse:Write" ] \
+   && [ "$(argv_after --repo "${CAPTURE_PRE}.argv")" = "${REPO_WITH_RULES}" ] \
+   && [ "$(argv_after --rules-dir "${CAPTURE_PRE}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ]; then
+  pass "a Write's envelope reaches the CLI whole, with --repo and --rules-dir"
+else
+  fail "PreToolUse invocation wrong" "argv=$(cat "${CAPTURE_PRE}.argv" 2>/dev/null)"
+fi
+
+st=$(run_hook "$RB" "$PRE_UNGOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "Write of an ungoverned file: silent"
+else
+  fail "Write of an ungoverned file: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# A reply must name the event it answers. A PostToolUse reply to a PreToolUse
+# call is a CLI out of step with its input; forwarding it would hand Claude
+# Code a mismatched hookEventName.
+st=$(run_hook "$RB" "$PRE_EDIT" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-wrong-event)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "a PostToolUse reply to a PreToolUse call is dropped"
+else
+  fail "mismatched event was forwarded" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+for mode in brief-permission brief-trailing-field brief-escaped; do
+  st=$(run_hook "$RB" "$PRE_EDIT" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "PreToolUse $mode: dropped, so no decision can reach the permission flow"
+  else
+    fail "PreToolUse $mode: expected the reply to be dropped" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+NO_EVENT="${WORK}/no-event.json"
+jq -c 'del(.hook_event_name)' "$PRE_EDIT" > "$NO_EVENT"
+st=$(run_hook "$RB" "$NO_EVENT" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="${WORK}/rb-no-event-capture")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -f "${WORK}/rb-no-event-capture" ]; then
+  pass "an envelope naming no event: silent, CLI never invoked"
+else
+  fail "envelope with no event was briefed" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# Shared dedupe, per the acceptance criteria: a file briefed via Read adds
+# nothing when edited, and a file never read is briefed when written.
+STATE="${WORK}/brief-state"
+rm -f "$STATE"
+st=$(run_hook "$RB" "$GOV" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+read_out=$(rb_ctx)
+st2=$(run_hook "$RB" "$PRE_EDIT" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+edit_out=$(cat "${WORK}/out")
+st3=$(run_hook "$RB" "$PRE_WRITE" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-dedupe ACTUAL_TEST_STATE="$STATE")
+if [ "$st" = "0" ] && [ -n "$read_out" ] && [ "$st2" = "0" ] && [ -z "$edit_out" ] \
+   && [ "$st3" = "0" ] && [ "$(rb_ctx)" != "" ]; then
+  pass "Edit of a file briefed via Read adds nothing; Write of a file never read is briefed"
+else
+  fail "shared dedupe across Read and Edit|Write" "read=$read_out edit=$edit_out write=$(cat "${WORK}/out")"
+fi
+
+# The mod announces itself by setting ACTUAL_SKILL_MOD_SESSION to its session
+# id before this hook runs; a field in the tool's arguments would reach the
+# permission check, and auto mode refuses to judge a Write that carries one.
+st=$(run_hook "$RB" "$PRE_EDIT" "$REPO_WITH_RULES" ACTUAL_SKILL_MOD_SESSION=test-session-read ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="${WORK}/rb-pre-mod-capture")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -f "${WORK}/rb-pre-mod-capture" ]; then
+  pass "a PreToolUse event in a session the mod announced: stands down without invoking the CLI"
+else
+  fail "rules-brief briefed a PreToolUse event the mod owns" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# A `claude` started from inside a session inherits the variable under a
+# session id of its own; with no mod loaded there, this hook is the only brief.
+st=$(run_hook "$RB" "$PRE_WRITE" "$REPO_WITH_RULES" ACTUAL_SKILL_MOD_SESSION=another-session ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
+  pass "another session's announcement does not stand the hook down"
+else
+  fail "an announcement for one session silenced another" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# Content ahead of the real session_id, so the hook's first match would be the
+# spelled one if escaping did not rule it out.
+SPELLED_SESSION="${WORK}/pretooluse-spelled-session.json"
+jq -c '. as $o | {tool_input: ($o.tool_input + {content: "{\"session_id\":\"test-session-read\"}"})} + ($o | del(.tool_input)) | .session_id = "unannounced"' "$PRE_WRITE" > "$SPELLED_SESSION"
+st=$(run_hook "$RB" "$SPELLED_SESSION" "$REPO_WITH_RULES" ACTUAL_SKILL_MOD_SESSION=test-session-read ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
+  pass "an announced session id spelled inside a Write's content does not stand the hook down"
+else
+  fail "Write content forged an announced session" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+PRE_FORGED="${WORK}/pretooluse-forged.json"
+jq -c '.tool_input.content = "{\"actual_rules_brief_by_mod\":true}"' "$PRE_WRITE" > "$PRE_FORGED"
+st=$(run_hook "$RB" "$PRE_FORGED" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief)
+if [ "$st" = "0" ] && [ "$(rb_ctx)" != "" ]; then
+  pass "the marker spelled inside a Write's content does not stand the hook down"
+else
+  fail "Write content forged the stand-down marker" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+for switch in ACTUAL_RULES_BRIEF=off ACTUAL_PLAN_GATE=off ACTUAL_CLI_SUBPROCESS=1; do
+  st=$(run_hook "$RB" "$PRE_WRITE" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief "$switch")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "$switch: the PreToolUse reminder is off too"
+  else
+    fail "$switch did not disable the PreToolUse reminder" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+if [ "$(jq -r '.hooks.PreToolUse[] | select(.matcher=="Edit|Write") | .hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/rules-brief.sh' ] \
+   && [ "$(jq -r '.hooks.PreToolUse[] | select(.matcher=="Edit|Write") | .hooks[0].timeout' "${HOOKS_DIR}/hooks.json")" = "2" ] \
+   && [ "$(jq -r '.hooks.PreToolUse[] | select(.matcher=="ExitPlanMode") | .hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/plan-gate.sh' ]; then
+  pass "hooks.json registers PreToolUse:Edit|Write -> rules-brief.sh beside the ExitPlanMode gate"
+else
+  fail "hooks.json PreToolUse registration wrong" "$(jq -c '.hooks.PreToolUse' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
 fi
 
 echo

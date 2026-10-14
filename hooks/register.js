@@ -68,6 +68,16 @@
 //
 // What Phase 2 still owes: better *path* extraction -- heredoc bodies, more
 // than one path per command -- not classification.
+//
+// Edit and Write are the one exception to "only a read", and a narrow one
+// (AK-794). Claude Code makes the agent Read a file before editing or
+// overwriting it, so for an existing file the Read brief has already landed
+// and the CLI answers the edit with silence. What is left is a file written
+// without a Read -- mostly a new one from Write -- which no read-time brief
+// could ever reach. Its brief lands with the tool result, after the write ran,
+// so it is a reminder that can prompt a revision, not a briefing ahead of the
+// work. The Bash write path stays unbriefed: a shell write names its file
+// inside an arbitrary command string, and the Stop gate covers it.
 
 // --- Path extraction ---------------------------------------------------
 //
@@ -173,6 +183,26 @@ function isWithin(root, candidate) {
   const r = normalizePath(root).replace(/\/+$/, '');
   if (r === '' || r === '/') return true;
   return candidate === r || candidate.startsWith(`${r}/`);
+}
+
+// Why a file a Read, Edit or Write names outright is not worth a spawn, or
+// null when it is: the Bash path's two filters, for the tools that skip its
+// parsing. Without them every scratchpad write -- Claude Code keeps one under
+// TMPDIR -- and every edit of a rule document spawned the CLI to hear "no".
+//
+// Outside only when outside the root, the session's directory and the
+// session's project root alike. The root can be git's physical path while
+// Claude names files by the logical one a symlinked checkout was opened
+// through; a test against the root alone would skip governed files there,
+// silently. The cwd covers that until the shell runs `cd apps/web`, after
+// which a file elsewhere in the checkout is under neither; the project root
+// ($.session.root()) is the logical path the session was opened at, and a
+// shell `cd` does not move it. A file inside the rules directory is a rule
+// document, which is not governed by itself.
+function unbriefable(named, { repoRoot, cwd, sessionRoot, rulesDir }) {
+  if (![repoRoot, cwd, sessionRoot].filter(Boolean).some((base) => isWithin(base, named))) return 'outside-root';
+  if (rulesDir && isWithin(rulesDir, named)) return 'ungoverned';
+  return null;
 }
 
 // The Bash tool runs every command in ONE persistent shell, so a `cd` in any
@@ -282,17 +312,8 @@ function outcomesFor(sessionId) {
   return own;
 }
 
-// Outcomes worth interrupting a person for at the end of a turn: a brief that
-// arrived, one held back, or a failure. Every other row (a write, an
-// ungoverned file, an unresolved token) is in the pane for anyone who asks.
-const ATTENTION_OUTCOMES = new Set(['delivered', 'deduped', 'budget', 'cli-error']);
-
-// Sessions with such a row since the pane last opened on its own.
-const needsAttention = new Set();
-
 function recordOutcome(sessionId, toolUseId, record) {
   if (!toolUseId) return;
-  if (ATTENTION_OUTCOMES.has(record.outcome)) needsAttention.add(sessionId);
   const own = outcomesFor(sessionId);
   own.set(toolUseId, { at: Date.now(), ...record });
   while (own.size > MAX_OUTCOMES) {
@@ -329,6 +350,11 @@ function summarize(brief) {
     total: decisions.reduce((n, d) => n + d.total, 0),
     chars: brief.length,
   };
+}
+
+// `1 rule`, `2 rules`: the brief that names one rule says so.
+function counted(n, noun) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
 
 // The transcript row for one call. Null for the calls worth saying nothing
@@ -379,9 +405,9 @@ function reportLine(record) {
       if (n === 0) return row('BRIEFED', `${s.chars ?? 0} chars`, files);
       const rules =
         s.total && s.total > s.shown
-          ? `${s.shown} of ${s.total} rules`
-          : `${s.shown ?? 0} rules`;
-      return row('BRIEFED', `${n} ADR${n === 1 ? '' : 's'} \u00b7 ${rules}`, files);
+          ? `${s.shown} of ${counted(s.total, 'rule')}`
+          : counted(s.shown ?? 0, 'rule');
+      return row('BRIEFED', `${counted(n, 'ADR')} \u00b7 ${rules}`, files);
     }
     case 'deduped': {
       // Only the files this row can speak for. `unknown` is a CLI too old to
@@ -505,15 +531,22 @@ function briefFrom(stdout) {
 // the parent's slot, so the subagent would be denied a brief the parent had
 // already seen, and the parent would later miss one it never saw. All three
 // fields are asserted in the tests.
-function envelopeFor({ sessionId, agentId, cwd, filePath }) {
+//
+// The event and tool are what the call was: a Bash or Read call is a
+// PostToolUse:Read, an Edit or Write call is a PreToolUse on that tool -- the
+// two pairs the CLI answers, and the ones hooks/rules-brief.sh forwards. The
+// CLI keeps one brief memory across both, so a file briefed by either is not
+// briefed again by the other.
+function envelopeFor({ sessionId, agentId, cwd, filePath, tool = 'Read' }) {
+  const write = WRITE_TOOLS.includes(tool);
   const envelope = {
     session_id: sessionId,
     cwd,
-    hook_event_name: 'PostToolUse',
-    tool_name: 'Read',
+    hook_event_name: write ? 'PreToolUse' : 'PostToolUse',
+    tool_name: write ? tool : 'Read',
     tool_input: { file_path: filePath },
-    tool_response: { type: 'text' },
   };
+  if (!write) envelope.tool_response = { type: 'text' };
   // Omitted rather than sent empty for the main agent, matching the hook: the
   // CLI treats an absent and an empty agent_id the same, but an envelope that
   // mirrors the real one is easier to reason about.
@@ -864,7 +897,7 @@ async function deliverBrief($, e, result, paths, ctx) {
           ...cliLimits(resolved),
         ],
         {
-          stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath }),
+          stdin: envelopeFor({ sessionId, agentId: e.agentId, cwd, filePath, tool: e.tool }),
           cwd,
           timeoutMs: SPAWN_TIMEOUT_MS,
         }
@@ -977,7 +1010,14 @@ async function deliverBrief($, e, result, paths, ctx) {
   // deliberate line per brief is the report itself.
   // $.ui.log already prefixes the plugin's name, so the line carried its own
   // prefix twice: `actual-cli: actual: briefed 2 ADRs...`.
-  const report = reportLine(outcomesFor(sessionId).get(e.tool_use_id));
+  //
+  // An Edit or Write reports only what it delivered or what failed. Nearly
+  // every edit is of a file already read, so its `NO CHANGE` row would be the
+  // same line under every edit of a session; the pane still lists each one.
+  const record = outcomesFor(sessionId).get(e.tool_use_id);
+  const quietWrite =
+    WRITE_TOOLS.includes(e.tool) && record?.outcome !== 'delivered' && record?.outcome !== 'cli-error';
+  const report = quietWrite ? null : reportLine(record);
   if (report) $.ui.log(report);
 
 
@@ -1007,63 +1047,36 @@ const OUTCOME_LABELS = {
 const PANE = 'rules-brief';
 
 // Set on a PostToolUse:Read event this mod is briefing, so hooks/rules-brief.sh
-// stands down for it. The hook matches the literal bytes, so a rename here
-// must be made there too.
+// stands down for it. Read only: PreToolUse uses ACTUAL_SKILL_MOD_SESSION
+// instead. The hook matches the literal bytes, so a rename here must be made
+// there too.
 const STAND_DOWN_FIELD = 'actual_rules_brief_by_mod';
 
-// ── end of turn ──────────────────────────────────────────────────────────────
-//
-// Informational only. It never touches the Stop decision -- the implementation
-// gate is a separate hook and its verdict is the one that counts -- and it runs
-// inside a try/catch for the same reason: a pane that failed to open must not
-// take governance down with it.
-//
-// What the turn wrote is the gate's to judge: it checks the whole diff, rules
-// with no globs included, so nothing is reported about written files here.
-async function endOfTurn($, e) {
-  // A gate continuation, not a new turn: the gate blocks and the turn runs
-  // on, and opening the pane again would reopen it at every stop of a turn
-  // already sent back.
-  if (e?.stop_hook_active) return;
-  // The same switches the read path honours. ACTUAL_CLI_SUBPROCESS matters
-  // most here: the conformance judge is a nested `claude -p` that stops too.
+// The tools briefed as a reminder when written, and the ones whose
+// PreToolUse registration of rules-brief.sh this mod stands down. Exactly the
+// CLI's own list: NotebookEdit names its file as notebook_path and the CLI
+// does not answer it.
+const WRITE_TOOLS = ['Edit', 'Write'];
+
+// The session this load of the module last announced to rules-brief.sh,
+// through the ACTUAL_SKILL_MOD_SESSION variable the hook compares with its own
+// session_id. A hot reload starts it over, which costs one repeated set.
+let announced;
+
+async function announce($) {
+  const sessionId = await $.session.id();
+  if (!sessionId || sessionId === announced) return;
+  // The same gates as the tool.call path, so a repository with no rules, or
+  // briefing switched off, sees nothing of this mod -- not even a variable in
+  // every process it starts. Not the maxSessionChars cap: at 0 the mod is
+  // still in charge and silent, and announcing is what keeps the hook silent
+  // too. Skipping here never costs a brief: the hook runs its own checks.
   if (await optedOut($)) return;
-  // `$.session.id()` first, not the envelope's `session_id`. The read path
-  // files its records under the former, and keying this path off the latter
-  // is the same mistake four earlier bugs were: two paths computing one key
-  // differently, with the records invisible to whichever used the other.
-  const sessionId = (await $.session.id()) ?? e?.session_id;
-  const cwd = (await $.session.cwd()) ?? e?.cwd;
-  if (!(await governedRulesDir($, sessionId, cwd))) return;
-
-  // `/rules-brief`, run for you. Literally the same call the command makes,
-  // so there is one renderer and one set of words -- a second, text-only
-  // summary was assembled here first, and a hand-built copy of a view is how
-  // the labels came to disagree across surfaces before.
-  //
-  // Nothing to show if nothing was read.
-  if (outcomesFor(sessionId).size === 0) return;
-
-  // Only when the turn left something worth looking at: a brief, one held back
-  // or a failure. Every Bash call in a governed repository leaves a row, a
-  // write's included, so "any row" opened the pane -- and took focus -- at the
-  // end of every turn. `/rules-brief` still shows the rest.
-  if (!needsAttention.delete(sessionId)) return;
-
-  // The same arguments the command uses, focus included: the host refuses
-  // `focus: false` ("ui.open: focus is true or left out"). Focus is granted
-  // only while the prompt is empty and nothing else holds it, so this does
-  // not take keystrokes from someone mid-sentence.
-  const opened = await $.ui.open({ id: PANE, title: 'Rule briefing', focus: true, closeOnEscape: true });
-
-  // A pane a mod opens on its own initiative needs a terminal at least 144
-  // columns wide -- 110 once the person has opened that pane themselves --
-  // and below that it waits, undrawn, reporting `isPlaced: false`. Without
-  // this the end of a turn was simply silent in a narrower terminal, and the
-  // README promised a pane that would never arrive.
-  if (opened && opened.isPlaced === false) {
-    $.ui.log(row('BRIEFING', `${outcomesFor(sessionId).size} reads this session; /rules-brief to see them`));
-  }
+  const cwd = await $.session.cwd();
+  if (!cwd || !(await governedRulesDir($, sessionId, cwd))) return;
+  // A literal name, so `claude plugin validate` lists exactly this one write.
+  await $.env.set('ACTUAL_SKILL_MOD_SESSION', sessionId);
+  announced = sessionId;
 }
 
 // Rows for the pane, oldest first: what each Bash call did about briefing,
@@ -1090,7 +1103,7 @@ function paneRows(elements, sessionId) {
     const label = OUTCOME_LABELS[record.outcome] ?? record.outcome;
     const detail =
       record.outcome === 'delivered'
-        ? `${record.summary?.decisions?.length ?? 0} ADR(s), ${record.summary?.shown ?? 0} of ${record.summary?.total || record.summary?.shown || 0} rules, ${record.summary?.chars ?? 0} chars`
+        ? `${counted(record.summary?.decisions?.length ?? 0, 'ADR')}, ${record.summary?.shown ?? 0} of ${counted(record.summary?.total || record.summary?.shown || 0, 'rule')}, ${record.summary?.chars ?? 0} chars`
         : record.detail ?? files ?? '';
     return Box({
       key: `row-${i}-${id}`,
@@ -1223,17 +1236,6 @@ export function register(on, options = {}) {
     return {};
   });
 
-  on('classic.Stop', async ($, e, next) => {
-    // The gate's verdict is untouched whatever happens here. It is also reached
-    // first: the implementation gate is a settings hook beneath this module, and
-    // anything run ahead of it would hold the verdict back.
-    const verdict = await next(e);
-    try {
-      await endOfTurn($, e);
-    } catch {}
-    return verdict;
-  });
-
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e);
     const elements = $.ui.resolve(e);
@@ -1272,7 +1274,33 @@ export function register(on, options = {}) {
     return next(e);
   });
 
-  on('tool.call', { tool: ['Bash', 'Read'] }, async ($, e, next) => {
+  // The same stand-down for the PreToolUse:Edit|Write registration, by another
+  // route. This event's `e` is the call's envelope, the tool's arguments
+  // spread beside `tool`, so a field could only ride as an argument -- and the
+  // arguments are what the permission check judges. Probed on 2.1.287: with
+  // one added, auto mode's classifier gave no verdict on the Write, so it
+  // never ran; without it, the same Write ran. So the event passes down
+  // untouched, and the mod says it is here by an environment variable instead:
+  // set before next, for this process and everything it starts after, so the
+  // settings hook inherits it (probed on 2.1.287).
+  //
+  // The value is the session id, not a flag. A `claude` the session starts --
+  // from a Bash call, say -- inherits the variable under a session id of its
+  // own, so its hook still briefs when no mod loads there. A set that fails
+  // costs a second brief, never the call. No decision is added either way, so
+  // the normal permission flow is unchanged.
+  on('classic.PreToolUse', async ($, e, next) => {
+    if (WRITE_TOOLS.includes(e?.tool)) {
+      try {
+        await announce($);
+      } catch {
+        // rules-brief.sh briefs beside the mod: a duplicate, not a failure.
+      }
+    }
+    return next(e);
+  });
+
+  on('tool.call', { tool: ['Bash', 'Read', ...WRITE_TOOLS] }, async ($, e, next) => {
     // Let the command run first. Briefing is advisory, so it must never delay
     // or gate the tool, and a command that fails has nothing worth briefing.
     //
@@ -1291,8 +1319,8 @@ export function register(on, options = {}) {
 
       const [cwd, sessionId] = await Promise.all([$.session.cwd(), $.session.id()]);
       if (!cwd || !sessionId) return result;
-      // Before anything is recorded: in a repository with no rules, even a
-      // `not-read-only` record would make the pane open at the end of the turn.
+      // Before anything is recorded: a repository with no rules has nothing
+      // for /rules-brief to list, not even a `not-read-only` row.
       const rulesDir = await governedRulesDir($, sessionId, cwd);
       if (!rulesDir) return result;
 
@@ -1302,6 +1330,23 @@ export function register(on, options = {}) {
       // gates: it is the live cwd, or the start-of-call cwd plus the `cd`.
       // Parsing is pure, so doing it here costs nothing on a write.
       const found = e.tool === 'Bash' ? candidateTokens(e.command) : null;
+
+      // An Edit or Write names its file outright, like a Read, and is briefed
+      // whatever isReadOnly says: it is the reminder for a file never read.
+      if (WRITE_TOOLS.includes(e.tool)) {
+        const named = typeof e.file_path === 'string' ? normalizePath(e.file_path) : null;
+        if (!named) {
+          recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-paths' });
+          return withContext(result, await debugNote($, 'not briefed', `the ${e.tool} named no file`));
+        }
+        const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+        const skip = unbriefable(named, { repoRoot, cwd, sessionRoot: await $.session.root(), rulesDir });
+        if (skip) {
+          recordOutcome(sessionId, e.tool_use_id, { outcome: skip, files: [named] });
+          return withContext(result, await debugNote($, 'not briefed', `${named} is ${skip === 'outside-root' ? 'outside the repository' : 'a rule document'}`));
+        }
+        return await deliverBrief($, e, result, [named], { cwd, sessionId, rulesDir, repoRoot, options });
+      }
 
       // Claude Code's own read/write verdict. Absent (not false) for a write,
       // and absent for anything it could not classify -- both mean no brief.
@@ -1319,6 +1364,11 @@ export function register(on, options = {}) {
         if (!named) {
           recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-paths' });
           return withContext(result, await debugNote($, 'not briefed', 'the Read named no file'));
+        }
+        const skip = unbriefable(named, { repoRoot, cwd, sessionRoot: await $.session.root(), rulesDir });
+        if (skip) {
+          recordOutcome(sessionId, e.tool_use_id, { outcome: skip, files: [named] });
+          return withContext(result, await debugNote($, 'not briefed', `${named} is ${skip === 'outside-root' ? 'outside the repository' : 'a rule document'}`));
         }
         return await deliverBrief($, e, result, [named], { cwd, sessionId, rulesDir, repoRoot, options });
       }
