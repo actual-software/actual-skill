@@ -190,13 +190,17 @@ function isWithin(root, candidate) {
 // parsing. Without them every scratchpad write -- Claude Code keeps one under
 // TMPDIR -- and every edit of a rule document spawned the CLI to hear "no".
 //
-// Outside only when outside both the root and the session's directory. The
-// root can be git's physical path while Claude names files by the logical
-// one a symlinked checkout was opened through; a test against the root alone
-// would skip governed files there, silently. A file inside the rules
-// directory is a rule document, which is not governed by itself.
-function unbriefable(named, { repoRoot, cwd, rulesDir }) {
-  if (![repoRoot, cwd].filter(Boolean).some((base) => isWithin(base, named))) return 'outside-root';
+// Outside only when outside the root, the session's directory and the
+// session's project root alike. The root can be git's physical path while
+// Claude names files by the logical one a symlinked checkout was opened
+// through; a test against the root alone would skip governed files there,
+// silently. The cwd covers that until the shell runs `cd apps/web`, after
+// which a file elsewhere in the checkout is under neither; the project root
+// ($.session.root()) is the logical path the session was opened at, and a
+// shell `cd` does not move it. A file inside the rules directory is a rule
+// document, which is not governed by itself.
+function unbriefable(named, { repoRoot, cwd, sessionRoot, rulesDir }) {
+  if (![repoRoot, cwd, sessionRoot].filter(Boolean).some((base) => isWithin(base, named))) return 'outside-root';
   if (rulesDir && isWithin(rulesDir, named)) return 'ungoverned';
   return null;
 }
@@ -1237,7 +1241,7 @@ export function register(on, options = {}) {
           return withContext(result, await debugNote($, 'not briefed', `the ${e.tool} named no file`));
         }
         const repoRoot = await resolveRepoRoot($, sessionId, cwd);
-        const skip = unbriefable(named, { repoRoot, cwd, rulesDir });
+        const skip = unbriefable(named, { repoRoot, cwd, sessionRoot: await $.session.root(), rulesDir });
         if (skip) {
           recordOutcome(sessionId, e.tool_use_id, { outcome: skip, files: [named] });
           return withContext(result, await debugNote($, 'not briefed', `${named} is ${skip === 'outside-root' ? 'outside the repository' : 'a rule document'}`));
@@ -1262,7 +1266,7 @@ export function register(on, options = {}) {
           recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-paths' });
           return withContext(result, await debugNote($, 'not briefed', 'the Read named no file'));
         }
-        const skip = unbriefable(named, { repoRoot, cwd, rulesDir });
+        const skip = unbriefable(named, { repoRoot, cwd, sessionRoot: await $.session.root(), rulesDir });
         if (skip) {
           recordOutcome(sessionId, e.tool_use_id, { outcome: skip, files: [named] });
           return withContext(result, await debugNote($, 'not briefed', `${named} is ${skip === 'outside-root' ? 'outside the repository' : 'a rule document'}`));

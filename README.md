@@ -160,7 +160,7 @@ actual-cli: ▌ NO CHANGE  briefed earlier  tokens.ts
 
 - **A governed file that briefs nothing says why**, rather than leaving you to guess: nothing new for it, the budget spent, or the CLI could not answer.
 - **A read of files nothing governs reports nothing, once the CLI says so.** Most files in a repository are ungoverned, and a line on each would bury the reads that matter. Until that ships in the CLI (actual-cli#867), such a read logs a "briefed earlier, or ungoverned" row instead.
-- **Run `/rules-brief` to see the whole session**, in the order it happened, those quiet reads included, with the reason beside each one: the last 40 of at most 200 records.
+- **`/rules-brief` lists the session**, in the order it happened, those quiet reads included, with the reason beside each one: the last 40 of at most 200 records.
 
 None of this governs: it never touches the Stop verdict, which is the implementation gate's. None of it costs your agent context either, because the model never reads these lines — they are not counted against the cap above. It does need a terminal or the desktop app: nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session, though briefing itself still runs there.
 

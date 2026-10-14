@@ -1829,6 +1829,15 @@ test('a checkout opened through a symlink still briefs: the session directory co
   expect(runs.length).toBe(1);
 });
 
+test('a symlinked checkout still briefs after the shell moves: the project root counts as inside', async (fire: any, on: any) => {
+  // After `cd apps/web` the cwd no longer contains the rest of the checkout,
+  // and git's root is the physical path. $.session.root() is still the
+  // logical path the session was opened at.
+  const runs = harness(on, { tool: WRITE_RESULT, cwd: '/link/repo/apps/web', root: '/link/repo', gitRoot: '/real/repo' });
+  await fire.tool.call({ tool: 'Write', file_path: '/link/repo/src/a.ts', tool_use_id: 'symcd_1' });
+  expect(runs.length).toBe(1);
+});
+
 test('NotebookEdit is left alone: the CLI cannot answer it', async (fire: any, on: any) => {
   const runs = harness(on, { tool: WRITE_RESULT });
   const r = await fire.tool.call({ tool: 'NotebookEdit', notebook_path: '/repo/n.ipynb', new_source: 'x' });
