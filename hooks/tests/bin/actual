@@ -42,6 +42,9 @@
 #                   (impl-check, if invoked, still behaves as "allow")
 #   no-impl-check   a CLI with plan-check but that predates impl-check (AK-755)
 #                   (plan-check, if invoked, still behaves as "allow")
+#   no-turn-start   a 0.6.x CLI: impl-check exists, but its --help does not name
+#                   UserPromptSubmit, the dispatch turn-start.sh probes for
+#                   (both subcommands, if invoked, still behave as "allow")
 #   crash        the subcommand panics
 #   garbage      the subcommand exits 0 but prints non-JSON
 #
@@ -200,6 +203,9 @@ fi
 
 if [ "${1:-}" = "--help" ]; then
   echo "Usage: actual ${subcommand} [--claude-hook] [--rules-dir <dir>]"
+  if [ "$subcommand" = "impl-check" ] && [ "$mode" != "no-turn-start" ]; then
+    echo "An envelope whose hook_event_name is UserPromptSubmit checks nothing and prints nothing."
+  fi
   exit 0
 fi
 
@@ -228,7 +234,7 @@ if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
 fi
 
 case "$mode" in
-  allow)
+  allow|no-plan-check|no-impl-check|no-turn-start)
     # Conforming plan: silent on permissionDecision so the user's dialog stays.
     exit 0
     ;;
