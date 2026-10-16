@@ -196,9 +196,10 @@ function isWithin(root, candidate) {
 // through; a test against the root alone would skip governed files there,
 // silently. The cwd covers that until the shell runs `cd apps/web`, after
 // which a file elsewhere in the checkout is under neither; the project root
-// ($.session.root()) is the logical path the session was opened at, and a
-// shell `cd` does not move it. A file inside the rules directory is a rule
-// document, which is not governed by itself.
+// ($.session.root()) is the logical path the session was opened at, or the
+// one `/cd` or a worktree move took it to, and a shell `cd` does not move it.
+// A file inside the rules directory is a rule document, which is not governed
+// by itself.
 function unbriefable(named, { repoRoot, cwd, sessionRoot, rulesDir }) {
   if (![repoRoot, cwd, sessionRoot].filter(Boolean).some((base) => isWithin(base, named))) return 'outside-root';
   if (rulesDir && isWithin(rulesDir, named)) return 'ungoverned';
@@ -615,9 +616,17 @@ async function readEnvSettings($) {
 // rule: when CLAUDE_PROJECT_DIR and the git toplevel are nested, the deeper
 // path is the more specific context and wins; otherwise the active checkout
 // does. See resolve_repo_root in bootstrap.sh for why each case is that way.
-// One git spawn per session, cached, because a session does not change repo.
+// One git spawn per session and project root, cached. `/cd` and a worktree
+// move change $.session.root() and a shell `cd` does not, so only a real move
+// asks again.
 
 const repoRoots = new Map();
+
+// Per process, unlike the maps around it: the first $.session.root() this load
+// of the module resolves, which the count's reading at session start makes
+// before anything can move the session. CLAUDE_PROJECT_DIR stays there for the
+// gates through `/cd`, a worktree move and `/clear`, and this stands in for it.
+let launchRoot;
 
 // Every spawn's timeout: the PostToolUse:Read hook's own budget in hooks.json.
 // $.process.run waits 30 seconds when given none, and the hook time limit does
@@ -688,11 +697,16 @@ async function rulesBriefAvailable($, sessionId, cwd) {
 }
 
 async function resolveRepoRoot($, sessionId, cwd) {
-  if (repoRoots.has(sessionId)) return repoRoots.get(sessionId);
+  const sessionRoot = await $.session.root();
+  if (!launchRoot) launchRoot = sessionRoot;
+  const key = `${sessionId}\n${sessionRoot}`;
+  if (repoRoots.has(key)) return repoRoots.get(key);
   let gitRoot = null;
   try {
+    // Run in the root the answer is cached under, not the caller's cwd: the
+    // first call after a move can come from wherever the shell has gone.
     const run = await $.process.run(['git', 'rev-parse', '--show-toplevel'], {
-      cwd,
+      cwd: sessionRoot || cwd,
       timeoutMs: SPAWN_TIMEOUT_MS,
     });
     if (run.exitCode === 0) gitRoot = (run.stdout ?? '').trim() || null;
@@ -703,10 +717,12 @@ async function resolveRepoRoot($, sessionId, cwd) {
   // returns nothing in a live session and `deeperOf` fell back to the git root
   // every time -- which is how the mod came to brief a monorepo subproject
   // from the root's rule set while the hook briefed it from the subproject's.
-  // $.session.root() is the same directory the variable would have named.
-  const projectDir = (await $.env.get('CLAUDE_PROJECT_DIR')) || (await $.session.root());
+  // The launch root stands in for it. A moved root decides only the cache key
+  // and where git runs, which is the part of the gates' answer that follows
+  // their cwd.
+  const projectDir = (await $.env.get('CLAUDE_PROJECT_DIR')) || launchRoot;
   const root = deeperOf(projectDir || null, gitRoot) ?? cwd;
-  repoRoots.set(sessionId, root);
+  repoRoots.set(key, root);
   return root;
 }
 
@@ -726,7 +742,8 @@ async function resolveRulesDir($, sessionId, cwd) {
 //
 // Not cached: a session can commit its first rule file partway through, and
 // the hook re-checks on every Read for the same reason. A listing is in-process
-// and cheap; the repo root underneath it is already cached per session.
+// and cheap; the repo root underneath it is already cached per session and
+// project root.
 async function governedRulesDir($, sessionId, cwd) {
   const rulesDir = await resolveRulesDir($, sessionId, cwd);
   if (!rulesDir) return null;
@@ -1162,7 +1179,9 @@ async function sessionSummary($, sessionId, rulesDir, repoRoot) {
 }
 
 // Never rejects. The rules directory is the one the briefs are filed under,
-// so X counts what this session was actually briefed. A refresh that lands
+// so X counts the decisions the CLI recorded for this session: what it was
+// briefed, plus those in the brief that overran the budget, which the CLI
+// recorded before deliverBrief withheld it. A refresh that lands
 // after a newer one leaves the newer count, and the band is asked to redraw
 // only when its sentence changes, because a render answer is cached until
 // $.ui.invalidate.
