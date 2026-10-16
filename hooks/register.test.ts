@@ -768,6 +768,122 @@ test('a command in another repository first after a move does not decide the mov
     .toEqual(['/repo', '/repo/.claude/worktrees/x']);
 });
 
+test('a /cd within the checkout keeps the root the session started in, through /clear', async (fire: any, on: any) => {
+  // A /cd leaves CLAUDE_PROJECT_DIR where the session started, so the gates
+  // kept resolving /repo while the mod resolved the directory the /cd named
+  // and, with the rules only at the root, briefed nothing. Measured on 2.1.301:
+  // a /clear after the /cd starts a session with a new id at the moved root,
+  // and the SessionStart hook still gets CLAUDE_PROJECT_DIR=/repo.
+  const clock = mock.clock(on);
+  let session = 'sess-1';
+  let dir = '/repo';
+  const spawns: any[] = [];
+  mock.env(on, {});
+  on('session.id', async () => ({ value: session }));
+  on('session.cwd', async () => ({ value: dir }));
+  on('session.root', async () => ({ value: dir }));
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }));
+  on('classic.SessionStart', async () => ({ value: {} }));
+  on('command.register', async (_$: any, e: any) => ({ value: { command: e.name } }));
+  on('fs.list', async (_$: any, e: any) => {
+    if (e.path !== '/repo/.actual/rules') throw new Error(`ENOENT: ${e.path}`);
+    return { value: [{ name: 'R-001.md', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] };
+  });
+  on('fs.exists', async () => ({ value: true }));
+  on('ui.log', async () => ({ value: undefined }));
+  on('tool.call', async () => ({
+    ref: 1, result: { stdout: 'OUT', stderr: '' }, text: 'OUT', isReadOnly: true,
+  }));
+  on('process.run', async (_$: any, e: any) => {
+    spawns.push(e);
+    if (e.argv?.[0] === 'git') return { value: { exitCode: 0, stdout: '/repo\n', stderr: '' } };
+    return { value: { exitCode: 0, stdout: reply(BRIEF), stderr: '' } };
+  });
+
+  await fire.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true });
+  await clock.settle();
+  dir = '/repo/pkg/api';
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/pkg/api/src/a.ts', tool_use_id: 'cd_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts', tool_use_id: 'cd_2' });
+  session = 'sess-2';
+  await fire.classic.SessionStart({ source: 'clear' });
+  await clock.settle();
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/pkg/api/src/c.ts', tool_use_id: 'cd_3' });
+
+  const briefs = spawns.filter((s: any) => s.argv[1] === 'rules' && !s.argv.includes('--help'));
+  expect(briefs.map((b: any) => JSON.parse(b.init.stdin).tool_input.file_path)).toEqual([
+    '/repo/pkg/api/src/a.ts', '/repo/pkg/api/src/b.ts', '/repo/pkg/api/src/c.ts',
+  ]);
+  for (const b of briefs) {
+    expect(b.argv.slice(0, 8)).toEqual([
+      'actual', 'rules', 'brief', '--claude-hook',
+      '--repo', '/repo',
+      '--rules-dir', '/repo/.actual/rules',
+    ]);
+  }
+  // The moved root still keys the cache and is where git runs.
+  expect(spawns.filter((s: any) => s.argv[0] === 'git').map((s: any) => s.init?.cwd))
+    .toEqual(['/repo', '/repo/pkg/api', '/repo/pkg/api']);
+});
+
+// The moves a session makes with /cd or into a worktree, plus no move and a
+// launch in a subdirectory. `root` is what resolve_repo_root picks for the
+// gates, with CLAUDE_PROJECT_DIR at the launch directory and the hook's cwd
+// where the session moved, and run.sh checks the /cd rows against the real
+// resolver. Every candidate holds rules, so a brief can only differ in the
+// root it picked.
+const MOVES = [
+  { name: '/cd into a subdirectory', launch: '/repo', moved: '/repo/pkg/api', file: '/repo/pkg/api/src/a.ts', root: '/repo' },
+  { name: 'launched in a subdirectory, /cd to the checkout root', launch: '/repo/pkg/api', moved: '/repo', file: '/repo/pkg/api/src/a.ts', root: '/repo/pkg/api' },
+  { name: "/cd into another repository's subdirectory", launch: '/repo', moved: '/other/pkg', file: '/other/pkg/src/a.ts', root: '/other' },
+  { name: '/cd into another repository', launch: '/repo', moved: '/other', file: '/other/src/a.ts', root: '/other' },
+  { name: 'a worktree move', launch: '/repo', moved: '/repo/.claude/worktrees/x', file: '/repo/.claude/worktrees/x/src/a.ts', root: '/repo/.claude/worktrees/x' },
+  { name: 'no move', launch: '/repo', moved: '/repo', file: '/repo/src/a.ts', root: '/repo' },
+  { name: 'launched in a subdirectory, no move', launch: '/repo/pkg/api', moved: '/repo/pkg/api', file: '/repo/pkg/api/src/a.ts', root: '/repo/pkg/api' },
+];
+
+// Deepest first, so git names the checkout nearest its spawn directory.
+const CHECKOUTS = ['/repo/.claude/worktrees/x', '/repo', '/other'];
+
+for (const m of MOVES) {
+  test(`${m.name}: the brief uses the root the gates resolve`, async (fire: any, on: any) => {
+    const clock = mock.clock(on);
+    let dir = m.launch;
+    const spawns: any[] = [];
+    mock.env(on, {});
+    on('session.id', async () => ({ value: 'sess-1' }));
+    on('session.cwd', async () => ({ value: dir }));
+    on('session.root', async () => ({ value: dir }));
+    on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }));
+    on('command.register', async (_$: any, e: any) => ({ value: { command: e.name } }));
+    on('fs.list', async () => ({ value: [{ name: 'R-001.md', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] }));
+    on('fs.exists', async () => ({ value: true }));
+    on('ui.log', async () => ({ value: undefined }));
+    on('tool.call', async () => ({
+      ref: 1, result: { stdout: 'OUT', stderr: '' }, text: 'OUT', isReadOnly: true,
+    }));
+    on('process.run', async (_$: any, e: any) => {
+      spawns.push(e);
+      if (e.argv?.[0] === 'git') {
+        const cwd = e.init?.cwd ?? '';
+        const top = CHECKOUTS.find((c) => cwd === c || cwd.startsWith(`${c}/`));
+        return { value: { exitCode: 0, stdout: `${top}\n`, stderr: '' } };
+      }
+      return { value: { exitCode: 0, stdout: reply(BRIEF), stderr: '' } };
+    });
+
+    await fire.session.start({ cwd: m.launch, surface: 'terminal', isInteractive: true });
+    await clock.settle();
+    dir = m.moved;
+    await fire.tool.call({ tool: 'Read', file_path: m.file, tool_use_id: 'move_1' });
+
+    const briefs = spawns.filter((s: any) => s.argv[1] === 'rules' && !s.argv.includes('--help'));
+    expect(briefs.map((b: any) => b.argv.slice(4, 8))).toEqual([
+      ['--repo', m.root, '--rules-dir', `${m.root}/.actual/rules`],
+    ]);
+  });
+}
+
 test('a subagent read is filed under its own agent id', async (fire: any, on: any) => {
   // Brief memory's third key component. Probed in a real subagent: the Read
   // hook's envelope carries agent_id and this mod's event carries the same

@@ -622,6 +622,12 @@ async function readEnvSettings($) {
 
 const repoRoots = new Map();
 
+// Per process, unlike the maps around it: the first $.session.root() this load
+// of the module resolves, which the count's reading at session start makes
+// before anything can move the session. CLAUDE_PROJECT_DIR stays there for the
+// gates through `/cd`, a worktree move and `/clear`, and this stands in for it.
+let launchRoot;
+
 // Every spawn's timeout: the PostToolUse:Read hook's own budget in hooks.json.
 // $.process.run waits 30 seconds when given none, and the hook time limit does
 // not cover it, so a CLI that hangs would stall every read for that long. A
@@ -692,6 +698,7 @@ async function rulesBriefAvailable($, sessionId, cwd) {
 
 async function resolveRepoRoot($, sessionId, cwd) {
   const sessionRoot = await $.session.root();
+  if (!launchRoot) launchRoot = sessionRoot;
   const key = `${sessionId}\n${sessionRoot}`;
   if (repoRoots.has(key)) return repoRoots.get(key);
   let gitRoot = null;
@@ -710,9 +717,10 @@ async function resolveRepoRoot($, sessionId, cwd) {
   // returns nothing in a live session and `deeperOf` fell back to the git root
   // every time -- which is how the mod came to brief a monorepo subproject
   // from the root's rule set while the hook briefed it from the subproject's.
-  // $.session.root() names the same directory at launch. Unlike the variable,
-  // it follows a worktree move, and `/cd` moves it too.
-  const projectDir = (await $.env.get('CLAUDE_PROJECT_DIR')) || sessionRoot;
+  // The launch root stands in for it. A moved root decides only the cache key
+  // and where git runs, which is the part of the gates' answer that follows
+  // their cwd.
+  const projectDir = (await $.env.get('CLAUDE_PROJECT_DIR')) || launchRoot;
   const root = deeperOf(projectDir || null, gitRoot) ?? cwd;
   repoRoots.set(key, root);
   return root;

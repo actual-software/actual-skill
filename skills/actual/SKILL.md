@@ -412,10 +412,12 @@ Two instances of that have already been fixed, both invisible at runtime:
   wrong in exactly the opposite cases. A mod also cannot read
   `CLAUDE_PROJECT_DIR`, which Claude Code sets for hook processes only. The mod
   now runs `git rev-parse --show-toplevel` and applies the same deeper-of-the-two
-  rule as `bootstrap.sh`, with `$.session.root()` standing in for the variable
-  (it names the directory the session was launched in, or the one `/cd` or a
-  worktree move took it to). The answer is cached per session and project root,
-  so a `/cd` or a worktree move resolves it again and a shell `cd` does not.
+  rule as `bootstrap.sh`, with the first `$.session.root()` it resolves, the
+  directory the session was launched in, standing in for the variable. Claude
+  Code keeps `CLAUDE_PROJECT_DIR` there through `/cd`, a worktree move and
+  `/clear`, so a moved root only decides where git runs. The answer is cached
+  per session and project root, so a `/cd` or a worktree move resolves it again
+  and a shell `cd` does not.
 
 - The mod did not forward `agent_id`, the third component of the key. The Read
   hook's envelope carries it inside a subagent and the mod's event carries the
@@ -441,8 +443,10 @@ A `cd` the command *does* state is authoritative and gets no fallback, or
 
 So when changing either path, change both. Check all four repository layouts —
 a worktree with and without `CLAUDE_PROJECT_DIR`, a monorepo subproject named
-by `CLAUDE_PROJECT_DIR`, and a session launched in a subdirectory — and check
-both inside and outside a subagent.
+by `CLAUDE_PROJECT_DIR`, and a session launched in a subdirectory — and the
+`/cd` moves `hooks/register.test.ts` lists, since a `/cd` leaves
+`CLAUDE_PROJECT_DIR` where the session started. Check both inside and outside a
+subagent.
 
 ### `--claude-hook` diff resolution
 
