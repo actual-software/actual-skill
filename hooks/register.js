@@ -710,7 +710,8 @@ async function resolveRepoRoot($, sessionId, cwd) {
   // returns nothing in a live session and `deeperOf` fell back to the git root
   // every time -- which is how the mod came to brief a monorepo subproject
   // from the root's rule set while the hook briefed it from the subproject's.
-  // $.session.root() is the same directory the variable would have named.
+  // $.session.root() names the same directory at launch. Unlike the variable,
+  // it follows a worktree move, and `/cd` moves it too.
   const projectDir = (await $.env.get('CLAUDE_PROJECT_DIR')) || sessionRoot;
   const root = deeperOf(projectDir || null, gitRoot) ?? cwd;
   repoRoots.set(key, root);
