@@ -213,6 +213,19 @@ have_rules_brief() {
   actual rules brief --help >/dev/null 2>&1
 }
 
+# impl-check's UserPromptSubmit dispatch (CLI 0.7.0) post-dates impl-check too,
+# and a CLI without it runs the whole check on that envelope instead of
+# recording where the turn starts. The dispatch has no flag of its own, so this
+# reads the help that documents it; no earlier release names the event there.
+have_turn_start() {
+  local help
+  help=$(actual impl-check --help 2>/dev/null) || return 1
+  case "$help" in
+    *UserPromptSubmit*) return 0 ;;
+  esac
+  return 1
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
