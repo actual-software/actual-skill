@@ -1,5 +1,5 @@
-// Tests for the count above the prompt: the session summary that
-// hooks/register.js draws in the AbovePrompt band.
+// Tests for the count above the prompt: the session summary line that
+// hooks/register.js draws, as the CLI gives it, in the AbovePrompt band.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On, ProcessRunInit } from 'claude-code'
 
@@ -14,7 +14,17 @@ type Answer = { value: { exitCode: number; stdout: string; stderr: string; isStd
 const ran = (stdout: string, exitCode = 0): Answer => ({
   value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
 })
-const counts = (x: number, y: number): Answer => ran(JSON.stringify({ x, y, decisions: [] }, null, 2))
+// What `actual session summary --json` prints: the counts, the areas the
+// session worked in that no ADR covers, and the line the CLI builds from them.
+const said = (line: string | null, of: { x?: number; y?: number; areas?: string[] } = {}): Answer => {
+  const areas = of.areas ?? []
+  const answer = { x: of.x ?? 0, y: of.y ?? 12, decisions: [], gaps: areas.length, areas_without_adr: areas, line }
+  return ran(JSON.stringify(answer, null, 2))
+}
+// x of y ADRs added and no area without one, or no line when y is 0.
+const counts = (x: number, y: number): Answer => said(y ? `Actual AI: ${x} of ${y} ADRs added to context` : null, { x, y })
+// A CLI that has the subcommand and predates the line.
+const beforeLine = (x: number, y: number): Answer => ran(JSON.stringify({ x, y, decisions: [] }, null, 2))
 const missing: Answer = { deny: 'spawn actual ENOENT' }
 const tooOld = ran('', 2)
 
@@ -129,7 +139,7 @@ test('updates after each main-loop response', async ($, on) => {
   await band.unmount()
 })
 
-test('redraws the band only when the count changes', async ($, on) => {
+test('redraws the band only when the line changes', async ($, on) => {
   const w = world(on, { answers: [counts(0, 12), counts(0, 12), counts(1, 12)] })
   const band = await mountBand($)
   await $.session.start(start)
@@ -145,15 +155,52 @@ test('redraws the band only when the count changes', async ($, on) => {
   await band.unmount()
 })
 
-test('says ADR when Y is 1', async ($, on) => {
-  const w = world(on, { answers: [counts(0, 1), counts(1, 1)] })
+// Every form of the line the CLI builds, beside the counts it builds it from.
+const FORMS = [
+  { line: 'Actual AI: 3 of 12 ADRs added to context · 2 areas with no ADR', x: 3, areas: ['src/billing', 'src/tax'] },
+  { line: 'Actual AI: 3 of 12 ADRs added to context · 1 area with no ADR', x: 3, areas: ['src/billing'] },
+  { line: 'Actual AI: 3 of 12 ADRs added to context', x: 3, areas: [] },
+  { line: 'Actual AI: no ADR covers the 3 areas you worked in', x: 0, areas: ['src/billing', 'src/tax', 'web'] },
+  { line: 'Actual AI: no ADR covers the area you worked in', x: 0, areas: ['src/billing'] },
+  { line: 'Actual AI: 0 of 12 ADRs added to context', x: 0, areas: [] },
+]
+
+for (const form of FORMS) {
+  test(`shows the CLI's line as given: ${form.line}`, async ($, on) => {
+    const w = world(on, { answers: [said(form.line, form)] })
+    const band = await mountBand($)
+    await $.session.start(start)
+    await w.clock.settle()
+    expect(await band.read()).toBe(form.line)
+    await band.unmount()
+  })
+}
+
+test('holds no wording of its own: a form it has never seen shows word for word', async ($, on) => {
+  const w = world(on, { answers: [said('Actual AI: 1 of 1 ADR added to context, in words no test has seen')] })
   const band = await mountBand($)
   await $.session.start(start)
   await w.clock.settle()
-  const first = await band.read()
-  await $.turn.complete(turn('t1'))
+  expect(await band.read()).toBe('Actual AI: 1 of 1 ADR added to context, in words no test has seen')
+  await band.unmount()
+})
+
+test('shows nothing for a null line, whatever the counts beside it', async ($, on) => {
+  const w = world(on, { answers: [said(null, { x: 3, y: 12, areas: ['src/billing'] })] })
+  const band = await mountBand($)
+  await $.session.start(start)
   await w.clock.settle()
-  expect([first, await band.read()]).toEqual(['Actual AI: 0 of 1 ADR added to context', 'Actual AI: 1 of 1 ADR added to context'])
+  expect(await band.read()).toBe('')
+  await band.unmount()
+})
+
+test('shows nothing when the CLI predates the line, and builds none from x and y', async ($, on) => {
+  const w = world(on, { answers: [beforeLine(3, 12)] })
+  const band = await mountBand($)
+  await $.session.start(start)
+  await w.clock.settle()
+  expect(w.summaries.length).toBe(1)
+  expect(await band.read()).toBe('')
   await band.unmount()
 })
 
@@ -191,7 +238,7 @@ test('shows nothing without rule files, and runs no CLI', async ($, on) => {
   await band.unmount()
 })
 
-test('shows nothing when the rules hold no decision (Y = 0)', async ($, on) => {
+test('shows nothing when the rules hold no decision (a null line)', async ($, on) => {
   const w = world(on, { answers: [counts(0, 0)] })
   const band = await mountBand($)
   await $.session.start(start)
@@ -200,7 +247,7 @@ test('shows nothing when the rules hold no decision (Y = 0)', async ($, on) => {
   await band.unmount()
 })
 
-test('clears the band when Y drops to 0', async ($, on) => {
+test('clears the band when the line turns null', async ($, on) => {
   const w = world(on, { answers: [counts(2, 5), counts(0, 0)] })
   const band = await mountBand($)
   await $.session.start(start)
@@ -254,19 +301,28 @@ test('stays on with ACTUAL_PLAN_GATE=off', async ($, on) => {
   await band.unmount()
 })
 
-test('keeps the last count when a later call fails, times out or prints garbage', async ($, on) => {
+test('keeps the last line when a later call fails, times out, prints garbage or gives no line', async ($, on) => {
   const w = world(on, {
-    answers: [counts(3, 12), ran('', 1), { deny: 'timed out after 2000 ms' }, ran('not json'), ran('{"x":-1,"y":12}'), counts(4, 12)],
+    answers: [
+      counts(3, 12),
+      ran('', 1),
+      { deny: 'timed out after 2000 ms' },
+      ran('not json'),
+      ran('null'),
+      ran('{"x":3,"y":12,"line":5}'),
+      beforeLine(4, 12),
+      counts(4, 12),
+    ],
   })
   const band = await mountBand($)
   await $.session.start(start)
   await w.clock.settle()
-  for (const id of ['t1', 't2', 't3', 't4']) {
+  for (const id of ['t1', 't2', 't3', 't4', 't5', 't6']) {
     await $.turn.complete(turn(id))
     await w.clock.settle()
     expect(await band.read()).toBe('Actual AI: 3 of 12 ADRs added to context')
   }
-  await $.turn.complete(turn('t5'))
+  await $.turn.complete(turn('t7'))
   await w.clock.settle()
   expect(await band.read()).toBe('Actual AI: 4 of 12 ADRs added to context')
   await band.unmount()

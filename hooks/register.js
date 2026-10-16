@@ -1121,28 +1121,18 @@ function paneRows(elements, sessionId) {
 
 // ── the count above the prompt ──────────────────────────────────────────────
 //
-// "Actual AI: X of Y ADRs added to context": of the Y decisions the rules
-// hold, the X briefed into this session so far, as `actual session summary`
-// reads them from brief memory. Drawn in the band above the prompt, so the
-// model never reads it.
+// The line `actual session summary` builds from brief memory, such as "Actual
+// AI: 3 of 12 ADRs added to context · 2 areas with no ADR", drawn exactly as
+// the CLI gives it in the band above the prompt, so the model never reads it.
 //
 // Read in the background at session start, after each main-loop turn, and on
 // /clear, compaction, resume and fork. Nothing waits on the CLI, and a call
-// that fails or outlasts SPAWN_TIMEOUT_MS keeps the count already shown.
+// that fails or outlasts SPAWN_TIMEOUT_MS keeps the line already shown.
 
-// Per session: the sentence its band shows, and the refresh that set it. An
-// `undefined` sentence shows nothing (no rule files, or no decision in them).
+// Per session: the line its band shows, and the refresh that set it. An
+// `undefined` line shows nothing (no rule files, or the CLI's line is null).
 const sessionCounts = new Map();
 let countRefreshes = 0;
-
-function countSentence(x, y) {
-  if (y === 0) return undefined;
-  return `Actual AI: ${x} of ${y} ${y === 1 ? 'ADR' : 'ADRs'} added to context`;
-}
-
-function isCount(n) {
-  return Number.isInteger(n) && n >= 0;
-}
 
 // One row: cut at the band's width, never wrapped onto a second.
 function fitTo(text, columns) {
@@ -1150,21 +1140,22 @@ function fitTo(text, columns) {
   return columns > 1 ? `${text.slice(0, columns - 1)}\u2026` : '';
 }
 
-// A CLI too old to have the subcommand exits non-zero.
+// A CLI too old to have the subcommand exits non-zero, and one too old to
+// build the line answers without it.
 async function sessionSummary($, sessionId, rulesDir, repoRoot) {
   const run = await $.process.run(
     ['actual', 'session', 'summary', '--session', sessionId, '--rules-dir', rulesDir, '--json'],
     { cwd: repoRoot, timeoutMs: SPAWN_TIMEOUT_MS }
   );
   if (run.exitCode !== 0) return null;
-  const { x, y } = JSON.parse(run.stdout);
-  return isCount(x) && isCount(y) ? { x, y } : null;
+  const { line } = JSON.parse(run.stdout);
+  return line === null || typeof line === 'string' ? { line } : null;
 }
 
 // Never rejects. The rules directory is the one the briefs are filed under,
-// so X counts what this session was actually briefed. A refresh that lands
-// after a newer one leaves the newer count, and the band is asked to redraw
-// only when its sentence changes, because a render answer is cached until
+// so the line counts what this session was actually briefed. A refresh that
+// lands after a newer one leaves the newer line, and the band is asked to
+// redraw only when its line changes, because a render answer is cached until
 // $.ui.invalidate.
 async function refreshCount($) {
   const ticket = ++countRefreshes;
@@ -1176,9 +1167,9 @@ async function refreshCount($) {
     let text;
     if (rulesDir) {
       const repoRoot = await resolveRepoRoot($, sessionId, cwd);
-      const counts = await sessionSummary($, sessionId, rulesDir, repoRoot);
-      if (!counts) return;
-      text = countSentence(counts.x, counts.y);
+      const summary = await sessionSummary($, sessionId, rulesDir, repoRoot);
+      if (!summary) return;
+      text = summary.line || undefined;
     }
     const last = sessionCounts.get(sessionId);
     if (last && ticket < last.ticket) return;
