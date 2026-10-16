@@ -196,9 +196,10 @@ function isWithin(root, candidate) {
 // through; a test against the root alone would skip governed files there,
 // silently. The cwd covers that until the shell runs `cd apps/web`, after
 // which a file elsewhere in the checkout is under neither; the project root
-// ($.session.root()) is the logical path the session was opened at, and a
-// shell `cd` does not move it. A file inside the rules directory is a rule
-// document, which is not governed by itself.
+// ($.session.root()) is the logical path the session was opened at, or the
+// one `/cd` or a worktree move took it to, and a shell `cd` does not move it.
+// A file inside the rules directory is a rule document, which is not governed
+// by itself.
 function unbriefable(named, { repoRoot, cwd, sessionRoot, rulesDir }) {
   if (![repoRoot, cwd, sessionRoot].filter(Boolean).some((base) => isWithin(base, named))) return 'outside-root';
   if (rulesDir && isWithin(rulesDir, named)) return 'ungoverned';
