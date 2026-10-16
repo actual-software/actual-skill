@@ -670,6 +670,53 @@ test('the repo root is probed once per session, not once per command', async (fi
   expect(gitCalls).toBe(1);
 });
 
+test('moving into a worktree after the session starts briefs from the worktree', async (fire: any, on: any) => {
+  // The count's first reading at session start made the session's first
+  // repo-root lookup, then cached by session id alone, so a session that
+  // entered a worktree or ran `/cd` before its first read was briefed against
+  // the launch checkout for the rest of the session. Both moves change
+  // $.session.root(), and the cache is keyed on it now.
+  const clock = mock.clock(on);
+  let dir = '/repo';
+  const spawns: any[] = [];
+  mock.env(on, {});
+  on('session.id', async () => ({ value: 'sess-1' }));
+  on('session.cwd', async () => ({ value: dir }));
+  on('session.root', async () => ({ value: dir }));
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }));
+  on('command.register', async (_$: any, e: any) => ({ value: { command: e.name } }));
+  on('fs.list', async () => ({ value: [{ name: 'R-001.md', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] }));
+  on('fs.exists', async () => ({ value: true }));
+  on('ui.log', async () => ({ value: undefined }));
+  on('tool.call', async () => ({
+    ref: 1, result: { stdout: 'OUT', stderr: '' }, text: 'OUT', isReadOnly: true,
+  }));
+  on('process.run', async (_$: any, e: any) => {
+    spawns.push(e);
+    // git names the checkout it runs in, as the main one and a worktree each do.
+    if (e.argv?.[0] === 'git') return { value: { exitCode: 0, stdout: `${e.init?.cwd}\n`, stderr: '' } };
+    return { value: { exitCode: 0, stdout: reply(BRIEF), stderr: '' } };
+  });
+
+  await fire.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true });
+  await clock.settle();
+  dir = '/repo/.claude/worktrees/x';
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+
+  // The count did read first, against the checkout the session started in.
+  const summaries = spawns.filter((s: any) => s.argv[1] === 'session');
+  expect(summaries.length).toBe(1);
+  expect(summaries[0].argv).toContain('/repo/.actual/rules');
+  const briefs = spawns.filter((s: any) => s.argv[1] === 'rules' && !s.argv.includes('--help'));
+  expect(briefs.length).toBe(1);
+  expect(briefs[0].argv).toEqual([
+    'actual', 'rules', 'brief', '--claude-hook',
+    '--repo', '/repo/.claude/worktrees/x',
+    '--rules-dir', '/repo/.claude/worktrees/x/.actual/rules',
+  ]);
+  expect(spawns.filter((s: any) => s.argv[0] === 'git').length).toBe(2);
+});
+
 test('a subagent read is filed under its own agent id', async (fire: any, on: any) => {
   // Brief memory's third key component. Probed in a real subagent: the Read
   // hook's envelope carries agent_id and this mod's event carries the same

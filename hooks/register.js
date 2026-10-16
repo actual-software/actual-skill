@@ -615,7 +615,9 @@ async function readEnvSettings($) {
 // rule: when CLAUDE_PROJECT_DIR and the git toplevel are nested, the deeper
 // path is the more specific context and wins; otherwise the active checkout
 // does. See resolve_repo_root in bootstrap.sh for why each case is that way.
-// One git spawn per session, cached, because a session does not change repo.
+// One git spawn per session and project root, cached. `/cd` and a worktree
+// move change $.session.root() and a shell `cd` does not, so only a real move
+// asks again.
 
 const repoRoots = new Map();
 
@@ -688,7 +690,9 @@ async function rulesBriefAvailable($, sessionId, cwd) {
 }
 
 async function resolveRepoRoot($, sessionId, cwd) {
-  if (repoRoots.has(sessionId)) return repoRoots.get(sessionId);
+  const sessionRoot = await $.session.root();
+  const key = `${sessionId}\n${sessionRoot}`;
+  if (repoRoots.has(key)) return repoRoots.get(key);
   let gitRoot = null;
   try {
     const run = await $.process.run(['git', 'rev-parse', '--show-toplevel'], {
@@ -704,9 +708,9 @@ async function resolveRepoRoot($, sessionId, cwd) {
   // every time -- which is how the mod came to brief a monorepo subproject
   // from the root's rule set while the hook briefed it from the subproject's.
   // $.session.root() is the same directory the variable would have named.
-  const projectDir = (await $.env.get('CLAUDE_PROJECT_DIR')) || (await $.session.root());
+  const projectDir = (await $.env.get('CLAUDE_PROJECT_DIR')) || sessionRoot;
   const root = deeperOf(projectDir || null, gitRoot) ?? cwd;
-  repoRoots.set(sessionId, root);
+  repoRoots.set(key, root);
   return root;
 }
 
@@ -726,7 +730,8 @@ async function resolveRulesDir($, sessionId, cwd) {
 //
 // Not cached: a session can commit its first rule file partway through, and
 // the hook re-checks on every Read for the same reason. A listing is in-process
-// and cheap; the repo root underneath it is already cached per session.
+// and cheap; the repo root underneath it is already cached per session and
+// project root.
 async function governedRulesDir($, sessionId, cwd) {
   const rulesDir = await resolveRulesDir($, sessionId, cwd);
   if (!rulesDir) return null;
