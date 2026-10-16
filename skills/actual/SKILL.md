@@ -415,9 +415,9 @@ Two instances of that have already been fixed, both invisible at runtime:
   rule as `bootstrap.sh`, with the first `$.session.root()` it resolves, the
   directory the session was launched in, standing in for the variable. Claude
   Code keeps `CLAUDE_PROJECT_DIR` there through `/cd`, a worktree move and
-  `/clear`, so a moved root only decides where git runs. The answer is cached
-  per session and project root, so a `/cd` or a worktree move resolves it again
-  and a shell `cd` does not.
+  `/clear`, so a moved root decides only the cache key and where git runs. The
+  answer is cached per session and `$.session.root()`, so a `/cd` or a worktree
+  move resolves it again and a shell `cd` does not.
 
 - The mod did not forward `agent_id`, the third component of the key. The Read
   hook's envelope carries it inside a subagent and the mod's event carries the
