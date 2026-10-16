@@ -1167,7 +1167,9 @@ async function sessionSummary($, sessionId, rulesDir, repoRoot) {
 }
 
 // Never rejects. The rules directory is the one the briefs are filed under,
-// so X counts what this session was actually briefed. A refresh that lands
+// so X counts the decisions the CLI recorded for this session: what it was
+// briefed, plus those in the brief that overran the budget, which the CLI
+// recorded before deliverBrief withheld it. A refresh that lands
 // after a newer one leaves the newer count, and the band is asked to redraw
 // only when its sentence changes, because a render answer is cached until
 // $.ui.invalidate.
