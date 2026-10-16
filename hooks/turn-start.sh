@@ -16,9 +16,11 @@
 # diffing against HEAD as it did before this hook existed, and impl-gate.sh
 # already tells the user about a missing or outdated CLI.
 #
-# Release order: a CLI without the UserPromptSubmit dispatch treats this call
-# as a full impl-check on every prompt. The output is discarded, but it costs
-# time and model calls, so ship this hook only with a CLI release that has it.
+# A CLI without the UserPromptSubmit dispatch (anything before 0.7.0) treats
+# this call as a full impl-check on every prompt: model calls, a delayed
+# prompt, and denials nobody sees that spend the Stop check's per-rule budget.
+# So the hook probes for the dispatch first (have_turn_start) and does nothing
+# without it.
 
 set -uo pipefail
 
@@ -39,6 +41,15 @@ if ! rules_present || ! have_actual; then
   exit 0
 fi
 
+# The ACTUAL_TURN_START_LOG trace described below records this skip too.
+if ! have_turn_start; then
+  if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
+    printf 'turn-start: skipped, actual impl-check --help does not name UserPromptSubmit\n' \
+      2>/dev/null >>"$ACTUAL_TURN_START_LOG"
+  fi
+  exit 0
+fi
+
 # Resolve --rules-dir and the root exactly as impl-gate.sh does. The CLI keys
 # the record on (session_id, rules dir), so the Stop check only finds it under
 # the same directory.
@@ -56,7 +67,7 @@ if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
   {
     printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" 2>&1
     printf 'turn-start: exit=%s rules-dir=%s\n' "${PIPESTATUS[1]}" "$dir"
-  } >>"$ACTUAL_TURN_START_LOG" 2>/dev/null
+  } 2>/dev/null >>"$ACTUAL_TURN_START_LOG"
 else
   printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" >/dev/null 2>&1
 fi

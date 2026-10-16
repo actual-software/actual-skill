@@ -663,7 +663,7 @@ st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.js
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ] \
    && [ "$(jq -r '.hook_event_name' "$CAPTURE_TURN" 2>/dev/null)" = "UserPromptSubmit" ] \
    && [ "$(jq -r '.session_id' "$CAPTURE_TURN" 2>/dev/null)" = "test-session-turn-start" ]; then
-  pass "rules present: the raw UserPromptSubmit envelope reaches the CLI, and the hook stays silent"
+  pass "rules present, CLI with the UserPromptSubmit dispatch: the raw envelope reaches the CLI, and the hook stays silent"
 else
   fail "turn-start did not forward the envelope silently" "status=$st stdout=$(cat "${WORK}/out") captured=$(cat "$CAPTURE_TURN" 2>/dev/null)"
 fi
@@ -676,15 +676,26 @@ else
   fail "turn-start argv wrong" "argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
 fi
 
-# The capture holds argv after the subcommand. A CLI with no impl-check refuses
-# before capturing, so an empty capture here proves the subcommand was
+# The capture holds argv after the subcommand. A CLI with no plan-check refuses
+# that subcommand before capturing, so a capture here proves the call went to
 # impl-check rather than plan-check.
 rm -f "$CAPTURE_TURN" "${CAPTURE_TURN}.argv"
-st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-impl-check ACTUAL_TEST_CAPTURE="$CAPTURE_TURN")
-if [ "$st" = "0" ] && [ ! -e "${CAPTURE_TURN}.argv" ]; then
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-plan-check ACTUAL_TEST_CAPTURE="$CAPTURE_TURN")
+if [ "$st" = "0" ] && grep -Fxq -- '--claude-hook' "${CAPTURE_TURN}.argv" 2>/dev/null; then
   pass "the subcommand is impl-check"
 else
-  fail "turn-start called a subcommand other than impl-check" "argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
+  fail "turn-start called a subcommand other than impl-check" "status=$st argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
+fi
+
+# CLI 0.6.x has impl-check but no UserPromptSubmit dispatch, so handing it the
+# envelope runs the full check on every prompt. Its --help never names the
+# event, and the hook must not call it at all.
+rm -f "$CAPTURE_TURN" "${CAPTURE_TURN}.argv"
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-turn-start ACTUAL_TEST_CAPTURE="$CAPTURE_TURN")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ] && [ ! -e "${CAPTURE_TURN}.argv" ]; then
+  pass "CLI without the UserPromptSubmit dispatch (0.6.x): silent no-op that never invokes impl-check --claude-hook"
+else
+  fail "turn-start invoked a CLI that lacks the UserPromptSubmit dispatch" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err") argv=$(cat "${CAPTURE_TURN}.argv" 2>/dev/null)"
 fi
 
 # A verdict, a notice, a usage error, a crash: none of
@@ -708,11 +719,16 @@ fi
 # The fake CLI reads stdin before every mode, so its usage-error case never
 # breaks the pipe. A real CLI can exit on a usage error without reading
 # anything; with a prompt larger than the pipe buffer and SIGPIPE
-# ignored, the hook's own write then fails.
+# ignored, the hook's own write then fails. This one passes the dispatch
+# probe, so the hook gets as far as that write.
 EARLY_EXIT_BIN="${WORK}/early-exit-bin"
 mkdir -p "$EARLY_EXIT_BIN"
 cat > "${EARLY_EXIT_BIN}/actual" <<'EOF'
 #!/bin/sh
+if [ "${2:-}" = "--help" ]; then
+  echo "An envelope whose hook_event_name is UserPromptSubmit checks nothing and prints nothing."
+  exit 0
+fi
 echo "error: unexpected argument found" >&2
 exit 2
 EOF
@@ -748,6 +764,24 @@ if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ] && grep -
 else
   fail "ACTUAL_TURN_START_LOG trace wrong" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err") log=$(cat "$TURN_LOG" 2>/dev/null)"
 fi
+
+rm -f "$TURN_LOG"
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-turn-start ACTUAL_TURN_START_LOG="$TURN_LOG")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ] && grep -q '^turn-start: skipped' "$TURN_LOG" 2>/dev/null; then
+  pass "ACTUAL_TURN_START_LOG: a CLI without the dispatch is traced as skipped, hook still silent"
+else
+  fail "ACTUAL_TURN_START_LOG skip trace wrong" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err") log=$(cat "$TURN_LOG" 2>/dev/null)"
+fi
+
+# A trace file that cannot be opened must not surface bash's redirection error.
+for mode in allow no-turn-start; do
+  st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode" ACTUAL_TURN_START_LOG="${WORK}/no-such-dir/turn-start.log")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+    pass "ACTUAL_TURN_START_LOG that cannot be opened (${mode}): still silent"
+  else
+    fail "an unopenable ACTUAL_TURN_START_LOG reached the hook's output (${mode})" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+  fi
+done
 
 # The shipped hooks' two standing rules, kept in this section so the shared
 # lists in "dependency hygiene" below stay as they are.
