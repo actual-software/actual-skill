@@ -717,6 +717,57 @@ test('moving into a worktree after the session starts briefs from the worktree',
   expect(spawns.filter((s: any) => s.argv[0] === 'git').length).toBe(2);
 });
 
+test('a command in another repository first after a move does not decide the moved root', async (fire: any, on: any) => {
+  // The tool.call handler reads the cwd after the command has run, so when the
+  // first call after a move was `cd /other && git status`, git ran in /other
+  // and its answer was cached as the worktree's root. Reads under the worktree
+  // then went to the CLI with `--repo /other` or were dropped as outside it.
+  const clock = mock.clock(on);
+  let root = '/repo';
+  let shell = '/repo';
+  const spawns: any[] = [];
+  mock.env(on, {});
+  on('session.id', async () => ({ value: 'sess-1' }));
+  on('session.cwd', async () => ({ value: shell }));
+  on('session.root', async () => ({ value: root }));
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }));
+  on('command.register', async (_$: any, e: any) => ({ value: { command: e.name } }));
+  on('fs.list', async () => ({ value: [{ name: 'R-001.md', kind: 'file', size: 1, mtimeMs: 0, isLink: false }] }));
+  on('fs.exists', async () => ({ value: true }));
+  on('ui.log', async () => ({ value: undefined }));
+  on('tool.call', async (_$: any, e: any) => {
+    // The shell moves while the command runs. A shell `cd` does not move the root.
+    const cd = /^cd (\S+) &&/.exec(e?.command ?? '');
+    if (cd) shell = cd[1];
+    return { ref: 1, result: { stdout: 'OUT', stderr: '' }, text: 'OUT', isReadOnly: true };
+  });
+  on('process.run', async (_$: any, e: any) => {
+    spawns.push(e);
+    if (e.argv?.[0] === 'git') return { value: { exitCode: 0, stdout: `${e.init?.cwd}\n`, stderr: '' } };
+    return { value: { exitCode: 0, stdout: reply(BRIEF), stderr: '' } };
+  });
+
+  await fire.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true });
+  await clock.settle();
+  root = shell = '/repo/.claude/worktrees/x';
+  await fire.tool.call({ tool: 'Bash', command: 'cd /other && git status', tool_use_id: 'away_1' });
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/.claude/worktrees/x/src/a.ts', tool_use_id: 'away_2' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat /repo/.claude/worktrees/x/src/b.ts', tool_use_id: 'away_3' });
+
+  const briefs = spawns.filter((s: any) => s.argv[1] === 'rules' && !s.argv.includes('--help'));
+  expect(briefs.length).toBe(2);
+  for (const b of briefs) {
+    expect(b.argv.slice(0, 8)).toEqual([
+      'actual', 'rules', 'brief', '--claude-hook',
+      '--repo', '/repo/.claude/worktrees/x',
+      '--rules-dir', '/repo/.claude/worktrees/x/.actual/rules',
+    ]);
+  }
+  // git asked once per root, each time from that root.
+  expect(spawns.filter((s: any) => s.argv[0] === 'git').map((s: any) => s.init?.cwd))
+    .toEqual(['/repo', '/repo/.claude/worktrees/x']);
+});
+
 test('a subagent read is filed under its own agent id', async (fire: any, on: any) => {
   // Brief memory's third key component. Probed in a real subagent: the Read
   // hook's envelope carries agent_id and this mod's event carries the same

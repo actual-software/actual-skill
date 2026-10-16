@@ -696,8 +696,10 @@ async function resolveRepoRoot($, sessionId, cwd) {
   if (repoRoots.has(key)) return repoRoots.get(key);
   let gitRoot = null;
   try {
+    // Run in the root the answer is cached under, not the caller's cwd: the
+    // first call after a move can come from wherever the shell has gone.
     const run = await $.process.run(['git', 'rev-parse', '--show-toplevel'], {
-      cwd,
+      cwd: sessionRoot || cwd,
       timeoutMs: SPAWN_TIMEOUT_MS,
     });
     if (run.exitCode === 0) gitRoot = (run.stdout ?? '').trim() || null;
