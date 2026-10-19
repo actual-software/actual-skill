@@ -157,6 +157,7 @@ repository. They are registered automatically on install — there is no manual 
 | `hooks/rules-brief.sh` | `PostToolUse` on `Read`, `PreToolUse` on `Edit\|Write` | Read-time briefing (AK-793) and the write-time reminder (AK-794), for versions of Claude Code that cannot load a mod. Hands the envelope to `actual rules brief --claude-hook` and forwards only an allowlisted `additionalContext` reply naming the event it was called for. Advisory: never denies, never decides, silent on any failure; on `PreToolUse` it names no `permissionDecision`, so the normal permission flow is unchanged. **Where the mod loads it stands down**: the mod passes `classic.PostToolUse` (Read) on with an `actual_rules_brief_by_mod` marker, and for Edit and Write sets `ACTUAL_SKILL_MOD_SESSION` to its session id before the hook runs, which the hook inherits and stands down on when it matches its own `session_id`. The mod writes no files. Edit and Write cannot carry a marker: the tool's arguments are what the permission check judges, and auto mode refuses to judge a Write with a field it does not know. Either way the brief is delivered once, by the path that also has a budget and a record, and every other hook on those events still runs. It has no budget, no session cap and none of the four limits below: it forwards none of them |
 | `hooks/register.js` | Claude mod, `$.ui.log` per read and a `/rules-brief` pane | What briefing did, for the person watching. One line per read names the ADRs and rule counts; a read that briefed nothing says why (nothing new, budget spent, CLI error), from the reason the CLI names on stderr. A read of only ungoverned files reports nothing, since most files are ungoverned. `/rules-brief` lists the session oldest first, because a suppressed row only makes sense after the delivered row it refers to. The model reads none of it, so none of it is charged against the context budget — and nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session |
 | `hooks/register.js` | Claude mod, `tool.call` on `Bash`, `Read`, `Edit` and `Write` | Briefing for both the Read tool and reads that bypass it. Measured across 212 local sessions, 80% of file reads went through `cat`/`head`/`sed -n`/`grep`, which fires no Read hook. Briefs only a Bash command Claude Code reports as `isReadOnly`, in the call's context beside its output. `Edit` and `Write` are briefed as a reminder for a file never read (AK-794): it lands with the tool result, after the write, and a file already briefed by its read adds nothing and reports nothing. Requires Claude Code 2.1.287+, or 2.1.285/2.1.286 with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
+| `hooks/register.js` | Claude mod, `session.start`, `turn.complete` (main loop), `classic.SessionStart` (all but `startup`) and `ui.render` on `AbovePrompt` | The band above the prompt, `Actual AI: X of Y ADRs added to context`: Y is the decisions in the rules, X those briefed this session. Read from `actual session summary --session <id> --rules-dir <dir> --json` for the rules directory briefing uses, in the background at session start, after each main-loop turn, and on `/clear`, compaction, resume and fork. X can include the decisions of the one brief the session budget withheld, which the CLI recorded before the mod held it back. Empty with no rule files, no decision in them, no CLI or one without `session summary`, or `ACTUAL_CLI_SUBPROCESS=1`. Drawn in the terminal and the desktop app, and the model never reads it |
 
 `PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
 user's plan-approval dialog, so a blocked plan is revised by the agent rather than
@@ -411,8 +412,12 @@ Two instances of that have already been fixed, both invisible at runtime:
   wrong in exactly the opposite cases. A mod also cannot read
   `CLAUDE_PROJECT_DIR`, which Claude Code sets for hook processes only. The mod
   now runs `git rev-parse --show-toplevel` and applies the same deeper-of-the-two
-  rule as `bootstrap.sh`, with `$.session.root()` standing in for the variable
-  (it names the directory the session was launched in), cached per session.
+  rule as `bootstrap.sh`, with the first `$.session.root()` it resolves, the
+  directory the session was launched in, standing in for the variable. Claude
+  Code keeps `CLAUDE_PROJECT_DIR` there through `/cd`, a worktree move and
+  `/clear`, so a moved root decides only the cache key and where git runs. The
+  answer is cached per session and `$.session.root()`, so a `/cd` or a worktree
+  move resolves it again and a shell `cd` does not.
 
 - The mod did not forward `agent_id`, the third component of the key. The Read
   hook's envelope carries it inside a subagent and the mod's event carries the
@@ -438,8 +443,10 @@ A `cd` the command *does* state is authoritative and gets no fallback, or
 
 So when changing either path, change both. Check all four repository layouts —
 a worktree with and without `CLAUDE_PROJECT_DIR`, a monorepo subproject named
-by `CLAUDE_PROJECT_DIR`, and a session launched in a subdirectory — and check
-both inside and outside a subagent.
+by `CLAUDE_PROJECT_DIR`, and a session launched in a subdirectory — and the
+`/cd` moves `hooks/register.test.ts` lists, since a `/cd` leaves
+`CLAUDE_PROJECT_DIR` where the session started. Check both inside and outside a
+subagent.
 
 ### `--claude-hook` diff resolution
 

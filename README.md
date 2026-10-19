@@ -176,6 +176,8 @@ In Claude Code, a row above the prompt shows how many of your repository's ADRs 
 
 It counts against the same rules directory as briefing, `ACTUAL_RULES_DIR` included, and shows nothing outside a repository with `.actual/rules/`, when the rules hold no decision, or when the CLI is missing or predates `actual session summary`. `ACTUAL_PLAN_GATE=off` leaves it on. The same mod that briefs shell reads draws it, so it needs the same Claude Code: 2.1.287 or later, or 2.1.285 and 2.1.286 with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`. The band appears in the terminal and the desktop app, and not in VS Code or `claude -p`. Its tests run with the mod's: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .`.
 
+Once briefing reaches its per-session cap, the count can include the ADRs of the one brief that didn't fit: the CLI records each brief before the mod checks it against the cap, and the mod holds that one back.
+
 ### Troubleshooting
 
 When something fails, the skill diagnoses it for you. It knows every error the CLI can return, all five runners (`claude-cli`, `anthropic-api`, `openai-api`, `codex-cli`, `cursor-cli`), and all three output formats, so it can find the cause and retry without you reading logs.

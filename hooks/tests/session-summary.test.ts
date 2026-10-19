@@ -163,7 +163,7 @@ test('runs the CLI with the session id and the rules directory the briefs use', 
   await w.clock.settle()
   expect(w.listed).toEqual([RULES])
   expect(w.spawns).toEqual([
-    { argv: ['git', 'rev-parse', '--show-toplevel'], init: { cwd: CWD, timeoutMs: 2000 } },
+    { argv: ['git', 'rev-parse', '--show-toplevel'], init: { cwd: ROOT, timeoutMs: 2000 } },
     {
       argv: ['actual', 'session', 'summary', '--session', SESSION, '--rules-dir', RULES, '--json'],
       init: { cwd: ROOT, timeoutMs: 2000 },

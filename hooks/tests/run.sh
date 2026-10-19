@@ -1053,6 +1053,42 @@ else
 fi
 
 echo
+echo "=== /cd: CLAUDE_PROJECT_DIR stays at the launch directory ==="
+
+# A /cd moves the hooks' cwd and leaves CLAUDE_PROJECT_DIR where the session
+# started (measured on Claude Code 2.1.301, through a /clear after the /cd as
+# well). These are the /cd layouts register.test.ts pins for the mod. Every
+# candidate root holds rules, so only the root resolve_repo_root picks decides
+# the forwarded --rules-dir.
+CD_REPO="${WORK}/cd-repo"
+CD_OTHER="${WORK}/cd-other"
+mkdir -p "${CD_REPO}/pkg/api" "${CD_OTHER}/pkg"
+git -C "$CD_REPO" init -q
+git -C "$CD_OTHER" init -q
+for d in "$CD_REPO" "${CD_REPO}/pkg/api" "$CD_OTHER" "${CD_OTHER}/pkg"; do
+  mkdir -p "${d}/.actual/rules"
+  printf '# rules\n**R-001** MUST: all persistence goes through the repository layer.\n' \
+    > "${d}/.actual/rules/rules.md"
+done
+
+cd_case() {
+  local name="$1" launch="$2" moved="$3" want="$4" capture="${WORK}/captured-cd.json"
+  rm -f "$capture" "${capture}.argv"
+  run_hook_cwd "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" \
+    "$launch" "$moved" ACTUAL_TEST_MODE=deny ACTUAL_TEST_CAPTURE="$capture" >/dev/null
+  if [ "$(argv_after --rules-dir "${capture}.argv")" = "${want}/.actual/rules" ]; then
+    pass "/cd $name: the gate keeps the root resolve_repo_root picks"
+  else
+    fail "/cd $name: wrong rules directory" "argv=$(cat "${capture}.argv" 2>/dev/null)"
+  fi
+}
+
+cd_case "into a subdirectory" "$CD_REPO" "${CD_REPO}/pkg/api" "$CD_REPO"
+cd_case "from a subdirectory launch to the checkout root" "${CD_REPO}/pkg/api" "$CD_REPO" "${CD_REPO}/pkg/api"
+cd_case "into another repository's subdirectory" "$CD_REPO" "${CD_OTHER}/pkg" "$CD_OTHER"
+cd_case "into another repository" "$CD_REPO" "$CD_OTHER" "$CD_OTHER"
+
+echo
 echo "=== monorepo subproject (CLAUDE_PROJECT_DIR below the git root) ==="
 
 # The case CLAUDE_PROJECT_DIR must still win: Claude Code launched inside a
