@@ -3,23 +3,19 @@
 #
 # Surfaces install/upgrade guidance once, early in the session, instead of at the
 # plan or Stop boundary where it would add latency and noise. Read-only and
-# advisory: it adds session context and nothing else. The --help capability
-# probes live here only; the ExitPlanMode and Stop gates classify an old CLI
+# advisory: it adds session context and nothing else, and never installs or
+# upgrades anything itself. The ExitPlanMode and Stop gates classify an old CLI
 # from their own real plan-check/impl-check exit, so neither spawns actual a
 # second time just to re-probe.
 #
-# Checks plan-check and impl-check independently (see AK-754): the two
-# subcommands shipped in different CLI releases (plan-check at AK-672,
-# impl-check later at AK-755), so a CLI can have one without the other.
+# Two checks, scoped differently. The install offer appears only in a repository
+# with committed rules, so the plugin stays invisible to someone who never
+# installed the CLI. The version check runs wherever the hook runs: one
+# `actual --version` compared with MIN_CLI_VERSION (lib/bootstrap.sh), which
+# catches skew whether or not a release added a subcommand.
 #
-# rules brief (the PostToolUse:Read and PreToolUse:Edit|Write rule briefing) is probed last, after the two
-# gates: it is the newest subcommand, and unlike them it never short-circuits
-# this script -- it only decides which closing sentence the success message
-# carries.
-#
-# Silent unless this repository actually has committed rules, so installing the
-# plugin is invisible in unrelated repositories. Registered for startup, resume,
-# clear, compact, and fork so the reminder is restored after compaction.
+# Registered for startup, resume, clear, compact, and fork so the reminder is
+# restored after compaction.
 
 set -uo pipefail
 
@@ -39,32 +35,27 @@ fi
 dir=$(rules_dir)
 count=$(rules_count "$dir")
 
+if ! have_actual; then
+  if [ "$count" -gt 0 ]; then
+    emit_sessionstart_context "$(install_message)"
+  fi
+  exit 0
+fi
+
+# A version cli_version cannot read is not an old CLI, so it prompts nothing.
+installed=$(cli_version)
+if [ -n "$installed" ] && version_older_than "$installed" "$MIN_CLI_VERSION"; then
+  emit_sessionstart_context "$(min_version_message "$installed" "$count")"
+  exit 0
+fi
+
 if [ "$count" -eq 0 ]; then
   exit 0
 fi
 
-if ! have_actual; then
-  emit_sessionstart_context "$(install_message)"
-  exit 0
-fi
-
-# Checked independently -- and in this order -- because plan-check is the
-# older subcommand: a CLI missing it entirely is more out of date than one
-# that merely predates impl-check, so its guidance takes priority when both
-# are missing.
-if ! have_plan_check; then
-  emit_sessionstart_context "$(upgrade_message)"
-  exit 0
-fi
-
-if ! have_impl_check; then
-  emit_sessionstart_context "$(impl_upgrade_message)"
-  exit 0
-fi
-
-# Deliberately NOT a fourth early exit. The three above each report a gate that
-# is supposed to block and silently is not; `rules brief` is advisory, so its
-# absence is a sentence appended to the success message rather than a message
-# that replaces it. See rules_brief_note for the full reasoning.
-note=$(rules_brief_note)
-emit_sessionstart_context "Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable.${note:+ $note}"
+# No sentence about rule briefing. One used to promise that rules are surfaced
+# on a read, which a compaction makes untrue: brief memory and the mod's budget
+# survive it, so every decision briefed before the compaction stays quiet
+# afterwards while the model has lost the text. Say it again when
+# `--claude-session-start` resets that memory.
+emit_sessionstart_context "Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."

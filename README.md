@@ -125,7 +125,7 @@ AI-native software teams: developers who build with coding agents and want those
 
 ## Where does the Actual.ai Skill work?
 
-Inside the coding agent your team already uses: Claude Code, Codex, ChatGPT, Cursor, or OpenCode. It works in any repository with architecture rules committed in `.actual/rules/`, and stays silent in repositories without them.
+Inside the coding agent your team already uses: Claude Code, Codex, ChatGPT, Cursor, or OpenCode. It works in any repository with architecture rules committed in `.actual/rules/`, and stays silent in repositories without them, except that in Claude Code it offers to upgrade an `actual` CLI older than it needs.
 
 ## When does the Actual.ai Skill run?
 
@@ -145,7 +145,7 @@ When your agent hits an architecture question, the skill asks the Actual advisor
 
 In Claude Code, the skill checks your agent's work against the architecture rules committed in `.actual/rules/`. When your agent leaves plan mode, its plan is checked before you see the approval dialog. At the end of every turn, its changes are checked too. A conflict goes back to the agent with the reason, and the turn continues until it's fixed.
 
-Your agent is also briefed as it reads. When it opens a file covered by a rule, the rules governing that file are surfaced before it makes its first edit. A file it writes without reading first — usually a new one — is briefed when it writes it instead; that brief arrives with the result, after the write, so it is a reminder that can prompt a revision. Editing a file already briefed by its read adds nothing. Briefing is advisory: it never blocks anything, and it needs a CLI new enough to have `actual rules brief` — if yours isn't, the two checks above still run and the session start tells you so.
+Your agent is also briefed as it reads. When it opens a file covered by a rule, the rules governing that file are surfaced before it makes its first edit. A file it writes without reading first — usually a new one — is briefed when it writes it instead; that brief arrives with the result, after the write, so it is a reminder that can prompt a revision. Editing a file already briefed by its read adds nothing. Briefing is advisory: it never blocks anything.
 
 Reads through the shell count too, and they are most of them. Measured across 212 local sessions, four in five file reads went through `cat`, `head`, `sed -n` or `grep` rather than the Read tool, and a hook never sees those. A Claude Code mod covers them, and where it loads it takes over the Read tool too, so both kinds of read go through one path with one context budget, one record of what has already been said, and one way of reporting it. Reading a file twice does not brief it twice, whichever way you read it. The mod needs Claude Code 2.1.287 or later; on 2.1.285 and 2.1.286 set `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` to load it. Without it the Read path still works on its own, without the cap or the report below.
 
@@ -190,7 +190,7 @@ See the [Actual CLI docs](https://actual.ai/cli/docs) for getting started and th
 
 - A supported coding agent: Claude Code, Codex, ChatGPT, Cursor, or OpenCode.
 - Your repository onboarded at [app.actual.ai](https://app.actual.ai), so Actual can generate its ADRs.
-- The `actual` CLI ([actual-software/actual-cli](https://github.com/actual-software/actual-cli)). The skill offers to install it on first use, or you can install it yourself with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`.
+- The `actual` CLI 0.8.0 or later ([actual-software/actual-cli](https://github.com/actual-software/actual-cli)). The skill offers to install it on first use, or you can install it yourself with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`. In Claude Code, each session start compares the installed version with the one the skill needs and offers to upgrade an older CLI, with the command for however you installed it when the CLI can name it, or both commands when it's too old to.
 
 ## License
 

@@ -665,8 +665,8 @@ async function resolveHome($, sessionId) {
   return home;
 }
 
-// Whether the installed CLI has `rules brief` at all, asked once a session the
-// way preflight asks it (`have_rules_brief` in bootstrap.sh). actual-cli v0.6.2,
+// Whether the installed CLI has `rules brief` at all, asked once a session
+// with `actual rules brief --help`. actual-cli v0.6.2,
 // the latest release, answers `unrecognized subcommand` with exit 2 -- and
 // without this every read in a governed repository logged a CLI ERROR row for
 // a state the person cannot do anything about mid-turn. Preflight already

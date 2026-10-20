@@ -826,47 +826,6 @@ else
   fail "missing-CLI preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-plan-check)
-if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
-   && grep -q "Offer to upgrade it now" "${WORK}/out" \
-   && grep -q "no .plan-check. subcommand" "${WORK}/out"; then
-  pass "rules + CLI missing plan-check entirely: upgrade guidance as session context, framed as an offer"
-else
-  fail "old-CLI preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
-fi
-
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-impl-check)
-if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
-   && grep -q "Offer to upgrade it now" "${WORK}/out" \
-   && grep -q "no .impl-check. subcommand" "${WORK}/out"; then
-  pass "rules + CLI has plan-check but not impl-check yet: its own upgrade guidance, framed as an offer"
-else
-  fail "impl-check-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
-fi
-
-# `rules brief` is advisory, so a CLI that lacks only it must still be told the
-# two gates ARE running -- the upgrade note rides along as a suffix instead of
-# replacing the success message, and must not carry the gates' blocking wording.
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-rules-brief)
-ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
-if [ "$st" = "0" ] \
-   && printf '%s' "$ctx" | grep -q "governance is active" \
-   && printf '%s' "$ctx" | grep -q "1 rule file" \
-   && printf '%s' "$ctx" | grep -q "brew upgrade" \
-   && printf '%s' "$ctx" | grep -q "advisory only"; then
-  pass "rules + CLI has both gates but not rules brief: success message kept, upgrade note appended"
-else
-  fail "rules-brief-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
-fi
-
-if ! printf '%s' "$ctx" | grep -qE "Offer to upgrade it now|do not continue this task|AskUserQuestion|worth interrupting"; then
-  pass "the rules-brief note carries none of the gates' blocking wording"
-else
-  fail "rules-brief note escalates like a gate" "$ctx"
-fi
-
-# The healthy case gets the positive counterpart of that sentence, so the agent
-# knows briefing is on rather than inferring it from silence.
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow)
 ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
 if [ "$st" = "0" ] \
@@ -877,6 +836,160 @@ if [ "$st" = "0" ] \
   pass "rules + full CLI: success message makes no briefing promise a compaction would break, and no upgrade note"
 else
   fail "healthy preflight promises briefing, carries an upgrade note, or ends in a space" "status=$st ctx=$ctx"
+fi
+
+echo
+echo "=== preflight: minimum CLI version ==="
+
+session_context() {
+  jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null
+}
+
+# The minimum is read from the library rather than repeated here, so raising it
+# needs no test change. BELOW is the nearest version under it. NUMERIC is newer
+# by number but sorts first as a string ("0.18.0" before "0.8.0"), which a
+# string comparison would get wrong.
+MIN=$(bash -c '. "$1" && printf "%s" "$MIN_CLI_VERSION"' _ "${HOOKS_DIR}/lib/bootstrap.sh")
+min_major=${MIN%%.*} min_rest=${MIN#*.}
+min_minor=${min_rest%%.*} min_patch=${min_rest#*.}
+if [ "$min_patch" -gt 0 ]; then
+  BELOW="${min_major}.${min_minor}.$((min_patch - 1))"
+elif [ "$min_minor" -gt 0 ]; then
+  BELOW="${min_major}.$((min_minor - 1)).99"
+else
+  BELOW="$((min_major - 1)).99.99"
+fi
+NUMERIC="${min_major}.$((min_minor + 10)).0"
+CALLS="${WORK}/calls"
+
+for v in "$MIN" "$NUMERIC" "${MIN}-rc.1" "unreadable"; do
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$v")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -q "governance is active" \
+     && ! printf '%s' "$ctx" | grep -q "upgrade"; then
+    pass "rules + CLI reporting ${v}: governance active, no upgrade offer"
+  else
+    fail "rules + CLI reporting ${v}: expected the success message alone" "status=$st ctx=$ctx"
+  fi
+
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$v")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "no rules + CLI reporting ${v}: silent"
+  else
+    fail "no rules + CLI reporting ${v}: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+rm -f "$CALLS"
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_CALLS="$CALLS")
+if [ "$st" = "0" ] && [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
+  pass "rules + CLI at or above the minimum: one CLI spawn, \`actual --version\`"
+else
+  fail "healthy preflight spawned more than actual --version" "calls=$(cat "$CALLS" 2>/dev/null)"
+fi
+
+rm -f "$CALLS"
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CALLS="$CALLS")
+ctx=$(session_context)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -qF "CLI is ${BELOW} " \
+   && printf '%s' "$ctx" | grep -qF "needs ${MIN} or" \
+   && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+   && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual" \
+   && printf '%s' "$ctx" | grep -q "second copy" \
+   && ! printf '%s' "$ctx" | grep -q "governance is active"; then
+  pass "rules + CLI below the minimum and older than \`version\`: both versions, both commands, how to tell which applies, no claim that governance is active"
+else
+  fail "below-minimum preflight wrong" "status=$st ctx=$ctx"
+fi
+
+if printf '%s' "$ctx" | grep -q "Offer to upgrade it now" \
+   && printf '%s' "$ctx" | grep -q "regardless of what else is in progress" \
+   && printf '%s' "$ctx" | grep -q "ask using an interactive question tool" \
+   && printf '%s' "$ctx" | grep -q "does not satisfy this"; then
+  pass "rules + CLI below the minimum: interrupts the task and waits for an answer, like the install offer"
+else
+  fail "below-minimum offer in a governed repo lost the interrupt-and-wait wording" "$ctx"
+fi
+
+if [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
+  pass "below the minimum: \`actual --version\`, then \`actual version --json\` without --check, so no registry request"
+else
+  fail "below-minimum preflight made the wrong CLI calls" "calls=$(cat "$CALLS" 2>/dev/null)"
+fi
+
+for channel in homebrew npm; do
+  if [ "$channel" = homebrew ]; then
+    want="brew upgrade actual-software/actual/actual" wrong="npm install"
+  else
+    want="npm install -g @actualai/actual@latest" wrong="brew upgrade"
+  fi
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL="$channel")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -qxF "  ${want}" \
+     && ! printf '%s' "$ctx" | grep -qF "$wrong" \
+     && ! printf '%s' "$ctx" | grep -q "second copy"; then
+    pass "installed with ${channel}: only that channel's command, from \`actual version --json\`"
+  else
+    fail "installed with ${channel}: expected only ${want}" "status=$st ctx=$ctx"
+  fi
+done
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL=other)
+ctx=$(session_context)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -qF "https://github.com/actual-software/actual-releases/releases/latest" \
+   && ! printf '%s' "$ctx" | grep -q "npm install" \
+   && ! printf '%s' "$ctx" | grep -q "brew upgrade"; then
+  pass "installed some other way: the release page, and neither package manager's command"
+else
+  fail "channel other: expected the release page alone" "status=$st ctx=$ctx"
+fi
+
+for channel in unsafe escaped; do
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL="$channel")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] && ! printf '%s' "$ctx" | grep -q "injected" \
+     && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+     && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual"; then
+    pass "an upgrade_command that is ${channel} is not passed on: both commands instead"
+  else
+    fail "a ${channel} upgrade_command reached the session context" "status=$st ctx=$ctx"
+  fi
+done
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$BELOW")
+ctx=$(session_context)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -qF "CLI is ${BELOW}," \
+   && printf '%s' "$ctx" | grep -qF "needs ${MIN} or" \
+   && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+   && printf '%s' "$ctx" | grep -q "AskUserQuestion" \
+   && ! printf '%s' "$ctx" | grep -qE "worth interrupting|do not continue this task|regardless of what else is in progress"; then
+  pass "no rules + CLI below the minimum: offers the upgrade, without interrupting the task in progress"
+else
+  fail "no-rules below-minimum preflight wrong" "status=$st ctx=$ctx"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_PLAN_GATE=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_PLAN_GATE=off silences the version check too"
+else
+  fail "ACTUAL_PLAN_GATE=off did not silence the version check" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_CLI_SUBPROCESS=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_CLI_SUBPROCESS=1: no upgrade offer inside actual-cli's own subprocess"
+else
+  fail "subprocess guard did not silence the version check" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook_no_cli "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "no rules + no CLI: silent, so the plugin asks nobody to install a CLI they never chose"
+else
+  fail "no rules + no CLI: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 echo

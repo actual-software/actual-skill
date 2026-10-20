@@ -150,7 +150,7 @@ repository. They are registered automatically on install — there is no manual 
 
 | Hook | Event | What it does |
 |------|-------|--------------|
-| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough for `plan-check` and `impl-check`. Re-runs after compact so the reminder survives summarization |
+| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight. In a repository with rules it reports whether the `actual` CLI is installed. In every repository it compares `actual --version` with the minimum the plugin declares (`MIN_CLI_VERSION` in `hooks/lib/bootstrap.sh`) and, on an older CLI, asks the agent to offer the upgrade: the command `actual version --json` names for the channel that installed it, or both the npm and Homebrew commands on a CLI too old to answer. The offer interrupts the task only where rules are committed. Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
 | `hooks/turn-start.sh` | `UserPromptSubmit` | Marks where each turn starts: runs `actual impl-check --claude-hook`, which on a `UserPromptSubmit` envelope records `HEAD` for the session, so the `Stop` check also covers work the agent commits, or commits and pushes, during the turn. Silent on every path, since this event's stdout is added to the prompt. Without it, the check diffs against `HEAD`. The dispatch needs CLI 0.7.0 or later, and on an older CLI the call would run a full check on every prompt, so the hook first checks that `actual impl-check --help` names `UserPromptSubmit` and does nothing when it doesn't |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes plus untracked, non-ignored files, against the commit `turn-start.sh` recorded when the turn began, or `HEAD` when none was) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
@@ -220,8 +220,11 @@ guarantee nothing gets past it.
 ### When the hooks do nothing
 
 All three hooks are silent no-ops — no output, exit 0 — unless the repository has at
-least one `*.md` file in `.actual/rules/`. Installing the plugin therefore has no
-effect on repositories that are not governed by Actual.
+least one `*.md` file in `.actual/rules/`. The one exception is `preflight.sh`'s
+minimum-version check, which runs in every repository: on a CLI older than the plugin
+needs, it asks the agent to offer the upgrade at a natural pause, without interrupting
+the task. Otherwise installing the plugin has no effect on repositories that are not
+governed by Actual.
 
 The gates also never hard-fail. If the CLI is missing, too old, or crashes, the hook
 reports the problem and **makes no blocking decision**, leaving the turn to proceed
@@ -320,7 +323,7 @@ place that distinction is applied.
 
 | Variable | Effect |
 |----------|--------|
-| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, `turn-start.sh`, and their `preflight.sh` reminder) |
+| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, `turn-start.sh`, and `preflight.sh`, including its minimum-version check) |
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). Each hook forwards the resolved path to the CLI as `--rules-dir`; `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_TURN_START_LOG` | Path of a file `turn-start.sh` appends the CLI's output and exit status to, for diagnosing a turn-start record that is never written, or a `skipped` line when the CLI has no `UserPromptSubmit` dispatch. Unset by default, which keeps the hook fully silent; set, the hook is still silent on stdout and stderr |
@@ -471,21 +474,20 @@ The hook always invokes `actual impl-check --claude-hook --rules-dir <dir>`, sam
 
 ### Requirements
 
-`actual plan-check` and `actual impl-check` are only present in newer CLI builds
-(`impl-check` newer still — see AK-755). On an older CLI the relevant hook emits an
-upgrade message instead of a flag error — check with:
+The hooks need the `actual` CLI at the version `MIN_CLI_VERSION` names in
+`hooks/lib/bootstrap.sh`, or newer. `preflight.sh` compares `actual --version` with
+it at `SessionStart`, in every repository, and on an older CLI asks the agent to
+offer the upgrade. The command comes from `actual version --json`, which names the
+one for the channel that installed the CLI without making a network request. A CLI
+older than that subcommand gets both the npm and Homebrew commands, with a way to
+tell which one installed it, since running the other would leave a second copy on
+`PATH`. Where rules are committed the offer interrupts the task, because the gates,
+briefing and the session summary all run on the CLI; elsewhere it waits for a pause.
 
-```bash
-actual plan-check --help
-actual impl-check --help
-```
-
-`preflight.sh` probes both independently at `SessionStart` and surfaces whichever is
-missing — a CLI can have `plan-check` without `impl-check` (it shipped first), but
-not the reverse, so `plan-check`'s own upgrade guidance takes priority when neither
-is present. That SessionStart text is an instruction to the agent. `impl-gate.sh`
-does not repeat it: Stop's `systemMessage` is shown to the user and does not reach
-Claude, so a missing CLI or a CLI without `impl-check` is a one-line warning there.
+A CLI too old for `plan-check` or `impl-check` is also caught where those run: the
+relevant gate emits an upgrade message instead of a flag error. In `impl-gate.sh`
+that is a one-line warning, because Stop's `systemMessage` is shown to the user and
+does not reach Claude; the instruction to the agent is the SessionStart text above.
 
 ### The revision loop, overrides, and round limits
 

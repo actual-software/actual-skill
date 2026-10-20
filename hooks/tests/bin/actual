@@ -76,13 +76,54 @@
 # --claude-hook` reuses plan-check's own JSON renderer in the real CLI (see
 # AK-755), so the two subcommands' --claude-hook output is byte-for-byte the
 # same shape for every mode below -- this fake mirrors that.
+#
+# `actual --version` and `actual version --json`, which preflight.sh's minimum
+# version check reads, ignore the mode and answer from their own variables:
+#   ACTUAL_TEST_VERSION  what --version reports after "actual ". Unset, a
+#                        version far above any minimum the plugin declares, so
+#                        only the tests that set it reach the upgrade offer.
+#   ACTUAL_TEST_CHANNEL  unset, `version` is an unrecognized subcommand, as on
+#                        every release before it. homebrew, npm and other print
+#                        the documented object for that channel; unsafe names a
+#                        command carrying shell syntax, and escaped one spelled
+#                        with a \uXXXX escape. --check is refused outright: it
+#                        asks the npm registry, which no hook may do.
+#   ACTUAL_TEST_CALLS    a file each invocation appends its argv to, one line
+#                        per call, so tests can count spawns.
 
 set -uo pipefail
 
 mode="${ACTUAL_TEST_MODE:-allow}"
 
+if [ -n "${ACTUAL_TEST_CALLS:-}" ]; then
+  printf '%s\n' "$*" >> "$ACTUAL_TEST_CALLS"
+fi
+
 if [ "${1:-}" = "--version" ]; then
-  echo "actual 0.0.0-test"
+  echo "actual ${ACTUAL_TEST_VERSION:-99.0.0-test}"
+  exit 0
+fi
+
+if [ "${1:-}" = "version" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "--check" ]; then
+      echo "fake actual: version --check asks the npm registry" >&2
+      exit 3
+    fi
+  done
+  case "${ACTUAL_TEST_CHANNEL:-}" in
+    homebrew) channel='"homebrew"' command='"brew upgrade actual-software/actual/actual"' ;;
+    npm)      channel='"npm"' command='"npm install -g @actualai/actual@latest"' ;;
+    other)    channel='"other"' command=null ;;
+    unsafe)   channel='"homebrew"' command='"brew upgrade actual-software/actual/actual; echo injected"' ;;
+    escaped)  channel='"npm"' command='"npm install -g @actualai/actual@latest \u0026\u0026 echo injected"' ;;
+    *)
+      echo "error: unrecognized subcommand 'version'" >&2
+      exit 2 ;;
+  esac
+  # Pretty-printed, as actual-cli's own documentation shows it.
+  printf '{\n  "current_version": "%s",\n  "latest_version": null,\n  "update_available": null,\n  "channel": %s,\n  "upgrade_command": %s,\n  "release_url": "https://github.com/actual-software/actual-releases/releases/latest"\n}\n' \
+    "${ACTUAL_TEST_VERSION:-99.0.0-test}" "$channel" "$command"
   exit 0
 fi
 
