@@ -99,6 +99,38 @@ ln -s ~/.local/share/actual-skill/skills/actual ~/.agents/skills/actual
 
 </details>
 
+### Keep Actual.ai Skill up to date — Claude Code CLI
+
+Claude Code updates the plugin for you once auto-update is on for the `actual-cli-skills` marketplace. It's off by default for a third-party marketplace like this one, so turn it on once: run `/plugin`, open the **Marketplaces** tab, select `actual-cli-skills`, and choose **Enable auto-update**.
+
+The same switch in a settings file is `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry. In `~/.claude/settings.json`, add that line to the `actual-cli-skills` entry if one is already there, or add the whole entry:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "actual-cli-skills": {
+      "source": { "source": "github", "repo": "actual-software/actual-skill" },
+      "autoUpdate": true
+    }
+  }
+}
+```
+
+Re-adding the marketplace with `claude plugin marketplace add` rewrites this entry without the `autoUpdate` line, so add the line back if you do.
+
+An organization can put the same entry in its [managed settings](https://code.claude.com/docs/en/plugins/org#set-update-policy) to turn auto-update on for everyone, and setting `autoUpdate` there locks the toggle in `/plugin`.
+
+With auto-update on, Claude Code checks for a new version in the background, up to ten minutes after the first message of each interactive session. The new version loads in your next session, or straight away if you run `/reload-plugins` when Claude Code tells you the plugin was updated. Setting `DISABLE_AUTOUPDATER`, `DISABLE_UPDATES` or `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turns these background updates off unless `FORCE_AUTOUPDATE_PLUGINS=1` is set as well.
+
+To update by hand, refresh the marketplace, then update the plugin:
+
+```
+claude plugin marketplace update actual-cli-skills
+claude plugin update actual-cli@actual-cli-skills
+```
+
+Then restart Claude Code, or run `/reload-plugins` in a session that's already open. If `claude plugin update` reports that the plugin is already at the latest version, there's no newer release yet.
+
 ## Use Actual.ai Skill
 
 Once installed, ask your agent in plain language. For example:
