@@ -12,7 +12,9 @@
 # with committed rules, so the plugin stays invisible to someone who never
 # installed the CLI. The version check runs wherever the hook runs: one
 # `actual --version` compared with MIN_CLI_VERSION (lib/bootstrap.sh), which
-# catches skew whether or not a release added a subcommand.
+# catches skew whether or not a release added a subcommand. Its offer
+# interrupts the task only where rules are committed and the CLI is older than
+# GATES_MIN_CLI_VERSION, where some check is not running in full.
 #
 # Registered for startup, resume, clear, compact, and fork so the reminder is
 # restored after compaction.
@@ -44,12 +46,17 @@ fi
 
 # A version cli_version cannot read is not an old CLI, so it prompts nothing.
 installed=$(cli_version)
+offer=""
 if [ -n "$installed" ] && version_older_than "$installed" "$MIN_CLI_VERSION"; then
-  emit_sessionstart_context "$(min_version_message "$installed" "$count")"
-  exit 0
+  if [ "$count" -gt 0 ] && version_older_than "$installed" "$GATES_MIN_CLI_VERSION"; then
+    emit_sessionstart_context "$(min_version_interrupt "$installed")"
+    exit 0
+  fi
+  offer=$(min_version_offer "$installed" "$count")
 fi
 
 if [ "$count" -eq 0 ]; then
+  [ -n "$offer" ] && emit_sessionstart_context "$offer"
   exit 0
 fi
 
@@ -58,4 +65,10 @@ fi
 # survive it, so every decision briefed before the compaction stays quiet
 # afterwards while the model has lost the text. Say it again when
 # `--claude-session-start` resets that memory.
-emit_sessionstart_context "Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."
+msg="Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."
+if [ -n "$offer" ]; then
+  msg="${msg}
+
+${offer}"
+fi
+emit_sessionstart_context "$msg"

@@ -150,7 +150,7 @@ repository. They are registered automatically on install — there is no manual 
 
 | Hook | Event | What it does |
 |------|-------|--------------|
-| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight. In a repository with rules it reports whether the `actual` CLI is installed. In every repository it compares `actual --version` with the minimum the plugin declares (`MIN_CLI_VERSION` in `hooks/lib/bootstrap.sh`) and, on an older CLI, asks the agent to offer the upgrade: the command `actual version --json` names for the channel that installed it, or both the npm and Homebrew commands on a CLI too old to answer. The offer interrupts the task only where rules are committed. Re-runs after compact so the reminder survives summarization |
+| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight. In a repository with rules it reports whether the `actual` CLI is installed. In every repository it compares `actual --version` with the minimum the plugin declares (`MIN_CLI_VERSION` in `hooks/lib/bootstrap.sh`) and, on an older CLI, asks the agent to offer the upgrade: the command `actual version --json` names for the channel that installed it, or both the npm and Homebrew commands on a CLI too old to answer. The offer interrupts the task only where rules are committed and the CLI is older than `GATES_MIN_CLI_VERSION`, below which a check stops running in full. Otherwise it waits for a pause and, where rules are committed, follows the report that governance is active. Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
 | `hooks/turn-start.sh` | `UserPromptSubmit` | Marks where each turn starts: runs `actual impl-check --claude-hook`, which on a `UserPromptSubmit` envelope records `HEAD` for the session, so the `Stop` check also covers work the agent commits, or commits and pushes, during the turn. Silent on every path, since this event's stdout is added to the prompt. Without it, the check diffs against `HEAD`. The dispatch needs CLI 0.7.0 or later, and on an older CLI the call would run a full check on every prompt, so the hook first checks that `actual impl-check --help` names `UserPromptSubmit` and does nothing when it doesn't |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes plus untracked, non-ignored files, against the commit `turn-start.sh` recorded when the turn began, or `HEAD` when none was) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
@@ -481,8 +481,14 @@ offer the upgrade. The command comes from `actual version --json`, which names t
 one for the channel that installed the CLI without making a network request. A CLI
 older than that subcommand gets both the npm and Homebrew commands, with a way to
 tell which one installed it, since running the other would leave a second copy on
-`PATH`. Where rules are committed the offer interrupts the task, because the gates,
-briefing and the session summary all run on the CLI; elsewhere it waits for a pause.
+`PATH`.
+
+Where rules are committed, the offer interrupts the task only on a CLI older than
+`GATES_MIN_CLI_VERSION`, the oldest release every check runs in full on. On a CLI
+older than 0.7.0, the `Stop` check misses work committed during a turn, because
+`turn-start.sh` needs that release's `UserPromptSubmit` dispatch. A CLI between that
+floor and `MIN_CLI_VERSION` runs every check, so the agent is told governance is
+active and offers the upgrade at a pause, as it does in a repository without rules.
 
 A CLI too old for `plan-check` or `impl-check` is also caught where those run: the
 relevant gate emits an upgrade message instead of a flag error. In `impl-gate.sh`

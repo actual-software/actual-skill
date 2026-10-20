@@ -666,11 +666,10 @@ async function resolveHome($, sessionId) {
 }
 
 // Whether the installed CLI has `rules brief` at all, asked once a session
-// with `actual rules brief --help`. actual-cli v0.6.2,
-// the latest release, answers `unrecognized subcommand` with exit 2 -- and
-// without this every read in a governed repository logged a CLI ERROR row for
-// a state the person cannot do anything about mid-turn. Preflight already
-// tells the agent once to upgrade.
+// with `actual rules brief --help`. actual-cli v0.6.2 and older answer
+// `unrecognized subcommand` with exit 2 -- and without this every read in a
+// governed repository logged a CLI ERROR row for a state the person cannot do
+// anything about mid-turn. Preflight already tells the agent once to upgrade.
 //
 // Only a definite answer is kept. A probe that times out says nothing about
 // the CLI, so the next read asks again.

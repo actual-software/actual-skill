@@ -159,6 +159,13 @@ have_actual() {
 # plugin.json's version and the README's requirement.
 MIN_CLI_VERSION=0.8.0
 
+# The oldest release every check runs in full on. 0.7.0 added the
+# UserPromptSubmit dispatch turn-start.sh needs, and without it the Stop check
+# misses work committed during a turn. Below this version, in a repository with
+# rules, the upgrade offer interrupts the task (min_version_interrupt). Raise it
+# in the change that makes a check rely on a newer release.
+GATES_MIN_CLI_VERSION=0.7.0
+
 # The installed CLI's version as MAJOR.MINOR.PATCH, from `actual --version`
 # ("actual 0.8.0"). A pre-release suffix is dropped, so 0.8.0-rc.1 counts as
 # 0.8.0. Prints nothing and fails when the output names no version.
@@ -310,24 +317,20 @@ EOF
 }
 
 # Upgrade advice for a CLI older than MIN_CLI_VERSION, which preflight.sh gives
-# in every repository. $1 is the installed version and $2 the number of rule
-# files here, which decides how hard to ask.
+# in every repository at one of two strengths. $1 is the installed version.
 #
-# The interrupt-and-wait wording install_message explains is earned by a false
-# sense of safety: where rules are committed, the gates, briefing and the band
-# all run on this CLI, and the user believes they are governed. Without rules
-# nothing is being checked, and SessionStart fires again on every resume,
-# clear, compact and fork, so the same wording would stop unrelated work after
-# each compaction. There the agent offers the upgrade at a pause instead.
-min_version_message() {
-  local installed="$1" count="$2" how
+# This one is for a repository with committed rules and a CLI older than
+# GATES_MIN_CLI_VERSION. Some check there is not running in full, so the user
+# believes their work is governed when part of it is not: the false sense of
+# safety that earns install_message its interrupt-and-wait wording.
+min_version_interrupt() {
+  local installed="$1" how
   how=$(upgrade_instructions)
-  if [ "$count" -gt 0 ]; then
-    cat <<EOF
+  cat <<EOF
 Actual governance is configured for this repository (.actual/rules/ is present),
-but the installed \`actual\` CLI is ${installed} and this plugin needs ${MIN_CLI_VERSION} or
-later, so its plan and diff checks, rule briefing and session summary may not
-work as they should.
+but the installed \`actual\` CLI is ${installed} and its checks need ${GATES_MIN_CLI_VERSION} or
+later to run in full, so some of your changes can go unchecked. This plugin
+needs ${MIN_CLI_VERSION} or later.
 
 This is worth interrupting the current task for: mention it in your very next reply,
 regardless of what else is in progress. Offer to upgrade it now rather than just
@@ -341,6 +344,34 @@ ${how}
 Then verify with: actual --version. If they decline, don't run anything --
 upgrading stays optional -- but only resume the original task once they have
 actually answered either way.
+EOF
+}
+
+# The other strength, for every other CLI older than MIN_CLI_VERSION. Every
+# check runs on it, or there are no rules here to check against, so nothing it
+# lacks leaves work unchecked. SessionStart fires again on every resume, clear,
+# compact and fork, and a blocking question would stop the task after each
+# compaction over something advisory, so the agent offers the upgrade at a
+# pause. $2 is the number of rule files here. With rules, preflight.sh appends
+# this to the message that governance is active.
+min_version_offer() {
+  local installed="$1" count="$2" how
+  how=$(upgrade_instructions)
+  if [ "$count" -gt 0 ]; then
+    cat <<EOF
+The installed \`actual\` CLI is ${installed}, and the actual plugin loaded in this
+session needs ${MIN_CLI_VERSION} or later, so some of what it adds may not work as
+documented.
+
+Every check above runs on this version, so this does not need to interrupt the
+task in progress. At a natural pause, such as the end of your next reply, mention
+it once and offer to upgrade, asking with an interactive question tool (e.g.
+AskUserQuestion).
+
+${how}
+
+Then verify with: actual --version. If they decline, don't run anything --
+upgrading stays optional.
 EOF
   else
     cat <<EOF
@@ -361,7 +392,7 @@ EOF
   fi
 }
 
-# How to upgrade, for min_version_message. `actual version --json` names the
+# How to upgrade, for both messages above. `actual version --json` names the
 # command for the channel that installed this CLI, which it reads from its own
 # path. Without --check it answers from local facts, so a session start never
 # waits on the registry. A CLI older than that subcommand gets both commands,

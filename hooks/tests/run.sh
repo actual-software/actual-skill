@@ -845,22 +845,33 @@ session_context() {
   jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null
 }
 
-# The minimum is read from the library rather than repeated here, so raising it
-# needs no test change. BELOW is the nearest version under it. NUMERIC is newer
-# by number but sorts first as a string ("0.18.0" before "0.8.0"), which a
-# string comparison would get wrong.
+# The nearest version under $1.
+version_below() {
+  local major=${1%%.*} rest=${1#*.} minor patch
+  minor=${rest%%.*} patch=${rest#*.}
+  if [ "$patch" -gt 0 ]; then
+    printf '%s' "${major}.${minor}.$((patch - 1))"
+  elif [ "$minor" -gt 0 ]; then
+    printf '%s' "${major}.$((minor - 1)).99"
+  else
+    printf '%s' "$((major - 1)).99.99"
+  fi
+}
+
+# Both floors are read from the library rather than repeated here, so raising
+# either needs no test change. BELOW is the nearest version under the minimum
+# and BELOW_GATES the nearest under the release every check runs in full on.
+# NUMERIC is newer by number but sorts first as a string ("0.18.0" before
+# "0.8.0"), which a string comparison would get wrong.
 MIN=$(bash -c '. "$1" && printf "%s" "$MIN_CLI_VERSION"' _ "${HOOKS_DIR}/lib/bootstrap.sh")
+GATES=$(bash -c '. "$1" && printf "%s" "$GATES_MIN_CLI_VERSION"' _ "${HOOKS_DIR}/lib/bootstrap.sh")
+BELOW=$(version_below "$MIN")
+BELOW_GATES=$(version_below "$GATES")
 min_major=${MIN%%.*} min_rest=${MIN#*.}
-min_minor=${min_rest%%.*} min_patch=${min_rest#*.}
-if [ "$min_patch" -gt 0 ]; then
-  BELOW="${min_major}.${min_minor}.$((min_patch - 1))"
-elif [ "$min_minor" -gt 0 ]; then
-  BELOW="${min_major}.$((min_minor - 1)).99"
-else
-  BELOW="$((min_major - 1)).99.99"
-fi
+min_minor=${min_rest%%.*}
 NUMERIC="${min_major}.$((min_minor + 10)).0"
 CALLS="${WORK}/calls"
+INTERRUPT='worth interrupting|do not continue this task|regardless of what else is in progress'
 
 for v in "$MIN" "$NUMERIC" "${MIN}-rc.1" "unreadable"; do
   st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$v")
@@ -889,27 +900,28 @@ else
 fi
 
 rm -f "$CALLS"
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CALLS="$CALLS")
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES" ACTUAL_TEST_CALLS="$CALLS")
 ctx=$(session_context)
 if [ "$st" = "0" ] \
-   && printf '%s' "$ctx" | grep -qF "CLI is ${BELOW} " \
+   && printf '%s' "$ctx" | grep -qF "CLI is ${BELOW_GATES} " \
+   && printf '%s' "$ctx" | grep -qF "need ${GATES} or" \
    && printf '%s' "$ctx" | grep -qF "needs ${MIN} or" \
    && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
    && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual" \
    && printf '%s' "$ctx" | grep -q "second copy" \
    && ! printf '%s' "$ctx" | grep -q "governance is active"; then
-  pass "rules + CLI below the minimum and older than \`version\`: both versions, both commands, how to tell which applies, no claim that governance is active"
+  pass "rules + CLI below ${GATES} and older than \`version\`: all three versions, both commands, how to tell which applies, no claim that governance is active"
 else
-  fail "below-minimum preflight wrong" "status=$st ctx=$ctx"
+  fail "below-gates preflight wrong" "status=$st ctx=$ctx"
 fi
 
 if printf '%s' "$ctx" | grep -q "Offer to upgrade it now" \
    && printf '%s' "$ctx" | grep -q "regardless of what else is in progress" \
    && printf '%s' "$ctx" | grep -q "ask using an interactive question tool" \
    && printf '%s' "$ctx" | grep -q "does not satisfy this"; then
-  pass "rules + CLI below the minimum: interrupts the task and waits for an answer, like the install offer"
+  pass "rules + CLI below ${GATES}: interrupts the task and waits for an answer, like the install offer"
 else
-  fail "below-minimum offer in a governed repo lost the interrupt-and-wait wording" "$ctx"
+  fail "below-gates offer in a governed repo lost the interrupt-and-wait wording" "$ctx"
 fi
 
 if [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
@@ -917,6 +929,28 @@ if [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" 
 else
   fail "below-minimum preflight made the wrong CLI calls" "calls=$(cat "$CALLS" 2>/dev/null)"
 fi
+
+# From GATES up to the minimum every check runs, so a governed repository keeps
+# the message that governance is active, and the offer after it waits for a
+# pause, since SessionStart repeats it after every compaction.
+for v in "$GATES" "$BELOW"; do
+  rm -f "$CALLS"
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$v" ACTUAL_TEST_CALLS="$CALLS")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] \
+     && [ "${ctx#Actual plan- and implementation-stage governance is active: 1 rule file}" != "$ctx" ] \
+     && printf '%s' "$ctx" | grep -qF "CLI is ${v}," \
+     && printf '%s' "$ctx" | grep -qF "needs ${MIN} or" \
+     && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+     && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual" \
+     && printf '%s' "$ctx" | grep -q "AskUserQuestion" \
+     && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT" \
+     && [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
+    pass "rules + CLI reporting ${v}: governance active, then the upgrade offer at a pause, without interrupting the task"
+  else
+    fail "rules + CLI reporting ${v}: expected governance active and an offer at a pause" "status=$st ctx=$ctx calls=$(cat "$CALLS" 2>/dev/null)"
+  fi
+done
 
 for channel in homebrew npm; do
   if [ "$channel" = homebrew ]; then
@@ -958,18 +992,20 @@ for channel in unsafe escaped; do
   fi
 done
 
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$BELOW")
-ctx=$(session_context)
-if [ "$st" = "0" ] \
-   && printf '%s' "$ctx" | grep -qF "CLI is ${BELOW}," \
-   && printf '%s' "$ctx" | grep -qF "needs ${MIN} or" \
-   && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
-   && printf '%s' "$ctx" | grep -q "AskUserQuestion" \
-   && ! printf '%s' "$ctx" | grep -qE "worth interrupting|do not continue this task|regardless of what else is in progress"; then
-  pass "no rules + CLI below the minimum: offers the upgrade, without interrupting the task in progress"
-else
-  fail "no-rules below-minimum preflight wrong" "status=$st ctx=$ctx"
-fi
+for v in "$BELOW" "$BELOW_GATES"; do
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$v")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] \
+     && printf '%s' "$ctx" | grep -qF "CLI is ${v}," \
+     && printf '%s' "$ctx" | grep -qF "needs ${MIN} or" \
+     && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+     && printf '%s' "$ctx" | grep -q "AskUserQuestion" \
+     && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT"; then
+    pass "no rules + CLI reporting ${v}: offers the upgrade, without interrupting the task in progress"
+  else
+    fail "no rules + CLI reporting ${v}: expected an offer at a pause" "status=$st ctx=$ctx"
+  fi
+done
 
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_PLAN_GATE=off)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
