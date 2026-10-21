@@ -723,10 +723,8 @@ async function adrV2Unsupported($, sessionId, rulesDir) {
   if (!rulesAreV2.has(key)) {
     let v2 = false;
     try {
-      const entries = (await $.fs.list(rulesDir)) ?? [];
-      const files = entries.filter((entry) => entry.name.endsWith('.md')).map((entry) => `${rulesDir}/${entry.name}`);
-      for (const file of files) {
-        const text = String(await $.fs.read(file));
+      for (const name of ruleFileNames.get(rulesDir) ?? []) {
+        const text = String(await $.fs.read(`${rulesDir}/${name}`));
         if (text.split('\n', 1)[0].replace(/\r$/, '') === '---') {
           v2 = true;
           break;
@@ -798,8 +796,14 @@ async function governedRulesDir($, sessionId, cwd) {
   } catch {
     return null;
   }
-  return (entries ?? []).some((entry) => entry.name.endsWith('.md')) ? rulesDir : null;
+  const names = (entries ?? []).map((entry) => entry.name).filter((name) => name.endsWith('.md'));
+  ruleFileNames.set(rulesDir, names);
+  return names.length ? rulesDir : null;
 }
+
+// The rule files governedRulesDir last saw in each directory, so the ADR header
+// v2 check reads them without listing the directory a second time.
+const ruleFileNames = new Map();
 
 // Which keys exist, and the CLI flag each one forwards to. maxSessionChars has
 // no flag: it is this mod's own budget, enforced here, not something the CLI
