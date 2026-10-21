@@ -685,6 +685,11 @@ const briefReadsV2 = new Map();
 // the listing signature the answer was made under.
 const rulesAreV2 = new Map();
 
+// The rule files governedRulesDir last saw in each directory, and a signature of
+// their names, sizes and mtimes, so the ADR header v2 check reads them without
+// listing the directory a second time and knows when its answer has gone stale.
+const ruleFileListing = new Map();
+
 async function rulesBriefAvailable($, sessionId, cwd) {
   if (briefAvailable.has(sessionId)) return briefAvailable.get(sessionId);
   let ok = false;
@@ -828,11 +833,6 @@ async function governedRulesDir($, sessionId, cwd) {
   return names.length ? rulesDir : null;
 }
 
-// The rule files governedRulesDir last saw in each directory, and a signature of
-// their names, sizes and mtimes, so the ADR header v2 check reads them without
-// listing the directory a second time and knows when its answer has gone stale.
-const ruleFileListing = new Map();
-
 // Which keys exist, and the CLI flag each one forwards to. maxSessionChars has
 // no flag: it is this mod's own budget, enforced here, not something the CLI
 // knows about.
@@ -960,6 +960,8 @@ async function deliverBrief($, e, result, paths, ctx) {
     // Once a session, as the budget row is: the state holds for every later read.
     if (!v2Announced.has(sessionId)) {
       v2Announced.add(sessionId);
+      // 0.9.0 is ADR_V2_MIN_CLI in lib/bootstrap.sh, which the shell messages share;
+      // a bash variable cannot reach this file, so change both together.
       $.ui.log(row('OLD CLI', 'rules use ADR header v2; upgrade actual to 0.9.0+ for briefs'));
     }
     return withContext(result, await debugNote($, 'not briefed', 'the rule files use ADR header v2, which this CLI cannot read'));
@@ -1143,7 +1145,7 @@ const OUTCOME_LABELS = {
   budget: 'budget   ',
   'cli-error': 'error    ',
   'no-cli': 'old CLI   ',
-  'v2-cli-old': 'old CLI v2',
+  'v2-cli-old': 'v2 unread',
   unresolved: 'no match ',
   'no-paths': 'no path  ',
   'not-read-only': 'writes   ',

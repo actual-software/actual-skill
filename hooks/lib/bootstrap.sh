@@ -293,6 +293,11 @@ have_turn_start() {
   return 1
 }
 
+# The first CLI release that reads ADR header v2. User-facing text says it in one
+# place; register.js repeats the number in its own OLD CLI line and must be kept
+# in step by hand.
+ADR_V2_MIN_CLI=0.9.0
+
 # ADR header v2 (a YAML header at the top of a rule file) is read by the CLI, not
 # by this plugin, and a CLI that predates it reads such a file as a flat v1
 # document: wrong scope, wrong briefs, nothing said. There is no flag to probe, so
@@ -579,10 +584,11 @@ EOF
 # are governed when they are not. The gates stand down on this path (see
 # adr_v2_unsupported), so nothing is checked until the CLI is upgraded.
 adr_v2_upgrade_message() {
-  cat <<'EOF'
+  local msg
+  msg=$(cat <<'EOF'
 Actual governance is configured for this repository, and its .actual/rules/ files
 use the ADR header v2 format (a YAML header at the top of each file), but the
-installed `actual` CLI is too old to read it (it needs 0.9.0 or newer). Plans and
+installed `actual` CLI is too old to read it (it needs @MIN_CLI@ or newer). Plans and
 changes are not being checked against these rules, and rule briefing is off, until
 the CLI is upgraded.
 
@@ -601,13 +607,15 @@ Then verify with: actual rules brief --help (it should name adr-header-v2). If t
 decline, don't run anything -- upgrading stays optional -- but only resume the
 original task once they have actually answered either way.
 EOF
+)
+  printf '%s\n' "${msg//@MIN_CLI@/$ADR_V2_MIN_CLI}"
 }
 
 # One line, for the places the full message above does not fit: a PreToolUse
 # notice and Stop's user-facing systemMessage, both repeated on every plan and
 # every turn. What failed and the command that fixes it.
 adr_v2_standdown_notice() {
-  printf '%s' "Actual governance stood down: .actual/rules/ uses the ADR header v2 format, which the installed \`actual\` CLI is too old to read (needs 0.9.0+), so $1. Upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\`."
+  printf '%s' "Actual governance stood down: .actual/rules/ uses the ADR header v2 format, which the installed \`actual\` CLI is too old to read (needs ${ADR_V2_MIN_CLI}+), so $1. Upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\`."
 }
 
 # For a CLI from GATES_MIN_CLI_VERSION up to MIN_CLI_VERSION. Every check runs

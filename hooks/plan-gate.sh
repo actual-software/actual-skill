@@ -35,7 +35,11 @@ fi
 
 # 3. No committed rules means nothing to govern. Silent no-op -- no output at all --
 #    so installing the plugin is invisible in unrelated repositories.
-if ! rules_present; then
+#    The rules directory is resolved once, here, and reused by 4b and 5: it
+#    spawns `git rev-parse`, and it must be resolved BEFORE the cd below, because
+#    root resolution reads cwd (see resolve_repo_root).
+dir=$(rules_dir)
+if ! rules_present "$dir"; then
   exit 0
 fi
 
@@ -48,7 +52,7 @@ fi
 # 4b. Rules written in the ADR header v2 format that this CLI cannot read: it
 #     would score the plan against the wrong scope without saying so. Stand down
 #     with a one-line notice -- fail open, as for every other condition here.
-if adr_v2_unsupported "$(rules_dir)"; then
+if adr_v2_unsupported "$dir"; then
   emit_pretooluse_notice "$(adr_v2_standdown_notice 'this plan was not checked against them')"
   exit 0
 fi
@@ -58,13 +62,10 @@ fi
 #    (4b above reads the cached ADR v2 answer, not a fresh probe.) An old CLI's
 #    unknown-subcommand exit 2 is classified below as upgrade + fail-open, not deny.
 #    Pass --rules-dir so the CLI scores the same directory this hook just checked,
-#    including ACTUAL_RULES_DIR. Resolve that directory BEFORE the cd: root
-#    resolution reads cwd (see resolve_repo_root), so moving first would ask the
-#    question from a different place than rules_present answered it.
+#    including ACTUAL_RULES_DIR: `dir` is the one rules_present and 4b answered
+#    for, resolved before the cd so a move cannot change the question.
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-plan-gate.XXXXXX") || exit 0
 trap 'rm -f "$stderr_file"' EXIT
-
-dir=$(rules_dir)
 
 # cd to the repo root for any other cwd-relative CLI discovery.
 repo_root=$(resolve_repo_root)

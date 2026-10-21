@@ -1919,7 +1919,7 @@ test('v2 rule files and a CLI without the marker are not briefed', async (fire: 
   expect(r.result.stdout).toBe('TOOL OUTPUT');
   // The pane records it as its own outcome, not as a missing CLI.
   const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
-  expect(drawn).toContain('old CLI v2');
+  expect(drawn).toContain('v2 unread');
 });
 
 test('the OLD CLI line is logged once a session, not once a read', async (fire: any, on: any) => {
