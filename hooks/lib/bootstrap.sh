@@ -3,7 +3,8 @@
 #
 # Sourced by all four hooks: plan-gate.sh (PreToolUse:ExitPlanMode),
 # impl-gate.sh (Stop), rules-brief.sh (PostToolUse:Read, PreToolUse:Edit|Write) and preflight.sh
-# (SessionStart). Read-only: never modifies files, config, or state.
+# (SessionStart). Never modifies the repository, config, or settings; the one thing it
+# writes is the capability cache under ~/.cache/actual-skill (see have_adr_v2).
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
 # beyond bash builtins, `command`, `git`, and the POSIX `cat`, `mktemp`, `sleep`
@@ -299,13 +300,58 @@ have_turn_start() {
 # names the capability marker `adr-header-v2` (actual-cli 0.9.0, AK-962). The
 # marker is an agreed literal, not a version comparison: it is true for exactly
 # the builds that parse the header.
+#
+# The answer is a property of the installed binary, so it is cached on disk, keyed
+# by the binary's path, instead of re-spawning the CLI on every Read, prompt, Stop
+# and plan exit of a v2 repository. An entry is valid only while it is newer than
+# the binary (`-nt`, a builtin: a hit spawns nothing), so an upgrade in place
+# invalidates it by itself. Two things bound the cases that test cannot see, such
+# as a binary swapped in with an older preserved mtime: preflight passes `refresh`
+# and re-probes at every SessionStart, so a stale entry lives at most one session,
+# and only a definite answer is stored. A cache that cannot be read or written is
+# a miss, never an error: the probe runs and the hook proceeds.
+adr_v2_cache_file() {
+  local base="${ACTUAL_HOOK_CACHE_DIR:-}" bin
+  if [ -z "$base" ]; then
+    [ -n "${XDG_CACHE_HOME:-${HOME:-}}" ] || return 1
+    base="${XDG_CACHE_HOME:-$HOME/.cache}/actual-skill"
+  fi
+  bin=$(command -v actual) || return 1
+  [ -n "$bin" ] || return 1
+  printf '%s/adr-v2-%s' "$base" "${bin//\//_}"
+}
+
+# $1 = refresh skips the read and rewrites the entry. Returns 0 when the CLI names
+# the marker, 1 when it does not or cannot be asked.
 have_adr_v2() {
-  local help
+  local file bin help verdict
+  file=$(adr_v2_cache_file) || file=""
+  if [ -n "$file" ] && [ "${1:-}" != refresh ]; then
+    bin=$(command -v actual)
+    if [ -f "$file" ] && [ "$file" -nt "$bin" ]; then
+      verdict=
+      IFS= read -r verdict <"$file" || true
+      case "$verdict" in
+        supported) return 0 ;;
+        unsupported) return 1 ;;
+      esac
+    fi
+  fi
+  # No entry, or not a usable one. A failed spawn says nothing about the CLI, so
+  # it is not stored.
   help=$(actual rules brief --help 2>/dev/null) || return 1
   case "$help" in
-    *adr-header-v2*) return 0 ;;
+    *adr-header-v2*) verdict=supported ;;
+    *) verdict=unsupported ;;
   esac
-  return 1
+  if [ -n "$file" ]; then
+    # Owner-only directory, atomic replace: best effort, every failure ignored.
+    local dir="${file%/*}" tmp="$file.$$"
+    { mkdir -p "$dir" && chmod 700 "$dir" 2>/dev/null; [ -O "$dir" ] \
+      && printf '%s\n' "$verdict" >"$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null \
+      || rm -f "$tmp" 2>/dev/null
+  fi
+  [ "$verdict" = supported ]
 }
 
 # True when any rule file in the directory opens with a `---` line, which is what
@@ -331,7 +377,7 @@ rules_have_v2_header() {
 # have_actual, because the probe spawns it. The cheap file check goes first so a
 # v1 repository never spawns the probe.
 adr_v2_unsupported() {
-  rules_have_v2_header "$1" && ! have_adr_v2
+  rules_have_v2_header "$1" && ! have_adr_v2 "${2:-}"
 }
 
 # --- Operator-facing messages ---

@@ -64,10 +64,14 @@ run_hook() {
   shift 3
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
+  # The fake CLI changes answer by env var on one unchanged binary, which a
+  # per-binary cache cannot see, so every run starts cold unless it pins a cache.
+  [ -n "${KEEP_CACHE:-}" ] || rm -rf "${WORK}/cache"
   ( cd "$workdir" || exit 1
     env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
+        ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
         "$@" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
@@ -97,10 +101,12 @@ run_hook_cwd() {
   local script="$1" payload="$2" project_dir="$3" workdir="$4"
   shift 4
   local status
+  [ -n "${KEEP_CACHE:-}" ] || rm -rf "${WORK}/cache"
   ( cd "$workdir" || exit 1
     env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
+        ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
         "$@" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
@@ -1972,6 +1978,50 @@ for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF"; do
     fi
   done
 done
+
+echo
+echo "=== ADR header v2: per-binary capability cache ==="
+# One cold run writes the answer; later hooks read it without spawning the CLI;
+# preflight re-probes; an upgraded binary (newer than the entry) invalidates it.
+CACHE_FILE_GLOB="${WORK}/cache/adr-v2-*"
+cap="${WORK}/cache-capture"
+# Capture file records every spawn argv, so count --help spawns via a wrapper log.
+HELP_LOG="${WORK}/help-spawns"; rm -f "$HELP_LOG"
+CACHE_BIN="${WORK}/cache-bin"; mkdir -p "$CACHE_BIN"
+cat > "${CACHE_BIN}/actual" <<EOF2
+#!/usr/bin/env bash
+[ "\${2:-}" = brief ] && [ "\${3:-}" = --help ] && echo spawn >> "$HELP_LOG"
+exec "${TESTS_DIR}/bin/actual" "\$@"
+EOF2
+chmod +x "${CACHE_BIN}/actual"; touch -t 202001010000 "${CACHE_BIN}/actual"
+spawns() { [ -f "$HELP_LOG" ] && wc -l < "$HELP_LOG" | tr -d ' ' || printf 0; }
+rm -rf "${WORK}/cache"
+for i in 1 2 3; do
+  KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
+done
+if [ "$(spawns)" = 1 ] && [ "$(cat ${CACHE_FILE_GLOB} 2>/dev/null)" = supported ]; then
+  pass "three hook runs in a v2 repo spawn the probe once; the answer is cached"
+else
+  fail "expected one probe and a cached 'supported'" "spawns=$(spawns) cache=$(cat ${CACHE_FILE_GLOB} 2>/dev/null)"
+fi
+# preflight refreshes: a wrong warm entry is overwritten by the session's probe.
+echo unsupported > ${CACHE_FILE_GLOB}
+KEEP_CACHE=1 run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" >/dev/null
+if [ "$(cat ${CACHE_FILE_GLOB})" = supported ]; then pass "preflight re-probes (refresh) even with a warm cache"; else fail "preflight should refresh the cache" "cache=$(cat ${CACHE_FILE_GLOB})"; fi
+# An upgraded binary is newer than the entry: the next hook probes again.
+before=$(spawns)
+touch -t 203001010000 "${CACHE_BIN}/actual"
+KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
+if [ "$(spawns)" -gt "$before" ]; then pass "a binary newer than the entry invalidates it"; else fail "expected a re-probe after the binary changed" "spawns=$(spawns)"; fi
+# A v1 repository never probes, cached or not.
+rm -f "$HELP_LOG"
+KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_WITH_RULES" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
+if [ "$(spawns)" = 0 ]; then pass "a v1 repository spawns no probe"; else fail "v1 repo should not probe" "spawns=$(spawns)"; fi
+# Garbage in the entry is a miss, not an error.
+echo garbage > ${CACHE_FILE_GLOB}
+KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
+if [ "$(cat ${CACHE_FILE_GLOB})" = supported ]; then pass "an unreadable entry is a miss and is rewritten"; else fail "expected garbage to be re-probed" "cache=$(cat ${CACHE_FILE_GLOB})"; fi
+rm -rf "${WORK}/cache"
 
 echo
 echo "=== Summary ==="

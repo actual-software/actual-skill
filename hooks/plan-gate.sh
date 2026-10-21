@@ -55,8 +55,8 @@ fi
 
 # 5. Delegate. Do not probe `plan-check --help` here: SessionStart already
 #    checked the CLI's version, and a probe is wasted work on the plan boundary.
-#    An old CLI's unknown-subcommand exit 2 is classified below as upgrade +
-#    fail-open, not deny.
+#    (4b above reads the cached ADR v2 answer, not a fresh probe.) An old CLI's
+#    unknown-subcommand exit 2 is classified below as upgrade + fail-open, not deny.
 #    Pass --rules-dir so the CLI scores the same directory this hook just checked,
 #    including ACTUAL_RULES_DIR. Resolve that directory BEFORE the cd: root
 #    resolution reads cwd (see resolve_repo_root), so moving first would ask the
