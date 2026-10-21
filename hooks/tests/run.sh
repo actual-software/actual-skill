@@ -1968,12 +1968,17 @@ for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF"; do
       else
         fail "rules-brief ($label, $cli CLI): expected a silent stand-down" "status=$st stdout=$(cat "${WORK}/out")"
       fi
-    elif [ "$label" = v2 ] || [ "$label" = v1 ]; then
-      # The governed path in the fake CLI is /src/persistence/ under REPO_WITH_RULES.
-      if [ "$st" = "0" ] && { [ "$label" = v2 ] || jq -e '.hookSpecificOutput.additionalContext' "${WORK}/out" >/dev/null 2>&1; } && [ -e "${cap}.argv" ]; then
-        pass "rules-brief ($label, $cli CLI): the CLI is asked for a brief as before"
+    else
+      # Every repository, CRLF header included, gets the brief back from a CLI
+      # that names the marker. The fake CLI answers for any payload naming
+      # /src/persistence/, so one payload serves all three repos. Asserting the
+      # brief itself, not just that the CLI was asked: a hook that spawned it and
+      # then dropped the reply would otherwise pass.
+      if [ "$st" = "0" ] && [ -e "${cap}.argv" ] \
+         && [ "$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)" = "R-001 MUST: all persistence goes through the repository layer." ]; then
+        pass "rules-brief ($label, $cli CLI): the brief comes back, as before"
       else
-        fail "rules-brief ($label, $cli CLI): expected the CLI to be called" "status=$st stdout=$(cat "${WORK}/out")"
+        fail "rules-brief ($label, $cli CLI): expected the brief to be delivered" "status=$st stdout=$(cat "${WORK}/out")"
       fi
     fi
   done

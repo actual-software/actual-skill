@@ -55,6 +55,22 @@ function harness(
     liveShell?: boolean;
     // What `actual rules brief --help` exits with. Default 0.
     helpExit?: number;
+    // What it prints. Default: a current CLI, which names the ADR header v2
+    // marker (actual-cli 0.9.0), so only a test about v2 has to say anything.
+    helpStdout?: string;
+    // What $.fs.read returns for each rule file, by entry name: one string for
+    // all of them, or a map. Default: a v1 file, which opens with a `# ` title.
+    ruleText?: string | Record<string, string>;
+    // Collects every $.fs.read path, so a test can see the files left unread.
+    reads?: string[];
+    // $.fs.read rejects, as it does for a file the process may not open.
+    readFails?: boolean;
+    // The `--help` probe rejects instead of returning, as it does past its
+    // timeout. Receives the probe's 1-based ordinal; return true to reject it.
+    rejectHelp?: (n: number) => boolean;
+    // $.session.id. Default 'sess-1'. A test that asserts a once-per-session
+    // message names its own, so no other test's announcement can have spent it.
+    sessionId?: string;
     // `process.run` rejects instead of returning, as it does past `timeoutMs`.
     // Receives the brief spawn's 1-based ordinal; return true to reject it.
     rejectBrief?: (n: number) => boolean;
@@ -79,7 +95,7 @@ function harness(
   let shellDir = opts.cwd ?? '/repo';
   on('session.cwd', async () => ({ value: shellDir }));
   on('session.root', async () => ({ value: opts.root ?? '/repo' }));
-  on('session.id', async () => ({ value: 'sess-1' }));
+  on('session.id', async () => ({ value: opts.sessionId ?? 'sess-1' }));
   on('session.usage', async () => ({
     value: { context: { tokens: 1000, window: 200000, percent: 1 } },
   }));
@@ -101,6 +117,13 @@ function harness(
     if (opts.rules === null) throw new Error(`ENOENT: ${e.path}`);
     const names = opts.rules ?? ['R-001.md'];
     return { value: names.map((name) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) };
+  });
+  on('fs.read', async (_$: any, e: any) => {
+    opts.reads?.push(e.path);
+    if (opts.readFails) throw new Error(`EACCES: ${e.path}`);
+    if (typeof opts.ruleText === 'string') return { value: opts.ruleText };
+    const name = String(e.path).split('/').pop() as string;
+    return { value: opts.ruleText?.[name] ?? '# Persistence\n' };
   });
   // Shaped like a real Bash tool result, probed from a live session: `text`
   // is the string Claude reads, `result` is a structured object, and
@@ -132,11 +155,14 @@ function harness(
           isReadOnly: true,
         });
   let briefSpawns = 0;
+  let helpSpawns = 0;
   on('process.run', async (_$: any, e: any) => {
     opts.spawns?.push(e);
     // The once-a-session probe for the subcommand is not a brief either.
     if (e.argv?.includes('--help')) {
-      return { value: { exitCode: opts.helpExit ?? 0, stdout: '', stderr: '' } };
+      if (opts.rejectHelp?.(++helpSpawns)) throw new Error('timed out');
+      const stdout = opts.helpStdout ?? 'Usage: actual rules brief\nCapability marker: adr-header-v2\n';
+      return { value: { exitCode: opts.helpExit ?? 0, stdout, stderr: '' } };
     }
     // The repo-root query is not a brief; answer it without recording a run.
     if (e.argv?.[0] === 'git') {
@@ -1860,6 +1886,143 @@ test('a CLI without rules brief is probed once and spawned never', async (fire: 
   expect(logs.filter((l) => l.includes('CLI ERROR'))).toEqual([]);
   expect(briefed(r)).toBe('');
   expect(spawns.filter((s) => s.argv.includes('--help')).length).toBe(1);
+});
+
+// --- ADR header v2 (AK-963): the mod's mirror of bootstrap.sh's version gate ---
+//
+// The shell hooks and this mod each decide "v2 rule files, CLI too old to read
+// them" on their own, so each side needs its own tests; the shell ones live in
+// hooks/tests/run.sh. Each test names its own session, because the probe and the
+// file check are cached per session.
+const V2_FILE = '---\nadr_id: persistence\nroot: .\n---\n# Persistence\n';
+const OLD_CLI_HELP = 'Usage: actual rules brief\n';
+const V2_DEBUG = { ACTUAL_HOOK_DEBUG: '1' };
+
+test('v2 rule files and a CLI without the marker are not briefed', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  const runs = harness(on, {
+    sessionId: 'v2-old-1', logs, env: V2_DEBUG, helpStdout: OLD_CLI_HELP, ruleText: V2_FILE,
+  });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v2o_1' });
+
+  // No brief is requested, and nothing from a flat read of the v2 file reaches
+  // the model; the debug note says why.
+  expect(runs.length).toBe(0);
+  expect(briefed(r)).toContain('the rule files use ADR header v2, which this CLI cannot read');
+  expect(briefed(r)).not.toContain(BRIEF);
+  expect(r.result.stdout).toBe('TOOL OUTPUT');
+  // The pane records it as its own outcome, not as a missing CLI.
+  const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  expect(drawn).toContain('old CLI v2');
+});
+
+test('the OLD CLI line is logged once a session, not once a read', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  harness(on, { sessionId: 'v2-old-2', logs, helpStdout: OLD_CLI_HELP, ruleText: V2_FILE });
+
+  for (const n of [1, 2, 3]) {
+    await fire.tool.call({ tool: 'Bash', command: `cat src/f${n}.ts`, tool_use_id: `v2a_${n}` });
+  }
+  await fire.tool.call({ tool: 'Read', file_path: '/repo/src/g.ts', tool_use_id: 'v2a_4' });
+
+  const old = logs.filter((l) => l.includes('OLD CLI'));
+  expect(old.length).toBe(1);
+  expect(old[0]).toContain('0.9.0');
+});
+
+test('a CLI that names the marker briefs v2 rule files, and the files are not read', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  const reads: string[] = [];
+  const runs = harness(on, { sessionId: 'v2-new-1', logs, reads, ruleText: V2_FILE });
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v2n_1' });
+
+  expect(runs.length).toBe(1);
+  expect(briefed(r)).toBe(BRIEF);
+  expect(logs.filter((l) => l.includes('OLD CLI'))).toEqual([]);
+  // The marker answers the question; a current CLI never pays for the read.
+  expect(reads).toEqual([]);
+});
+
+test('v1 rule files and a CLI without the marker are briefed as before', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  const reads: string[] = [];
+  const runs = harness(on, {
+    sessionId: 'v1-old-1', logs, reads, helpStdout: OLD_CLI_HELP, ruleText: '# Persistence\n',
+  });
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v1o_1' });
+
+  expect(runs.length).toBe(1);
+  expect(briefed(r)).toBe(BRIEF);
+  expect(logs.filter((l) => l.includes('OLD CLI'))).toEqual([]);
+  // Only the first line of each rule file is looked at, one file at a time.
+  expect(reads).toEqual(['/repo/.actual/rules/R-001.md']);
+});
+
+test('a CRLF header line is still a v2 header', async (fire: any, on: any) => {
+  const runs = harness(on, {
+    sessionId: 'v2-crlf-1', helpStdout: OLD_CLI_HELP, ruleText: '---\r\nadr_id: persistence\r\n---\r\n# Persistence\r\n',
+  });
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v2c_1' });
+
+  expect(runs.length).toBe(0);
+  expect(briefed(r)).toBe('');
+});
+
+test('one v2 rule file among v1 files is enough', async (fire: any, on: any) => {
+  const reads: string[] = [];
+  const runs = harness(on, {
+    sessionId: 'v2-mixed-1', helpStdout: OLD_CLI_HELP, reads,
+    rules: ['a.md', 'b.md', 'c.md'],
+    ruleText: { 'a.md': '# A\n', 'b.md': V2_FILE, 'c.md': '# C\n' },
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v2m_1' });
+
+  expect(runs.length).toBe(0);
+  // Stops at the first hit rather than reading every file.
+  expect(reads).toEqual(['/repo/.actual/rules/a.md', '/repo/.actual/rules/b.md']);
+});
+
+test('the rule files are read once a session, not once a read', async (fire: any, on: any) => {
+  const reads: string[] = [];
+  harness(on, { sessionId: 'v2-cache-1', helpStdout: OLD_CLI_HELP, reads, ruleText: V2_FILE });
+
+  for (const n of [1, 2, 3]) {
+    await fire.tool.call({ tool: 'Bash', command: `cat src/f${n}.ts`, tool_use_id: `v2k_${n}` });
+  }
+
+  expect(reads.length).toBe(1);
+});
+
+test('rule files that cannot be read are treated as v1, not as an error', async (fire: any, on: any) => {
+  const logs: string[] = [];
+  const runs = harness(on, { sessionId: 'v2-eio-1', logs, helpStdout: OLD_CLI_HELP, readFails: true });
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v2e_1' });
+
+  expect(runs.length).toBe(1);
+  expect(briefed(r)).toBe(BRIEF);
+  expect(logs.filter((l) => l.includes('OLD CLI') || l.includes('CLI ERROR'))).toEqual([]);
+});
+
+test('a probe that times out is not remembered as an old CLI', async (fire: any, on: any) => {
+  // `process.run` rejects past its timeout, which says nothing about the CLI.
+  // Caching it as "no marker" would stand the mod down for the whole session.
+  const logs: string[] = [];
+  const runs = harness(on, { sessionId: 'v2-timeout-1', logs, ruleText: V2_FILE, rejectHelp: (n) => n === 1 });
+
+  const first = await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'v2t_1' });
+  const second = await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts', tool_use_id: 'v2t_2' });
+
+  expect(briefed(first)).toBe('');
+  expect(briefed(second)).toBe(BRIEF);
+  expect(runs.length).toBe(1);
+  expect(logs.filter((l) => l.includes('OLD CLI'))).toEqual([]);
 });
 
 test('a spawn that rejects is a CLI error, and an earlier brief survives', async (fire: any, on: any) => {
