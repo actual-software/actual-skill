@@ -127,6 +127,13 @@ if ! rules_present "$dir" || ! have_actual; then
   exit 0
 fi
 
+# ADR header v2 rule files this CLI cannot read: a brief built from them would be
+# wrong, and a notice here would repeat on every Read. Silent, like an old CLI
+# without `rules brief`; preflight told the agent once and the gates say it again.
+if adr_v2_unsupported "$dir"; then
+  exit 0
+fi
+
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-rules-brief.XXXXXX") || exit 0
 trap 'rm -f "$stderr_file"' EXIT
 

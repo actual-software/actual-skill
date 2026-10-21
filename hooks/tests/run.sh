@@ -1858,6 +1858,121 @@ for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/p
   if [ -x "$f" ]; then pass "$(basename "$f") is executable"; else fail "$(basename "$f") is not executable" ""; fi
 done
 
+echo "=== ADR header v2: version gate (AK-963) ==="
+
+# {v1 files, v2 files} x {old CLI, current CLI}. Only (v2, old) changes anything.
+REPO_V2="${WORK}/with-rules-v2"
+mkdir -p "${REPO_V2}/.actual/rules"
+git -C "${REPO_V2}" init -q
+printf -- '---\nadr_id: persistence\nroot: .\npaths:\n  - "src/persistence/**"\n---\n# Persistence\n\n### Rules\n**R-001** MUST: all persistence goes through the repository layer.\n' \
+  > "${REPO_V2}/.actual/rules/persistence.md"
+# CRLF line endings must not hide the header.
+REPO_V2_CRLF="${WORK}/with-rules-v2-crlf"
+mkdir -p "${REPO_V2_CRLF}/.actual/rules"
+git -C "${REPO_V2_CRLF}" init -q
+printf -- '---\r\nadr_id: persistence\r\n---\r\n# Persistence\r\n' > "${REPO_V2_CRLF}/.actual/rules/persistence.md"
+
+V2_PLAN="${RESOLVED}/pretooluse-plan-file.json"
+V2_STOP="${RESOLVED}/stop-turn.json"
+
+for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF"; do
+  label=${pair%%:*}; repo=${pair#*:}
+  for cli in current old; do
+    mode=allow; [ "$cli" = old ] && mode=no-adr-v2
+    expect_notice=0; [ "$label" != v1 ] && [ "$cli" = old ] && expect_notice=1
+
+    # SessionStart: the upgrade message replaces the success message.
+    st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$repo" ACTUAL_TEST_MODE="$mode")
+    ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -q "ADR header v2" && printf '%s' "$ctx" | grep -q "0.9.0" \
+         && printf '%s' "$ctx" | grep -q "AskUserQuestion" && ! printf '%s' "$ctx" | grep -q "governance is active"; then
+        pass "preflight ($label, $cli CLI): upgrade message, no success message"
+      else
+        fail "preflight ($label, $cli CLI): expected the v2 upgrade message" "status=$st ctx=$ctx"
+      fi
+    else
+      if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -q "governance is active" && ! printf '%s' "$ctx" | grep -q "ADR header v2"; then
+        pass "preflight ($label, $cli CLI): unchanged success message"
+      else
+        fail "preflight ($label, $cli CLI): expected the ordinary success message" "status=$st ctx=$ctx"
+      fi
+    fi
+
+    # ExitPlanMode gate: a one-line notice, no deny, no call to plan-check.
+    cap="${WORK}/v2-capture"; rm -f "$cap" "${cap}.argv"
+    st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "$V2_PLAN" "$repo" ACTUAL_TEST_MODE="$mode" ACTUAL_TEST_CAPTURE="$cap")
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && jq -e '.systemMessage | test("ADR header v2")' "${WORK}/out" >/dev/null 2>&1 \
+         && ! grep -q "permissionDecision" "${WORK}/out" && [ ! -e "${cap}.argv" ]; then
+        pass "plan-gate ($label, $cli CLI): stands down with a notice, plan-check not called"
+      else
+        fail "plan-gate ($label, $cli CLI): expected a stand-down notice" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    else
+      if [ "$st" = "0" ] && ! grep -q "ADR header v2" "${WORK}/out" && [ -e "${cap}.argv" ]; then
+        pass "plan-gate ($label, $cli CLI): delegates to plan-check as before"
+      else
+        fail "plan-gate ($label, $cli CLI): expected plan-check to run" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    fi
+
+    # Stop gate: a user-facing systemMessage, never a block.
+    rm -f "$cap" "${cap}.argv"
+    st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "$V2_STOP" "$repo" ACTUAL_TEST_MODE="$mode" ACTUAL_TEST_CAPTURE="$cap")
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && jq -e '.systemMessage | test("ADR header v2")' "${WORK}/out" >/dev/null 2>&1 \
+         && ! jq -e 'has("decision")' "${WORK}/out" >/dev/null 2>&1 && [ ! -e "${cap}.argv" ]; then
+        pass "impl-gate ($label, $cli CLI): stands down with a notice, impl-check not called"
+      else
+        fail "impl-gate ($label, $cli CLI): expected a stand-down notice" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    else
+      if [ "$st" = "0" ] && ! grep -q "ADR header v2" "${WORK}/out" && [ -e "${cap}.argv" ]; then
+        pass "impl-gate ($label, $cli CLI): delegates to impl-check as before"
+      else
+        fail "impl-gate ($label, $cli CLI): expected impl-check to run" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    fi
+
+    # Turn start: nothing to record when the Stop gate stands down.
+    rm -f "$cap" "${cap}.argv"
+    st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$repo" ACTUAL_TEST_MODE="$mode" ACTUAL_TEST_CAPTURE="$cap")
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${cap}.argv" ]; then
+        pass "turn-start ($label, $cli CLI): silent, nothing recorded"
+      else
+        fail "turn-start ($label, $cli CLI): expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    else
+      if [ "$st" = "0" ] && [ -e "${cap}.argv" ]; then
+        pass "turn-start ($label, $cli CLI): records the turn as before"
+      else
+        fail "turn-start ($label, $cli CLI): expected the turn to be recorded" "status=$st"
+      fi
+    fi
+
+    # Read-time briefing: silent either way on the stand-down path (no brief
+    # reaches the model), and the CLI is not asked to build one.
+    rm -f "$cap" "${cap}.argv"
+    st=$(run_hook "$RB" "$GOV" "$repo" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="$cap" ACTUAL_TEST_ADR_V2="$cli")
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${cap}.argv" ]; then
+        pass "rules-brief ($label, $cli CLI): stands down, no brief requested"
+      else
+        fail "rules-brief ($label, $cli CLI): expected a silent stand-down" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    elif [ "$label" = v2 ] || [ "$label" = v1 ]; then
+      # The governed path in the fake CLI is /src/persistence/ under REPO_WITH_RULES.
+      if [ "$st" = "0" ] && { [ "$label" = v2 ] || jq -e '.hookSpecificOutput.additionalContext' "${WORK}/out" >/dev/null 2>&1; } && [ -e "${cap}.argv" ]; then
+        pass "rules-brief ($label, $cli CLI): the CLI is asked for a brief as before"
+      else
+        fail "rules-brief ($label, $cli CLI): expected the CLI to be called" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    fi
+  done
+done
+
 echo
 echo "=== Summary ==="
 printf '  %s passed, %s failed\n' "$pass_count" "$fail_count"

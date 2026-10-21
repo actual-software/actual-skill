@@ -45,6 +45,14 @@ if ! have_actual; then
   exit 0
 fi
 
+# 4b. Rules written in the ADR header v2 format that this CLI cannot read: it
+#     would score the plan against the wrong scope without saying so. Stand down
+#     with a one-line notice -- fail open, as for every other condition here.
+if adr_v2_unsupported "$(rules_dir)"; then
+  emit_pretooluse_notice "$(adr_v2_standdown_notice 'this plan was not checked against them')"
+  exit 0
+fi
+
 # 5. Delegate. Do not probe `plan-check --help` here: SessionStart already
 #    checked the CLI's version, and a probe is wasted work on the plan boundary.
 #    An old CLI's unknown-subcommand exit 2 is classified below as upgrade +

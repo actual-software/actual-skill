@@ -41,6 +41,12 @@ if ! rules_present || ! have_actual; then
   exit 0
 fi
 
+# ADR header v2 rule files this CLI cannot read: impl-gate.sh stands down, so
+# there is no turn to mark.
+if adr_v2_unsupported "$(rules_dir)"; then
+  exit 0
+fi
+
 # The ACTUAL_TURN_START_LOG trace described below records this skip too.
 if ! have_turn_start; then
   if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then

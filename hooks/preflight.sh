@@ -68,6 +68,16 @@ if [ -n "$installed" ] && version_older_than "$installed" "$MIN_CLI_VERSION"; th
   offer=$(min_version_offer "$installed")
 fi
 
+# Rule files with an ADR header v2 that this CLI cannot read: the gates would
+# judge them from the wrong scope without saying so, so this is as blocking as
+# the three above, and they stand down on the same condition. Checked after
+# them because an older CLI is missing plan-check or impl-check as well, and
+# that guidance comes first. v1 repositories and CLIs that read v2 pass through.
+if adr_v2_unsupported "$dir"; then
+  emit_sessionstart_context "$(adr_v2_upgrade_message)"
+  exit 0
+fi
+
 # No sentence about rule briefing. One used to promise that rules are surfaced
 # on a read, which a compaction makes untrue: brief memory and the mod's budget
 # survive it, so every decision briefed before the compaction stays quiet

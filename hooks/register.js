@@ -301,6 +301,7 @@ const QUIET_OUTCOMES = {
 // process -- as though they were this one's.
 // Sessions that have already been told the budget is spent.
 const budgetAnnounced = new Set();
+const v2Announced = new Set();
 
 const outcomes = new Map();
 
@@ -675,6 +676,14 @@ async function resolveHome($, sessionId) {
 // the CLI, so the next read asks again.
 const briefAvailable = new Map();
 
+// What the same probe learned about ADR header v2 (AK-963): whether the CLI's
+// `rules brief --help` names the capability marker. Set beside briefAvailable,
+// so it is as definite as that answer is.
+const ADR_V2_MARKER = 'adr-header-v2';
+const briefReadsV2 = new Map();
+// Whether the rule files carry a v2 header, per session and rules directory.
+const rulesAreV2 = new Map();
+
 async function rulesBriefAvailable($, sessionId, cwd) {
   if (briefAvailable.has(sessionId)) return briefAvailable.get(sessionId);
   let ok = false;
@@ -685,6 +694,9 @@ async function rulesBriefAvailable($, sessionId, cwd) {
       timeoutMs: SPAWN_TIMEOUT_MS,
     });
     ok = run.exitCode === 0;
+    // The same capability marker bootstrap.sh's have_adr_v2 reads: the help of
+    // a CLI that parses the ADR header v2 names it.
+    briefReadsV2.set(sessionId, ok && (run.stdout ?? '').includes(ADR_V2_MARKER));
   } catch {
     // Cannot start (no `actual` on PATH) or still running at the timeout. The
     // first is as definite as an exit code; the second is not distinguishable
@@ -693,6 +705,40 @@ async function rulesBriefAvailable($, sessionId, cwd) {
   }
   if (definite) briefAvailable.set(sessionId, ok);
   return ok;
+}
+
+// True when the rule files carry an ADR header v2 (the file opens with `---`)
+// and the installed CLI cannot read it, so a brief built from them would be
+// wrong. Mirrors adr_v2_unsupported in bootstrap.sh: the same first-line test,
+// the same silent pass for v1 repositories and for a CLI that names the marker.
+// Call after rulesBriefAvailable, which is what learns the marker.
+//
+// The files are read in-process (no spawn), and only when the CLI lacks the
+// marker, so a current CLI and a v1 repository on a current CLI pay nothing.
+// Cached per session like the probe; a repository converted mid-session is
+// picked up by the next one, and preflight tells the agent at its start.
+async function adrV2Unsupported($, sessionId, rulesDir) {
+  if (briefReadsV2.get(sessionId)) return false;
+  const key = `${sessionId}\n${rulesDir}`;
+  if (!rulesAreV2.has(key)) {
+    let v2 = false;
+    try {
+      const entries = (await $.fs.list(rulesDir)) ?? [];
+      const files = entries.filter((entry) => entry.name.endsWith('.md')).map((entry) => `${rulesDir}/${entry.name}`);
+      for (const file of files) {
+        const text = String(await $.fs.read(file));
+        if (text.split('\n', 1)[0].replace(/\r$/, '') === '---') {
+          v2 = true;
+          break;
+        }
+      }
+    } catch {
+      // Cannot read the files: treat them as v1, the behaviour before v2 existed.
+      return false;
+    }
+    rulesAreV2.set(key, v2);
+  }
+  return rulesAreV2.get(key);
 }
 
 async function resolveRepoRoot($, sessionId, cwd) {
@@ -877,6 +923,16 @@ async function deliverBrief($, e, result, paths, ctx) {
     return withContext(result, await debugNote($, 'not briefed', '`actual rules brief` is not available in this CLI'));
   }
 
+  if (await adrV2Unsupported($, sessionId, rulesDir)) {
+    recordOutcome(sessionId, e.tool_use_id, { outcome: 'v2-cli-old', files: paths });
+    // Once a session, as the budget row is: the state holds for every later read.
+    if (!v2Announced.has(sessionId)) {
+      v2Announced.add(sessionId);
+      $.ui.log(row('OLD CLI', 'rules use ADR header v2; upgrade actual to 0.9.0+ for briefs'));
+    }
+    return withContext(result, await debugNote($, 'not briefed', 'the rule files use ADR header v2, which this CLI cannot read'));
+  }
+
   let appended = '';
   let exhausted = false;
   let cliError = null;
@@ -1055,6 +1111,7 @@ const OUTCOME_LABELS = {
   budget: 'budget   ',
   'cli-error': 'error    ',
   'no-cli': 'old CLI   ',
+  'v2-cli-old': 'old CLI v2',
   unresolved: 'no match ',
   'no-paths': 'no path  ',
   'not-read-only': 'writes   ',

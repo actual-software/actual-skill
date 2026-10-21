@@ -72,6 +72,13 @@ if ! have_actual; then
   exit 0
 fi
 
+# 4b. ADR header v2 rule files the installed CLI cannot read: stand down with
+#     the one-line user-facing notice, same channel and reason as step 4.
+if adr_v2_unsupported "$(rules_dir)"; then
+  emit_stop_notice "$(adr_v2_standdown_notice "this turn's diff was not checked against them")"
+  exit 0
+fi
+
 # 5. Delegate. Resolve --rules-dir before the cd, same reasoning as
 #    plan-gate.sh: resolve_repo_root and rules_dir both read cwd.
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-impl-gate.XXXXXX") || exit 0

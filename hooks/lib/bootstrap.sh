@@ -292,6 +292,48 @@ have_turn_start() {
   return 1
 }
 
+# ADR header v2 (a YAML header at the top of a rule file) is read by the CLI, not
+# by this plugin, and a CLI that predates it reads such a file as a flat v1
+# document: wrong scope, wrong briefs, nothing said. There is no flag to probe, so
+# like have_turn_start this reads the help that documents it. `rules brief --help`
+# names the capability marker `adr-header-v2` (actual-cli 0.9.0, AK-962). The
+# marker is an agreed literal, not a version comparison: it is true for exactly
+# the builds that parse the header.
+have_adr_v2() {
+  local help
+  help=$(actual rules brief --help 2>/dev/null) || return 1
+  case "$help" in
+    *adr-header-v2*) return 0 ;;
+  esac
+  return 1
+}
+
+# True when any rule file in the directory opens with a `---` line, which is what
+# a v2 header starts with. The first line only: this plugin never parses YAML,
+# and a v1 file starts with a `# ` title. Stops at the first hit, and reads with a
+# builtin, so a v1 repository pays one `read` per file and spawns nothing.
+rules_have_v2_header() {
+  local dir="$1" f line
+  [ -d "$dir" ] || return 1
+  for f in "$dir"/*.md; do
+    [ -e "$f" ] || continue
+    line=
+    IFS= read -r line <"$f" || true
+    line=${line%$'\r'}
+    [ "$line" = '---' ] && return 0
+  done
+  return 1
+}
+
+# True when this repository has v2 rule files and the installed CLI cannot read
+# them. The only state that changes behaviour: a v1 repository, or a CLI that
+# has the marker, behaves exactly as before. Callers have already checked
+# have_actual, because the probe spawns it. The cheap file check goes first so a
+# v1 repository never spawns the probe.
+adr_v2_unsupported() {
+  rules_have_v2_header "$1" && ! have_adr_v2
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
@@ -457,6 +499,43 @@ ${how}
 Then verify with: actual --version. If they decline, don't run anything --
 upgrading stays optional.
 EOF
+}
+
+# The ADR header v2 counterpart of the upgrade messages above. Same escalation
+# as them, for the same reason: the gates are supposed to block, and against v2
+# files an old CLI would judge from the wrong scope, so the user believes they
+# are governed when they are not. The gates stand down on this path (see
+# adr_v2_unsupported), so nothing is checked until the CLI is upgraded.
+adr_v2_upgrade_message() {
+  cat <<'EOF'
+Actual governance is configured for this repository, and its .actual/rules/ files
+use the ADR header v2 format (a YAML header at the top of each file), but the
+installed `actual` CLI is too old to read it (it needs 0.9.0 or newer). Plans and
+changes are not being checked against these rules, and rule briefing is off, until
+the CLI is upgraded.
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to upgrade it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+If they agree, run one of these with the Bash tool:
+  npm install -g @actualai/actual@latest
+  brew upgrade actual-software/actual/actual
+
+Then verify with: actual rules brief --help (it should name adr-header-v2). If they
+decline, don't run anything -- upgrading stays optional -- but only resume the
+original task once they have actually answered either way.
+EOF
+}
+
+# One line, for the places the full message above does not fit: a PreToolUse
+# notice and Stop's user-facing systemMessage, both repeated on every plan and
+# every turn. What failed and the command that fixes it.
+adr_v2_standdown_notice() {
+  printf '%s' "Actual governance stood down: .actual/rules/ uses the ADR header v2 format, which the installed \`actual\` CLI is too old to read (needs 0.9.0+), so $1. Upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\`."
 }
 
 # For a CLI from GATES_MIN_CLI_VERSION up to MIN_CLI_VERSION. Every check runs
