@@ -86,6 +86,27 @@ cmd_doctor() {
     printf '  FAIL  %s is missing or has no `rules brief` subcommand\n' "$CLI"; fail=1
   fi
 
+  # ADR header v2: the hooks stand down on v2 files when the CLI does not name
+  # the capability marker, so a scenario against them would measure nothing.
+  # Same first-line test as rules_have_v2_header in hooks/lib/bootstrap.sh.
+  if [ "$count" -gt 0 ]; then
+    local f first v2=0
+    for f in "$rules"/*.md; do
+      [ -e "$f" ] || continue
+      IFS= read -r first <"$f" || true
+      first=${first%$'\r'}
+      if [ "$first" = '---' ]; then v2=1; break; fi
+    done
+    if [ "$v2" -eq 1 ]; then
+      if "$CLI" rules brief --help 2>/dev/null | grep -q 'adr-header-v2'; then
+        printf '  ok    v2 rule headers present and %s reads them (adr-header-v2)\n' "$CLI"
+      else
+        printf '  FAIL  rule documents carry a v2 header but %s lacks the adr-header-v2\n' "$CLI"
+        printf '        marker (needs 0.9.0+): the hooks stand down on this repo\n'; fail=1
+      fi
+    fi
+  fi
+
   if [ "${CLAUDE_CODE_ENABLE_FUNCTION_HOOKS:-}" = "1" ]; then
     printf '  ok    CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 (mods load)\n'
   else

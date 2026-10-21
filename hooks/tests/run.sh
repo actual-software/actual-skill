@@ -1870,18 +1870,25 @@ echo "=== ADR header v2: version gate (AK-963) ==="
 REPO_V2="${WORK}/with-rules-v2"
 mkdir -p "${REPO_V2}/.actual/rules"
 git -C "${REPO_V2}" init -q
-printf -- '---\nadr_id: persistence\nroot: .\npaths:\n  - "src/persistence/**"\n---\n# Persistence\n\n### Rules\n**R-001** MUST: all persistence goes through the repository layer.\n' \
+printf -- '---\nversion: 2\nname: persistence-1a2b\nmetadata:\n  actual:\n    adr_id: adr-persistence\n  scope:\n    root: .\n    paths:\n      - "src/persistence/**"\n---\n\n# Persistence\n\n### Rules\n\n- **R-001** MUST: all persistence goes through the repository layer.\n' \
   > "${REPO_V2}/.actual/rules/persistence.md"
 # CRLF line endings must not hide the header.
 REPO_V2_CRLF="${WORK}/with-rules-v2-crlf"
 mkdir -p "${REPO_V2_CRLF}/.actual/rules"
 git -C "${REPO_V2_CRLF}" init -q
-printf -- '---\r\nadr_id: persistence\r\n---\r\n# Persistence\r\n' > "${REPO_V2_CRLF}/.actual/rules/persistence.md"
+printf -- '---\r\nversion: 2\r\nname: persistence-1a2b\r\nmetadata:\r\n  actual:\r\n    adr_id: adr-persistence\r\n---\r\n\r\n# Persistence\r\n' > "${REPO_V2_CRLF}/.actual/rules/persistence.md"
+
+# One v2 file among v1 files is enough: the CLI would misread that one.
+REPO_MIXED="${WORK}/with-rules-mixed"
+mkdir -p "${REPO_MIXED}/.actual/rules"
+git -C "${REPO_MIXED}" init -q
+cp "${REPO_WITH_RULES}/.actual/rules/cross-cutting-persistence-abc123.md" "${REPO_MIXED}/.actual/rules/"
+cp "${REPO_V2}/.actual/rules/persistence.md" "${REPO_MIXED}/.actual/rules/"
 
 V2_PLAN="${RESOLVED}/pretooluse-plan-file.json"
 V2_STOP="${RESOLVED}/stop-turn.json"
 
-for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF"; do
+for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF" "mixed:$REPO_MIXED"; do
   label=${pair%%:*}; repo=${pair#*:}
   for cli in current old; do
     mode=allow; [ "$cli" = old ] && mode=no-adr-v2
