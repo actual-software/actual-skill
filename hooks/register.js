@@ -1106,7 +1106,7 @@ async function deliverBrief($, e, result, paths, ctx) {
     const kinds = new Set(paths.map((f) => reasons.get(f) ?? 'unknown'));
     const only = kinds.size === 1 ? [...kinds][0] : null;
     recordOutcome(sessionId, e.tool_use_id, {
-      outcome: QUIET_OUTCOMES[only] ?? 'deduped',
+      outcome: Object.hasOwn(QUIET_OUTCOMES, only) ? QUIET_OUTCOMES[only] : 'deduped',
       files: paths,
       reasons: Object.fromEntries(reasons),
     });

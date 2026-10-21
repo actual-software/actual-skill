@@ -1058,6 +1058,64 @@ test('the report states the decision and rule counts', async (fire: any, on: any
   expect(drawn).toContain('2 of 35 rules');
 });
 
+test('a v2 corpus brief counts one decision per adr_id, headed by its title', async (fire: any, on: any) => {
+  // The brief format is a contract with the CLI (ADR header v2, AK-964). Two
+  // files that share an adr_id are one decision: one `## ` heading, the title
+  // of the best document, never the adr_id itself, and the rules of both under
+  // it. Their slugs carry the CLI's hash suffix. The shape is the one actual-cli
+  // 0.9.0 prints; if it changes, this is the test that says the parse did.
+  const brief = [
+    "This repository's own rules that apply to `src/a.ts`:",
+    '',
+    '## Sign With RS256',
+    '- [auth-sign-1a2b/R-A-001] MUST sign with RS256.',
+    '- [auth-sign-keys-3c4d/R-A-002] MUST rotate keys.',
+    '- [auth-sign-1a2b/R-A-003] SHOULD log key ids.',
+    '- (3 of 5 rules shown)',
+    '',
+    '## Pin Terraform Providers',
+    '- [infra-pin-5e6f/R-TF-001] MUST pin every provider.',
+  ].join('\n');
+  const logs: string[] = [];
+  harness(on, { logs, cli: { exitCode: 0, stdout: reply(brief), stderr: '' } });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'v2_1' });
+
+  expect(reported(logs)).toContain('2 ADRs · 4 of 6 rules');
+  const pane = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  expect(pane).toContain('2 ADRs, 4 of 6 rules');
+});
+
+test('a no-brief token the mod has never seen is quiet, not an error', async (fire: any, on: any) => {
+  // A newer CLI may name a new reason, such as a rule document whose status
+  // excludes it. Unknown tokens, including ones that spell an Object
+  // prototype key, fall back to the generic quiet row and break nothing.
+  const tokens = ['excluded-status', 'constructor', 'to-string'];
+  let call = 0;
+  const logs: string[] = [];
+  harness(on, {
+    cli: () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: `actual rules brief: no-brief=${tokens[call++]} src/a.ts`,
+    }),
+    logs,
+  });
+  on('ui.render', async () => ({ type: 'engine', ref: 1 }));
+
+  for (const token of tokens) {
+    const r = await fire.tool.call({ tool: 'Bash', command: `cat src/${token}.ts` });
+    expect(r).toBeDefined();
+  }
+  expect(logs.some((l) => /CLI ERROR/.test(l))).toBe(false);
+
+  const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
+  expect(drawn).toContain('no new');
+  expect(drawn).not.toContain('[object');
+  expect(drawn).not.toContain('function');
+});
+
 test('a brief of one rule counts it in the singular, in the line and the pane', async (fire: any, on: any) => {
   // Seen live: a Write briefed one ADR with one rule reported `1 rules`.
   const brief = [
