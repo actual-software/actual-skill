@@ -1985,6 +1985,33 @@ for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF"; do
 done
 
 echo
+echo "=== ADR header v2: what counts as a header ==="
+# The CLI's parser (frontmatter_end in actual-cli) is the rule; these are the same
+# cases as HEADER_CASES in register.test.ts, so the two implementations cannot
+# drift apart unnoticed.
+HDR="${WORK}/hdr.md"
+check_header() {
+  local name="$1" want="$2" got=no
+  # shellcheck disable=SC1090
+  ( . "${HOOKS_DIR}/lib/bootstrap.sh"; rules_file_has_v2_header "$HDR" ) && got=yes
+  if [ "$got" = "$want" ]; then pass "header check, ${name}: ${want}"; else fail "header check, ${name}: want ${want}, got ${got}" "$(od -c "$HDR" | head -3)"; fi
+}
+printf '\xef\xbb\xbf---\nadr_id: x\n---\n# T\n' > "$HDR";                 check_header "a UTF-8 BOM before the opening fence" yes
+printf -- '---  \nadr_id: x\n--- \t\n# T\n' > "$HDR";                       check_header "trailing spaces on the fences" yes
+printf '\xef\xbb\xbf---\r\nadr_id: x\r\n---\r\n# T\r\n' > "$HDR";        check_header "CRLF line endings and a BOM together" yes
+printf -- '---\n---\n# T\n' > "$HDR";                                        check_header "an empty header" yes
+printf -- '---\n#not a heading\nadr_id: x\n---\n# T\n' > "$HDR";            check_header "a # comment line in the YAML" yes
+printf -- '---\nnote: |\n  # not a heading\n---\n# T\n' > "$HDR";           check_header "an indented heading-like line in the YAML" yes
+printf -- '---\nadr_id: x\n---' > "$HDR";                                    check_header "a closing fence with no final newline" yes
+printf -- '---\nadr_id: x\n# T\n' > "$HDR";                                  check_header "no closing fence" no
+printf -- '---\n# Title\n---\nbody\n' > "$HDR";                             check_header "a horizontal rule block holding a heading" no
+printf -- '---\n\n# Title\n\n### Rules\n' > "$HDR";                         check_header "a rule file that merely opens with a rule line" no
+printf -- '\n---\nadr_id: x\n---\n' > "$HDR";                               check_header "a leading blank line before the fence" no
+printf -- ' ---\nadr_id: x\n---\n' > "$HDR";                                 check_header "an indented opening fence" no
+printf -- '# Persistence\n\n### Rules\n' > "$HDR";                           check_header "a v1 title" no
+: > "$HDR";                                                                   check_header "an empty file" no
+
+echo
 echo "=== ADR header v2: per-binary capability cache ==="
 # One cold run writes the answer; later hooks read it without spawning the CLI;
 # preflight re-probes; an upgraded binary (newer than the entry) invalidates it.

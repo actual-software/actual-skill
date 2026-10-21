@@ -354,19 +354,45 @@ have_adr_v2() {
   [ "$verdict" = supported ]
 }
 
-# True when any rule file in the directory opens with a `---` line, which is what
-# a v2 header starts with. The first line only: this plugin never parses YAML,
-# and a v1 file starts with a `# ` title. Stops at the first hit, and reads with a
-# builtin, so a v1 repository pays one `read` per file and spawns nothing.
+# True when the file opens with an ADR header v2, by the rule the CLI's own parser
+# applies (frontmatter_end in actual-cli's src/rules/parse.rs, the source of truth:
+# read it before changing this). A leading UTF-8 BOM is ignored; the first line is
+# `---` once trailing whitespace is trimmed; a closing `---` follows; and no line
+# between them is an unindented ATX heading, because a block with a heading in it
+# is a markdown horizontal rule and the parser reads the file as v1. This plugin
+# still never parses YAML: it only finds the fences. Reads with builtins and stops
+# at the closing fence, so a v1 file (which starts with a `# ` title) costs one
+# `read` and nothing is spawned. Mirrored by hasV2Header in register.js.
+rules_file_has_v2_header() {
+  local line first=1 heading=0 hashes rest
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    if [ "$first" = 1 ]; then
+      first=0
+      line=${line#$'\xef\xbb\xbf'}
+      line=${line%"${line##*[![:space:]]}"}
+      [ "$line" = '---' ] || return 1
+      continue
+    fi
+    case "$line" in [[:space:]]*) continue ;; esac
+    line=${line%"${line##*[![:space:]]}"}
+    [ "$line" = '---' ] && { [ "$heading" = 0 ]; return; }
+    hashes=${line%%[!#]*}
+    rest=${line:${#hashes}}
+    if [ "${#hashes}" -ge 1 ] && [ "${#hashes}" -le 6 ]; then
+      case "$rest" in ' '*) heading=1 ;; esac
+    fi
+  done <"$1"
+  return 1
+}
+
+# True when any rule file in the directory opens with an ADR header v2.
 rules_have_v2_header() {
-  local dir="$1" f line
+  local dir="$1" f
   [ -d "$dir" ] || return 1
   for f in "$dir"/*.md; do
     [ -e "$f" ] || continue
-    line=
-    IFS= read -r line <"$f" || true
-    line=${line%$'\r'}
-    [ "$line" = '---' ] && return 0
+    rules_file_has_v2_header "$f" && return 0
   done
   return 1
 }

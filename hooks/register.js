@@ -681,7 +681,8 @@ const briefAvailable = new Map();
 // so it is as definite as that answer is.
 const ADR_V2_MARKER = 'adr-header-v2';
 const briefReadsV2 = new Map();
-// Whether the rule files carry a v2 header, per session and rules directory.
+// Whether the rule files carry a v2 header, per session and rules directory, with
+// the listing signature the answer was made under.
 const rulesAreV2 = new Map();
 
 async function rulesBriefAvailable($, sessionId, cwd) {
@@ -707,36 +708,58 @@ async function rulesBriefAvailable($, sessionId, cwd) {
   return ok;
 }
 
-// True when the rule files carry an ADR header v2 (the file opens with `---`)
-// and the installed CLI cannot read it, so a brief built from them would be
-// wrong. Mirrors adr_v2_unsupported in bootstrap.sh: the same first-line test,
-// the same silent pass for v1 repositories and for a CLI that names the marker.
-// Call after rulesBriefAvailable, which is what learns the marker.
+// True when `text` opens with an ADR header v2: the rule the CLI's own parser
+// applies (frontmatter_end in actual-cli's src/rules/parse.rs, which is the
+// source of truth and should be read before changing this). A leading UTF-8 BOM
+// is ignored; the first line is `---` once trailing whitespace is trimmed; a
+// closing `---` follows; and no line between them is an unindented ATX heading,
+// because a block with a heading in it is a markdown horizontal rule and the
+// parser reads the file as v1. Mirrors rules_file_has_v2_header in bootstrap.sh.
+function hasV2Header(text) {
+  const lines = text.replace(/^\uFEFF/, '').split('\n').map((l) => l.replace(/\r$/, ''));
+  if (lines[0].trimEnd() !== '---') return false;
+  let heading = false;
+  for (const line of lines.slice(1)) {
+    if (line.trimEnd() === '---') return !heading;
+    if (!/^\s/.test(line) && /^#{1,6} /.test(line.trimEnd())) heading = true;
+  }
+  return false;
+}
+
+// True when the rule files carry an ADR header v2 and the installed CLI cannot
+// read it, so a brief built from them would be wrong. Mirrors adr_v2_unsupported
+// in bootstrap.sh: the same header test, the same silent pass for v1
+// repositories and for a CLI that names the marker. Call after
+// rulesBriefAvailable, which is what learns the marker.
 //
 // The files are read in-process (no spawn), and only when the CLI lacks the
 // marker, so a current CLI and a v1 repository on a current CLI pay nothing.
-// Cached per session like the probe; a repository converted mid-session is
-// picked up by the next one, and preflight tells the agent at its start.
+// The answer is cached against the directory listing governedRulesDir already
+// fetched on this call (names, sizes, mtimes), so it holds while the rule files
+// do and is asked again the moment one is added, removed or rewritten: a
+// repository converted to v2 mid-session is caught on the next read, as the
+// shell hooks catch it.
 async function adrV2Unsupported($, sessionId, rulesDir) {
   if (briefReadsV2.get(sessionId)) return false;
+  const listing = ruleFileListing.get(rulesDir);
   const key = `${sessionId}\n${rulesDir}`;
-  if (!rulesAreV2.has(key)) {
-    let v2 = false;
-    try {
-      for (const name of ruleFileNames.get(rulesDir) ?? []) {
-        const text = String(await $.fs.read(`${rulesDir}/${name}`));
-        if (text.split('\n', 1)[0].replace(/\r$/, '') === '---') {
-          v2 = true;
-          break;
-        }
+  const cached = rulesAreV2.get(key);
+  if (cached && cached.signature === listing?.signature) return cached.v2;
+  let v2 = false;
+  try {
+    for (const name of listing?.names ?? []) {
+      if (hasV2Header(String(await $.fs.read(`${rulesDir}/${name}`)))) {
+        v2 = true;
+        break;
       }
-    } catch {
-      // Cannot read the files: treat them as v1, the behaviour before v2 existed.
-      return false;
     }
-    rulesAreV2.set(key, v2);
+  } catch {
+    // Cannot read the files: treat them as v1, the behaviour before v2 existed.
+    // Not cached, so the next read tries again.
+    return false;
   }
-  return rulesAreV2.get(key);
+  rulesAreV2.set(key, { signature: listing?.signature, v2 });
+  return v2;
 }
 
 async function resolveRepoRoot($, sessionId, cwd) {
@@ -797,13 +820,18 @@ async function governedRulesDir($, sessionId, cwd) {
     return null;
   }
   const names = (entries ?? []).map((entry) => entry.name).filter((name) => name.endsWith('.md'));
-  ruleFileNames.set(rulesDir, names);
+  const files = (entries ?? []).filter((entry) => entry.name.endsWith('.md'));
+  ruleFileListing.set(rulesDir, {
+    names,
+    signature: files.map((f) => `${f.name}:${f.size}:${f.mtimeMs}`).join('\n'),
+  });
   return names.length ? rulesDir : null;
 }
 
-// The rule files governedRulesDir last saw in each directory, so the ADR header
-// v2 check reads them without listing the directory a second time.
-const ruleFileNames = new Map();
+// The rule files governedRulesDir last saw in each directory, and a signature of
+// their names, sizes and mtimes, so the ADR header v2 check reads them without
+// listing the directory a second time and knows when its answer has gone stale.
+const ruleFileListing = new Map();
 
 // Which keys exist, and the CLI flag each one forwards to. maxSessionChars has
 // no flag: it is this mod's own budget, enforced here, not something the CLI
