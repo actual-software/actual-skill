@@ -47,6 +47,9 @@
 #                   (both subcommands, if invoked, still behave as "allow")
 #   crash        the subcommand panics
 #   garbage      the subcommand exits 0 but prints non-JSON
+#   cannot-run   the CLI does not run at all, like npm's launcher with its
+#                platform package missing: every call, --version included,
+#                exits with ACTUAL_TEST_EXIT (default 1, the launcher's status)
 #
 # `actual rules brief --claude-hook` (rules-brief.sh) has its own modes, and
 # answers only for payloads naming a file under /src/persistence/:
@@ -78,7 +81,8 @@
 # same shape for every mode below -- this fake mirrors that.
 #
 # `actual --version` and `actual version --json`, which preflight.sh's minimum
-# version check reads, ignore the mode and answer from their own variables:
+# version check reads, ignore every mode but cannot-run and answer from their
+# own variables:
 #   ACTUAL_TEST_VERSION  what --version reports after "actual ". Unset, a
 #                        version far above any minimum the plugin declares, so
 #                        only the tests that set it reach the upgrade offer.
@@ -97,6 +101,11 @@ mode="${ACTUAL_TEST_MODE:-allow}"
 
 if [ -n "${ACTUAL_TEST_CALLS:-}" ]; then
   printf '%s\n' "$*" >> "$ACTUAL_TEST_CALLS"
+fi
+
+if [ "$mode" = "cannot-run" ]; then
+  echo "actual: platform package \"@actualai/actual-test\" not installed. Try reinstalling with npm install." >&2
+  exit "${ACTUAL_TEST_EXIT:-1}"
 fi
 
 if [ "${1:-}" = "--version" ]; then

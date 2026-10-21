@@ -385,7 +385,7 @@ fi
 
 echo
 echo "=== plan-gate: fail open ==="
-for mode in crash garbage; do
+for mode in crash garbage cannot-run; do
   st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
   if [ "$st" = "0" ] && [ "$(decision)" != "deny" ]; then
     pass "$mode: fails open (exit 0, no deny)"
@@ -605,7 +605,7 @@ fi
 
 echo
 echo "=== impl-gate: fail open ==="
-for mode in crash garbage; do
+for mode in crash garbage cannot-run; do
   st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
   if [ "$st" = "0" ] && [ "$(stop_decision)" != "block" ]; then
     pass "$mode: fails open (exit 0, no block)"
@@ -1027,6 +1027,50 @@ if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
 else
   fail "no rules + no CLI: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
 fi
+
+echo
+echo "=== preflight: a CLI that cannot run ==="
+
+# 1 is npm's launcher without its platform package, or on a platform it does
+# not support. 127 is that launcher with no node to run it.
+for code in 1 127; do
+  rm -f "$CALLS"
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=cannot-run ACTUAL_TEST_EXIT="$code" ACTUAL_TEST_CALLS="$CALLS")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] \
+     && printf '%s' "$ctx" | grep -q "CLI does not run" \
+     && printf '%s' "$ctx" | grep -qxF "  npm install -g @actualai/actual" \
+     && printf '%s' "$ctx" | grep -qxF "  brew reinstall actual-software/actual/actual" \
+     && printf '%s' "$ctx" | grep -q "second copy" \
+     && ! printf '%s' "$ctx" | grep -qF "brew install actual-software" \
+     && ! printf '%s' "$ctx" | grep -q "governance is active"; then
+    pass "rules + \`actual --version\` exits ${code}: says the CLI does not run, with both reinstall commands and how to tell which applies, and no claim that governance is active"
+  else
+    fail "rules + \`actual --version\` exits ${code}: expected the reinstall offer" "status=$st ctx=$ctx"
+  fi
+
+  if printf '%s' "$ctx" | grep -q "Offer to reinstall it now" \
+     && printf '%s' "$ctx" | grep -q "regardless of what else is in progress" \
+     && printf '%s' "$ctx" | grep -q "ask using an interactive question tool" \
+     && printf '%s' "$ctx" | grep -q "does not satisfy this"; then
+    pass "rules + \`actual --version\` exits ${code}: interrupts the task and waits for an answer, like the install offer"
+  else
+    fail "rules + \`actual --version\` exits ${code}: the reinstall offer lost the interrupt-and-wait wording" "$ctx"
+  fi
+
+  if [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
+    pass "\`actual --version\` exits ${code}: no \`actual version --json\` after it, which that CLI cannot answer either"
+  else
+    fail "\`actual --version\` exits ${code}: wrong CLI calls" "calls=$(cat "$CALLS" 2>/dev/null)"
+  fi
+
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=cannot-run ACTUAL_TEST_EXIT="$code")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "no rules + \`actual --version\` exits ${code}: silent, as it is for a version it cannot read"
+  else
+    fail "no rules + \`actual --version\` exits ${code}: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
 
 echo
 echo "=== fake CLI requires --claude-hook ==="

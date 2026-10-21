@@ -168,10 +168,12 @@ GATES_MIN_CLI_VERSION=0.7.0
 
 # The installed CLI's version as MAJOR.MINOR.PATCH, from `actual --version`
 # ("actual 0.8.0"). A pre-release suffix is dropped, so 0.8.0-rc.1 counts as
-# 0.8.0. Prints nothing and fails when the output names no version.
+# 0.8.0. Prints nothing and fails when the output names no version, with
+# status 2 when `actual --version` itself fails: that CLI cannot run at all,
+# as npm's launcher shows when its platform package is missing.
 cli_version() {
   local out re='[0-9]+\.[0-9]+\.[0-9]+'
-  out=$(actual --version 2>/dev/null) || return 1
+  out=$(actual --version 2>/dev/null) || return 2
   [[ $out =~ $re ]] || return 1
   printf '%s' "${BASH_REMATCH[0]}"
 }
@@ -312,6 +314,40 @@ If they agree, run one of these with the Bash tool:
 
 Then verify with: actual plan-check --help. If they decline, don't run anything --
 upgrading stays optional -- but only resume the original task once they have
+actually answered either way.
+EOF
+}
+
+# For a repository with committed rules whose `actual` is on PATH but fails
+# `actual --version`. Nothing there is checked, and the gates only report that
+# they did not run, so this asks the way install_message does. A CLI that
+# cannot run cannot name the channel that installed it, so both commands go
+# out, and Homebrew's is `reinstall` because `brew install` leaves an installed
+# formula as it is.
+reinstall_interrupt() {
+  cat <<'EOF'
+Actual governance is configured for this repository (.actual/rules/ is present),
+but the installed `actual` CLI does not run: `actual --version` failed, so no plan
+or diff is being checked.
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to reinstall it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+If they agree, run whichever of these installed it, with the Bash tool:
+  npm install -g @actualai/actual
+  brew reinstall actual-software/actual/actual
+
+Check which first: `ls -l "$(command -v actual)"` shows a link into Homebrew's
+Cellar for a Homebrew install and into node_modules for an npm one. Running the
+other command would add a second copy instead of repairing this one, so ask the
+user if neither applies.
+
+Then verify with: actual --version. If they decline, don't run anything --
+reinstalling stays optional -- but only resume the original task once they have
 actually answered either way.
 EOF
 }

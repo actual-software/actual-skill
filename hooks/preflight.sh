@@ -14,7 +14,9 @@
 # `actual --version` compared with MIN_CLI_VERSION (lib/bootstrap.sh), which
 # catches skew whether or not a release added a subcommand. Its offer
 # interrupts the task only where rules are committed and the CLI is older than
-# GATES_MIN_CLI_VERSION, where some check is not running in full.
+# GATES_MIN_CLI_VERSION, where some check is not running in full. A CLI whose
+# `--version` fails runs no check at all, so where rules are committed it gets
+# an interrupt of its own, offering a reinstall.
 #
 # Registered for startup, resume, clear, compact, and fork so the reminder is
 # restored after compaction.
@@ -44,8 +46,15 @@ if ! have_actual; then
   exit 0
 fi
 
-# A version cli_version cannot read is not an old CLI, so it prompts nothing.
 installed=$(cli_version)
+if [ $? -eq 2 ]; then
+  if [ "$count" -gt 0 ]; then
+    emit_sessionstart_context "$(reinstall_interrupt)"
+  fi
+  exit 0
+fi
+
+# A version cli_version cannot read is not an old CLI, so it prompts nothing.
 offer=""
 if [ -n "$installed" ] && version_older_than "$installed" "$MIN_CLI_VERSION"; then
   if [ "$count" -gt 0 ] && version_older_than "$installed" "$GATES_MIN_CLI_VERSION"; then
