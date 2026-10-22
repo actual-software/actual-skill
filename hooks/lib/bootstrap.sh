@@ -446,6 +446,9 @@ adr_v2_unsupported() {
 # This is still a probability improvement, not a guarantee: the fail-open contract
 # (see plan-gate.sh) means a missing CLI can never become a real interrupt (a deny)
 # just to make this more reliable, so the agent is always free to disregard it.
+#
+# Every SessionStart emits this, compaction and resume included, and so does every
+# plan, so it asks the agent not to repeat an offer the user already declined.
 install_message() {
   cat <<'EOF'
 Actual plan-stage governance is configured for this repository (.actual/rules/ is
@@ -456,7 +459,8 @@ regardless of what else is in progress. Offer to install it now rather than just
 describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
 so your turn actually pauses for the user's answer, and do not continue this task --
 exploring, planning, or implementing -- until they respond. Mentioning this and then
-carrying on anyway does not satisfy this; wait for the answer first.
+carrying on anyway does not satisfy this; wait for the answer first. If the user
+already declined it in this session, don't ask again.
 
 If they agree, run one of these with the Bash tool:
   npm install -g @actualai/actual
@@ -509,7 +513,8 @@ regardless of what else is in progress. Offer to reinstall it now rather than ju
 describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
 so your turn actually pauses for the user's answer, and do not continue this task --
 exploring, planning, or implementing -- until they respond. Mentioning this and then
-carrying on anyway does not satisfy this; wait for the answer first.
+carrying on anyway does not satisfy this; wait for the answer first. If the user
+already declined it in this session, don't ask again.
 
 If they agree, run whichever of these installed it, with the Bash tool:
   npm install -g @actualai/actual

@@ -178,6 +178,12 @@ else
   fail "missing binary: expected the wait-for-answer instruction" "stdout=$(cat "${WORK}/out")"
 fi
 
+if grep -q "already declined it in this session, don't ask again" "${WORK}/out"; then
+  pass "missing binary: every plan repeats the install offer, so not again after a no"
+else
+  fail "missing binary: expected the install offer not to repeat after a no" "stdout=$(cat "${WORK}/out")"
+fi
+
 if [ "$(decision)" = "none" ]; then
   pass "missing binary: makes no permission decision"
 else
@@ -1097,6 +1103,22 @@ else
   fail "rules + CLI reporting ${BELOW} after a compaction: expected governance active and the offer" "status=$st ctx=$ctx"
 fi
 
+# The install offer keeps its interrupt on every SessionStart, so the agent is
+# the one told not to ask again.
+for src in resume clear compact fork nosource; do
+  label="source ${src}"
+  [ "$src" = nosource ] && label="with no source"
+  st=$(run_hook_no_cli "${HOOKS_DIR}/preflight.sh" "${WORK}/sessionstart-${src}.json" "$REPO_WITH_RULES")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] \
+     && printf '%s' "$ctx" | grep -q "Offer to install it now" \
+     && printf '%s' "$ctx" | grep -q "already declined it in this session, don't ask again"; then
+    pass "rules + no CLI, SessionStart ${label}: the install offer, and not again after a no"
+  else
+    fail "rules + no CLI, SessionStart ${label}: expected the install offer, not again after a no" "status=$st ctx=$ctx"
+  fi
+done
+
 echo
 echo "=== preflight: a CLI that cannot run ==="
 
@@ -1140,6 +1162,23 @@ for code in 1 127; do
   else
     fail "no rules + \`actual --version\` exits ${code}: expected silence and no CLI call" "status=$st stdout=$(cat "${WORK}/out") calls=$(cat "$CALLS" 2>/dev/null)"
   fi
+done
+
+# Like the install offer, the reinstall offer interrupts on every SessionStart.
+for code in 1 127; do
+  for src in resume clear compact fork nosource; do
+    label="source ${src}"
+    [ "$src" = nosource ] && label="with no source"
+    st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${WORK}/sessionstart-${src}.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=cannot-run ACTUAL_TEST_EXIT="$code")
+    ctx=$(session_context)
+    if [ "$st" = "0" ] \
+       && printf '%s' "$ctx" | grep -q "Offer to reinstall it now" \
+       && printf '%s' "$ctx" | grep -q "already declined it in this session, don't ask again"; then
+      pass "rules + \`actual --version\` exits ${code}, SessionStart ${label}: the reinstall offer, and not again after a no"
+    else
+      fail "rules + \`actual --version\` exits ${code}, SessionStart ${label}: expected the reinstall offer, not again after a no" "status=$st ctx=$ctx"
+    fi
+  done
 done
 
 echo
