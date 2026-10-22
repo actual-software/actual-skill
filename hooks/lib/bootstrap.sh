@@ -6,7 +6,8 @@
 # (SessionStart). Read-only: never modifies files, config, or state.
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
-# beyond bash builtins, `command`, and `git`. In particular it never parses JSON,
+# beyond bash builtins, `command`, `git`, and the POSIX `cat`, `mktemp`, `sleep`
+# and `rm`. In particular it never parses JSON,
 # so `jq` and `python3` are not required -- neither ships on stock macOS. JSON is
 # only ever *written* here, which is trivial. Parsing the hook envelope is the
 # CLI's job (see `actual plan-check --claude-hook`).
@@ -147,6 +148,19 @@ inside_actual_subprocess() {
   [ "${ACTUAL_CLI_SUBPROCESS:-}" = "1" ]
 }
 
+# True when a SessionStart envelope ($1) names source "startup": a session
+# starting, rather than one resumed, cleared, compacted or forked. A substring
+# match with whitespace dropped, like is_deny_decision, so nothing parses JSON.
+# An envelope it cannot read counts as a later SessionStart, the gentler case.
+is_session_startup() {
+  local s="$1"
+  s=${s// /}
+  s=${s//$'\n'/}
+  s=${s//$'\t'/}
+  s=${s//$'\r'/}
+  [ "${s#*\"source\":\"startup\"}" != "$s" ]
+}
+
 # --- CLI detection ---
 
 have_actual() {
@@ -161,19 +175,55 @@ MIN_CLI_VERSION=0.8.0
 
 # The oldest release every check runs in full on. 0.7.0 added the
 # UserPromptSubmit dispatch turn-start.sh needs, and without it the Stop check
-# misses work committed during a turn. Below this version, in a repository with
-# rules, the upgrade offer interrupts the task (min_version_interrupt). Raise it
+# misses work committed during a turn. Below this version the upgrade offer
+# interrupts the task when a session starts (min_version_interrupt). Raise it
 # in the change that makes a check rely on a newer release.
 GATES_MIN_CLI_VERSION=0.7.0
 
+# Seconds each `actual` call preflight.sh makes may take: the budget the mod
+# gives each of its own spawns (SPAWN_TIMEOUT_MS in register.js).
+CLI_CALL_TIMEOUT=2
+
+# Run `actual "$@"` with stdin closed and print its stdout. A call still running
+# after CLI_CALL_TIMEOUT seconds is killed and fails with status 124, as
+# timeout(1) does, which stock macOS lacks. Output goes through a file because
+# npm's launcher runs the real binary as a child that inherits stdout, and a
+# killed launcher would leave that child holding a pipe open. A CLI killed by
+# SIGKILL from elsewhere, or a temp file that cannot be made, also gives 124.
+run_actual() {
+  local out pid watchdog status
+  out=$(mktemp "${TMPDIR:-/tmp}/actual-preflight.XXXXXX") || return 124
+  actual "$@" </dev/null >"$out" 2>/dev/null &
+  pid=$!
+  # The watchdog kills its own sleep when it is stopped, so a call that answers
+  # in time leaves no process behind.
+  ( sleeper=""
+    trap '[ -n "$sleeper" ] && kill "$sleeper"; exit 0' TERM
+    sleep "$CLI_CALL_TIMEOUT" &
+    sleeper=$!
+    wait "$sleeper" && kill -KILL "$pid" ) </dev/null >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid"
+  status=$?
+  kill "$watchdog" 2>/dev/null && wait "$watchdog" 2>/dev/null
+  [ "$status" -eq 137 ] && status=124
+  printf '%s' "$(<"$out")"
+  rm -f "$out"
+  return "$status"
+}
+
 # The installed CLI's version as MAJOR.MINOR.PATCH, from `actual --version`
 # ("actual 0.8.0"). A pre-release suffix is dropped, so 0.8.0-rc.1 counts as
-# 0.8.0. Prints nothing and fails when the output names no version, with
-# status 2 when `actual --version` itself fails: that CLI cannot run at all,
-# as npm's launcher shows when its platform package is missing.
+# 0.8.0. Prints nothing and fails when the output names no version or no answer
+# came in time, with status 2 when `actual --version` itself fails: that CLI
+# cannot run at all, as npm's launcher shows when its platform package is
+# missing. A slow answer is not that, so it reads as an unreadable version.
 cli_version() {
-  local out re='[0-9]+\.[0-9]+\.[0-9]+'
-  out=$(actual --version 2>/dev/null) || return 2
+  local out status re='[0-9]+\.[0-9]+\.[0-9]+'
+  out=$(run_actual --version)
+  status=$?
+  [ "$status" -eq 124 ] && return 1
+  [ "$status" -eq 0 ] || return 2
   [[ $out =~ $re ]] || return 1
   printf '%s' "${BASH_REMATCH[0]}"
 }
@@ -353,12 +403,13 @@ EOF
 }
 
 # Upgrade advice for a CLI older than MIN_CLI_VERSION, which preflight.sh gives
-# in every repository at one of two strengths. $1 is the installed version.
+# in a repository with committed rules, in one of three forms. $1 is the
+# installed version.
 #
-# This one is for a repository with committed rules and a CLI older than
-# GATES_MIN_CLI_VERSION. Some check there is not running in full, so the user
-# believes their work is governed when part of it is not: the false sense of
-# safety that earns install_message its interrupt-and-wait wording.
+# This one is for a CLI older than GATES_MIN_CLI_VERSION when a session starts.
+# Some check there is not running in full, so the user believes their work is
+# governed when part of it is not: the false sense of safety that earns
+# install_message its interrupt-and-wait wording.
 min_version_interrupt() {
   local installed="$1" how
   how=$(upgrade_instructions)
@@ -383,18 +434,39 @@ actually answered either way.
 EOF
 }
 
-# The other strength, for every other CLI older than MIN_CLI_VERSION. Every
-# check runs on it, or there are no rules here to check against, so nothing it
-# lacks leaves work unchecked. SessionStart fires again on every resume, clear,
-# compact and fork, and a blocking question would stop the task after each
-# compaction over something advisory, so the agent offers the upgrade at a
-# pause. $2 is the number of rule files here. With rules, preflight.sh appends
-# this to the message that governance is active.
-min_version_offer() {
-  local installed="$1" count="$2" how
+# The same news for every later SessionStart: resume, clear, compact and fork.
+# The interrupt asked when the session started, and asking that way again after
+# each compaction would put a user who said no in front of the same blocking
+# question until they upgrade. So this asks at a pause, and not after a no.
+min_version_reminder() {
+  local installed="$1" how
   how=$(upgrade_instructions)
-  if [ "$count" -gt 0 ]; then
-    cat <<EOF
+  cat <<EOF
+Actual governance is configured for this repository (.actual/rules/ is present),
+but the installed \`actual\` CLI is ${installed} and its checks need ${GATES_MIN_CLI_VERSION} or
+later to run in full, so some of your changes can go unchecked. This plugin
+needs ${MIN_CLI_VERSION} or later.
+
+This session is already under way, so this does not need to interrupt the task
+in progress. At a natural pause, such as the end of your next reply, mention it
+once and offer to upgrade, asking with an interactive question tool (e.g.
+AskUserQuestion). If the user already declined it in this session, don't ask again.
+
+${how}
+
+Then verify with: actual --version. If they decline, don't run anything --
+upgrading stays optional.
+EOF
+}
+
+# For a CLI from GATES_MIN_CLI_VERSION up to MIN_CLI_VERSION. Every check runs
+# on it, so nothing it lacks leaves work unchecked, and the agent offers the
+# upgrade at a pause rather than stopping the task. preflight.sh appends this
+# to the message that governance is active.
+min_version_offer() {
+  local installed="$1" how
+  how=$(upgrade_instructions)
+  cat <<EOF
 The installed \`actual\` CLI is ${installed}, and the actual plugin loaded in this
 session needs ${MIN_CLI_VERSION} or later, so some of what it adds may not work as
 documented.
@@ -402,52 +474,39 @@ documented.
 Every check above runs on this version, so this does not need to interrupt the
 task in progress. At a natural pause, such as the end of your next reply, mention
 it once and offer to upgrade, asking with an interactive question tool (e.g.
-AskUserQuestion).
+AskUserQuestion). If the user already declined it in this session, don't ask again.
 
 ${how}
 
 Then verify with: actual --version. If they decline, don't run anything --
 upgrading stays optional.
 EOF
-  else
-    cat <<EOF
-The installed \`actual\` CLI is ${installed}, and the actual plugin loaded in this
-session needs ${MIN_CLI_VERSION} or later, so the skill's commands may not work as
-documented.
-
-No architecture rules are committed in this repository, so nothing here is being
-checked against them and this does not need to interrupt the task in progress. At
-a natural pause, such as the end of your next reply, mention it once and offer to
-upgrade, asking with an interactive question tool (e.g. AskUserQuestion).
-
-${how}
-
-Then verify with: actual --version. If they decline, don't run anything --
-upgrading stays optional.
-EOF
-  fi
 }
 
-# How to upgrade, for both messages above. `actual version --json` names the
+# How to upgrade, for the messages above. `actual version --json` names the
 # command for the channel that installed this CLI, which it reads from its own
 # path. Without --check it answers from local facts, so a session start never
 # waits on the registry. A CLI older than that subcommand gets both commands,
 # and a way to tell which applies: running the other would leave a second
 # `actual` on PATH.
 #
-# A field is used only when it is made of plain characters, which also means
-# it holds no JSON escape that would need undoing before it is quoted here.
+# The agent runs this command on the user's yes, so it is passed on only when
+# it is one actual-cli names for its two channels, compared whole: a prefix
+# match would also pass `npm install -g @actualai/actual @someone/else`. A CLI
+# installed some other way always gets the release page below, which is also
+# the release_url actual-cli reports.
 upgrade_instructions() {
-  local out="" channel="" cmd="" url=""
-  out=$(actual version --json 2>/dev/null) || out=""
+  local out="" channel="" cmd=""
+  out=$(run_actual version --json) || out=""
   if [ -n "$out" ] && ! has_unicode_escape "$out"; then
     channel=$(extract_json_string_field "$out" channel) || channel=""
     cmd=$(extract_json_string_field "$out" upgrade_command) || cmd=""
-    url=$(extract_json_string_field "$out" release_url) || url=""
   fi
-  case "$cmd" in *[!A-Za-z0-9@/._:\ -]*) cmd="" ;; esac
-  case "$url" in https://*) ;; *) url="" ;; esac
-  case "$url" in *[!A-Za-z0-9@/._:~-]*) url="" ;; esac
+  case "$cmd" in
+    'brew upgrade actual-software/actual/actual') ;;
+    'npm install -g @actualai/actual'|'npm install -g @actualai/actual@latest') ;;
+    *) cmd="" ;;
+  esac
 
   if [ -n "$cmd" ]; then
     cat <<EOF
@@ -455,10 +514,10 @@ If they agree, run this with the Bash tool:
   ${cmd}
 EOF
   elif [ "$channel" = "other" ]; then
-    cat <<EOF
+    cat <<'EOF'
 It was installed without Homebrew or npm, so don't run either of those: each would
 add a second copy instead of upgrading this one. If they agree, help them replace
-it with the latest release from ${url:-https://github.com/actual-software/actual-releases/releases/latest}.
+it with the latest release from https://github.com/actual-software/actual-releases/releases/latest.
 EOF
   else
     cat <<'EOF'

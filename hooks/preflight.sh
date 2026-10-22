@@ -8,15 +8,15 @@
 # from their own real plan-check/impl-check exit, so neither spawns actual a
 # second time just to re-probe.
 #
-# Two checks, scoped differently. The install offer appears only in a repository
-# with committed rules, so the plugin stays invisible to someone who never
-# installed the CLI. The version check runs wherever the hook runs: one
-# `actual --version` compared with MIN_CLI_VERSION (lib/bootstrap.sh), which
-# catches skew whether or not a release added a subcommand. Its offer
-# interrupts the task only where rules are committed and the CLI is older than
-# GATES_MIN_CLI_VERSION, where some check is not running in full. A CLI whose
-# `--version` fails runs no check at all, so where rules are committed it gets
-# an interrupt of its own, offering a reinstall.
+# Silent unless this repository actually has committed rules, so installing the
+# plugin is invisible in unrelated repositories: no output and no CLI call. With
+# rules, the version check is one `actual --version` compared with
+# MIN_CLI_VERSION (lib/bootstrap.sh), which catches skew whether or not a release
+# added a subcommand, and each CLI call is bounded by CLI_CALL_TIMEOUT. Below
+# GATES_MIN_CLI_VERSION some check is not running in full, so the upgrade offer
+# interrupts the task when the session starts and comes back at a pause after
+# that. A CLI whose `--version` fails runs no check at all, so it gets an
+# interrupt of its own, offering a reinstall.
 #
 # Registered for startup, resume, clear, compact, and fork so the reminder is
 # restored after compaction.
@@ -27,8 +27,8 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/bootstrap.sh
 . "${SCRIPT_DIR}/lib/bootstrap.sh"
 
-# Drain stdin before any early exit, so the caller never sees SIGPIPE.
-cat >/dev/null
+# Read the envelope before any early exit, so the caller never sees SIGPIPE.
+envelope=$(cat)
 
 # A subprocess actual-cli spawned is not a session to brief (see
 # inside_actual_subprocess).
@@ -39,34 +39,33 @@ fi
 dir=$(rules_dir)
 count=$(rules_count "$dir")
 
+if [ "$count" -eq 0 ]; then
+  exit 0
+fi
+
 if ! have_actual; then
-  if [ "$count" -gt 0 ]; then
-    emit_sessionstart_context "$(install_message)"
-  fi
+  emit_sessionstart_context "$(install_message)"
   exit 0
 fi
 
 installed=$(cli_version)
 if [ $? -eq 2 ]; then
-  if [ "$count" -gt 0 ]; then
-    emit_sessionstart_context "$(reinstall_interrupt)"
-  fi
+  emit_sessionstart_context "$(reinstall_interrupt)"
   exit 0
 fi
 
 # A version cli_version cannot read is not an old CLI, so it prompts nothing.
 offer=""
 if [ -n "$installed" ] && version_older_than "$installed" "$MIN_CLI_VERSION"; then
-  if [ "$count" -gt 0 ] && version_older_than "$installed" "$GATES_MIN_CLI_VERSION"; then
-    emit_sessionstart_context "$(min_version_interrupt "$installed")"
+  if version_older_than "$installed" "$GATES_MIN_CLI_VERSION"; then
+    if is_session_startup "$envelope"; then
+      emit_sessionstart_context "$(min_version_interrupt "$installed")"
+    else
+      emit_sessionstart_context "$(min_version_reminder "$installed")"
+    fi
     exit 0
   fi
-  offer=$(min_version_offer "$installed" "$count")
-fi
-
-if [ "$count" -eq 0 ]; then
-  [ -n "$offer" ] && emit_sessionstart_context "$offer"
-  exit 0
+  offer=$(min_version_offer "$installed")
 fi
 
 # No sentence about rule briefing. One used to promise that rules are surfaced

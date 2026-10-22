@@ -150,7 +150,7 @@ repository. They are registered automatically on install — there is no manual 
 
 | Hook | Event | What it does |
 |------|-------|--------------|
-| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight. In a repository with rules it reports whether the `actual` CLI is installed. In every repository it compares `actual --version` with the minimum the plugin declares (`MIN_CLI_VERSION` in `hooks/lib/bootstrap.sh`) and, on an older CLI, asks the agent to offer the upgrade: the command `actual version --json` names for the channel that installed it, or both the npm and Homebrew commands on a CLI too old to answer. The offer interrupts the task only where rules are committed and the CLI is older than `GATES_MIN_CLI_VERSION`, below which a check stops running in full. Otherwise it waits for a pause and, where rules are committed, follows the report that governance is active. Where rules are committed and `actual --version` fails, the CLI runs no check, so it interrupts with the npm and Homebrew reinstall commands instead. Re-runs after compact so the reminder survives summarization |
+| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight, silent and without running the CLI unless the repository has rules. It reports whether the `actual` CLI is installed, and compares `actual --version` with the minimum the plugin declares (`MIN_CLI_VERSION` in `hooks/lib/bootstrap.sh`). On an older CLI it asks the agent to offer the upgrade: the command `actual version --json` names for the channel that installed it, when it is one of the two commands actual-cli uses, or both the npm and Homebrew commands otherwise. Below `GATES_MIN_CLI_VERSION`, where a check stops running in full, the offer interrupts the task when the session starts (`startup`), and every later SessionStart repeats the news with the offer at a pause, asking the agent not to repeat it after a no. From that floor up it follows the report that governance is active, at a pause. A CLI whose `actual --version` fails runs no check, so it interrupts with the npm and Homebrew reinstall commands instead. Each CLI call gets `CLI_CALL_TIMEOUT` seconds, and a `--version` that takes longer prompts nothing. Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
 | `hooks/turn-start.sh` | `UserPromptSubmit` | Marks where each turn starts: runs `actual impl-check --claude-hook`, which on a `UserPromptSubmit` envelope records `HEAD` for the session, so the `Stop` check also covers work the agent commits, or commits and pushes, during the turn. Silent on every path, since this event's stdout is added to the prompt. Without it, the check diffs against `HEAD`. The dispatch needs CLI 0.7.0 or later, and on an older CLI the call would run a full check on every prompt, so the hook first checks that `actual impl-check --help` names `UserPromptSubmit` and does nothing when it doesn't |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes plus untracked, non-ignored files, against the commit `turn-start.sh` recorded when the turn began, or `HEAD` when none was) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
@@ -220,11 +220,8 @@ guarantee nothing gets past it.
 ### When the hooks do nothing
 
 All three hooks are silent no-ops — no output, exit 0 — unless the repository has at
-least one `*.md` file in `.actual/rules/`. The one exception is `preflight.sh`'s
-minimum-version check, which runs in every repository: on a CLI older than the plugin
-needs, it asks the agent to offer the upgrade at a natural pause, without interrupting
-the task. Otherwise installing the plugin has no effect on repositories that are not
-governed by Actual.
+least one `*.md` file in `.actual/rules/`. Installing the plugin therefore has no
+effect on repositories that are not governed by Actual.
 
 The gates also never hard-fail. If the CLI is missing, too old, or crashes, the hook
 reports the problem and **makes no blocking decision**, leaving the turn to proceed
@@ -475,27 +472,34 @@ The hook always invokes `actual impl-check --claude-hook --rules-dir <dir>`, sam
 ### Requirements
 
 The hooks need the `actual` CLI at the version `MIN_CLI_VERSION` names in
-`hooks/lib/bootstrap.sh`, or newer. `preflight.sh` compares `actual --version` with
-it at `SessionStart`, in every repository, and on an older CLI asks the agent to
-offer the upgrade. The command comes from `actual version --json`, which names the
-one for the channel that installed the CLI without making a network request. A CLI
-older than that subcommand gets both the npm and Homebrew commands, with a way to
-tell which one installed it, since running the other would leave a second copy on
-`PATH`.
+`hooks/lib/bootstrap.sh`, or newer. In a repository with rules, `preflight.sh`
+compares `actual --version` with it at `SessionStart` and on an older CLI asks the
+agent to offer the upgrade. The command comes from `actual version --json`, which
+names the one for the channel that installed the CLI without making a network
+request. The agent runs it on a yes, so it is passed on only when it is one of the
+two actual-cli uses, compared whole: `brew upgrade actual-software/actual/actual`, or
+`npm install -g @actualai/actual` with or without `@latest`. Any other answer, and a
+CLI older than that subcommand, gets both the npm and Homebrew commands, with a way
+to tell which one installed it, since running the other would leave a second copy on
+`PATH`. A CLI installed some other way gets the actual-releases page.
 
-Where rules are committed, the offer interrupts the task only on a CLI older than
-`GATES_MIN_CLI_VERSION`, the oldest release every check runs in full on. On a CLI
+The offer interrupts the task only on a CLI older than `GATES_MIN_CLI_VERSION`, the
+oldest release every check runs in full on, and only when a session starts. On a CLI
 older than 0.7.0, the `Stop` check misses work committed during a turn, because
-`turn-start.sh` needs that release's `UserPromptSubmit` dispatch. A CLI between that
-floor and `MIN_CLI_VERSION` runs every check, so the agent is told governance is
-active and offers the upgrade at a pause, as it does in a repository without rules.
+`turn-start.sh` needs that release's `UserPromptSubmit` dispatch. SessionStart fires
+again on resume, clear, compact and fork, and each of those repeats the news with the
+offer at a pause, asking the agent not to repeat it once the user has declined. A CLI
+between that floor and `MIN_CLI_VERSION` runs every check, so the agent is told
+governance is active and offers the upgrade at a pause.
 
 A CLI that is on `PATH` but fails `actual --version` runs no check at all, which is
 how npm's launcher behaves when its platform package is missing. Where rules are
 committed, `preflight.sh` interrupts with the reinstall commands for both channels,
 `npm install -g @actualai/actual` and `brew reinstall actual-software/actual/actual`,
 and a way to tell which one installed it. A `--version` that succeeds but names no
-version prompts nothing.
+version prompts nothing, and neither does one still running after `CLI_CALL_TIMEOUT`
+seconds, since a slow machine is not a broken install. `version --json` has the same
+bound, and the two commands stand in for an answer that does not arrive.
 
 A CLI too old for `plan-check` or `impl-check` is also caught where those run: the
 relevant gate emits an upgrade message instead of a flag error. In `impl-gate.sh`

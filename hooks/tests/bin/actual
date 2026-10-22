@@ -88,10 +88,19 @@
 #                        only the tests that set it reach the upgrade offer.
 #   ACTUAL_TEST_CHANNEL  unset, `version` is an unrecognized subcommand, as on
 #                        every release before it. homebrew, npm and other print
-#                        the documented object for that channel; unsafe names a
-#                        command carrying shell syntax, and escaped one spelled
-#                        with a \uXXXX escape. --check is refused outright: it
-#                        asks the npm registry, which no hook may do.
+#                        the documented object for that channel, and npm-bare
+#                        npm's command without @latest. The rest name a command
+#                        that must not be passed on: unsafe carries shell
+#                        syntax, escaped a \uXXXX escape, foreign another
+#                        package, and suffixed npm's command with a second
+#                        package after it. --check is refused outright: it asks
+#                        the npm registry, which no hook may do.
+#   ACTUAL_TEST_RELEASE_URL  the release_url `version --json` reports, by
+#                        default the release page actual-cli always names.
+#   ACTUAL_TEST_HANG     --version or version: that call prints its answer and
+#                        then never finishes, like npm's launcher with the real
+#                        binary stuck under it. A child holds stdout open for
+#                        ACTUAL_TEST_HANG_SECONDS (default 10).
 #   ACTUAL_TEST_CALLS    a file each invocation appends its argv to, one line
 #                        per call, so tests can count spawns.
 
@@ -108,8 +117,16 @@ if [ "$mode" = "cannot-run" ]; then
   exit "${ACTUAL_TEST_EXIT:-1}"
 fi
 
+hang_if_asked() {
+  if [ "${ACTUAL_TEST_HANG:-}" = "$1" ]; then
+    sleep "${ACTUAL_TEST_HANG_SECONDS:-10}" &
+    wait
+  fi
+}
+
 if [ "${1:-}" = "--version" ]; then
   echo "actual ${ACTUAL_TEST_VERSION:-99.0.0-test}"
+  hang_if_asked --version
   exit 0
 fi
 
@@ -123,16 +140,21 @@ if [ "${1:-}" = "version" ]; then
   case "${ACTUAL_TEST_CHANNEL:-}" in
     homebrew) channel='"homebrew"' command='"brew upgrade actual-software/actual/actual"' ;;
     npm)      channel='"npm"' command='"npm install -g @actualai/actual@latest"' ;;
+    npm-bare) channel='"npm"' command='"npm install -g @actualai/actual"' ;;
     other)    channel='"other"' command=null ;;
     unsafe)   channel='"homebrew"' command='"brew upgrade actual-software/actual/actual; echo injected"' ;;
     escaped)  channel='"npm"' command='"npm install -g @actualai/actual@latest \u0026\u0026 echo injected"' ;;
+    foreign)  channel='"npm"' command='"npm install -g @injected/actual"' ;;
+    suffixed) channel='"npm"' command='"npm install -g @actualai/actual @injected/extra"' ;;
     *)
       echo "error: unrecognized subcommand 'version'" >&2
       exit 2 ;;
   esac
   # Pretty-printed, as actual-cli's own documentation shows it.
-  printf '{\n  "current_version": "%s",\n  "latest_version": null,\n  "update_available": null,\n  "channel": %s,\n  "upgrade_command": %s,\n  "release_url": "https://github.com/actual-software/actual-releases/releases/latest"\n}\n' \
-    "${ACTUAL_TEST_VERSION:-99.0.0-test}" "$channel" "$command"
+  printf '{\n  "current_version": "%s",\n  "latest_version": null,\n  "update_available": null,\n  "channel": %s,\n  "upgrade_command": %s,\n  "release_url": "%s"\n}\n' \
+    "${ACTUAL_TEST_VERSION:-99.0.0-test}" "$channel" "$command" \
+    "${ACTUAL_TEST_RELEASE_URL:-https://github.com/actual-software/actual-releases/releases/latest}"
+  hang_if_asked version
   exit 0
 fi
 

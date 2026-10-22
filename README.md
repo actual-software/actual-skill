@@ -157,7 +157,7 @@ AI-native software teams: developers who build with coding agents and want those
 
 ## Where does the Actual.ai Skill work?
 
-Inside the coding agent your team already uses: Claude Code, Codex, ChatGPT, Cursor, or OpenCode. It works in any repository with architecture rules committed in `.actual/rules/`, and stays silent in repositories without them, except that in Claude Code it offers to upgrade an `actual` CLI older than it needs.
+Inside the coding agent your team already uses: Claude Code, Codex, ChatGPT, Cursor, or OpenCode. It works in any repository with architecture rules committed in `.actual/rules/`, and stays silent in repositories without them.
 
 ## When does the Actual.ai Skill run?
 
@@ -222,7 +222,7 @@ See the [Actual CLI docs](https://actual.ai/cli/docs) for getting started and th
 
 - A supported coding agent: Claude Code, Codex, ChatGPT, Cursor, or OpenCode.
 - Your repository onboarded at [app.actual.ai](https://app.actual.ai), so Actual can generate its ADRs.
-- The `actual` CLI 0.8.0 or later ([actual-software/actual-cli](https://github.com/actual-software/actual-cli)). The skill offers to install it on first use, or you can install it yourself with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`. In Claude Code, each session start compares the installed version with the one the skill needs and offers to upgrade an older CLI, with the command for however you installed it when the CLI can name it, or both commands when it's too old to.
+- The `actual` CLI 0.8.0 or later ([actual-software/actual-cli](https://github.com/actual-software/actual-cli)). The skill offers to install it on first use, or you can install it yourself with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`. In Claude Code, each session start in a repository with rules compares the installed version with the one the skill needs and offers to upgrade an older CLI, with the command for however you installed it when the CLI can name it, or both commands when it's too old to. A declined offer doesn't come back as an interruption after a compaction or a resume.
 
 ## License
 
