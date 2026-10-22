@@ -1,0 +1,1 @@
+- [ ] If this changes `hooks/`, `skills/` or `.claude-plugin/` (tests aside), it raises `version` in `.claude-plugin/plugin.json` above the number on `main`. See [CONTRIBUTING.md](https://github.com/actual-software/actual-skill/blob/main/CONTRIBUTING.md).
