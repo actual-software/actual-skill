@@ -295,6 +295,12 @@ const QUIET_OUTCOMES = {
   'no-rules': 'no-rule-set',
 };
 
+// Reasons the mod has a wording for. A token outside this set is one a newer
+// CLI named, such as a rule document whose status excludes it: shown as the
+// CLI said it rather than as a reason it did not give.
+const KNOWN_REASONS = new Set(['already-briefed', 'unknown', ...Object.keys(QUIET_OUTCOMES)]);
+const isUnrecognised = (reason) => !KNOWN_REASONS.has(reason);
+
 // Per session, not per process. `spent` and `repoRoots` are both
 // keyed by session and this was not, so a pane headed "this session" listed
 // reads from before a `/clear` -- and from any other session sharing the
@@ -418,9 +424,14 @@ function reportLine(record) {
         (record.files ?? []).filter((f) => ((record.reasons ?? {})[f] ?? 'unknown') === want);
       const known = by('already-briefed');
       const unsure = by('unknown');
+      const other = (record.files ?? []).filter((f) => isUnrecognised((record.reasons ?? {})[f] ?? 'unknown'));
       const groups = [];
       if (known.length) groups.push(`briefed earlier  ${names(known)}`);
       if (unsure.length) groups.push(`briefed earlier, or ungoverned  ${names(unsure)}`);
+      if (other.length) {
+        const tokens = [...new Set(other.map((f) => record.reasons[f]))].join(', ');
+        groups.push(`no brief (${tokens})  ${names(other)}`);
+      }
       if (groups.length === 0) return null;
       return row('NO CHANGE', groups.join('  \u00b7  '));
     }
@@ -1230,10 +1241,13 @@ function paneRows(elements, sessionId) {
       .map((f) => f.split('/').pop())
       .join(', ');
     const label = OUTCOME_LABELS[record.outcome] ?? record.outcome;
+    const unrecognised = [
+      ...new Set(Object.values(record.reasons ?? {}).filter(isUnrecognised)),
+    ].join(', ');
     const detail =
       record.outcome === 'delivered'
         ? `${counted(record.summary?.decisions?.length ?? 0, 'ADR')}, ${record.summary?.shown ?? 0} of ${counted(record.summary?.total || record.summary?.shown || 0, 'rule')}, ${record.summary?.chars ?? 0} chars`
-        : record.detail ?? files ?? '';
+        : record.detail ?? (record.outcome === 'deduped' && unrecognised ? `no brief: ${unrecognised}` : files ?? '');
     return Box({
       key: `row-${i}-${id}`,
       flexDirection: 'row',

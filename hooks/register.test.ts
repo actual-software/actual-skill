@@ -1058,12 +1058,13 @@ test('the report states the decision and rule counts', async (fire: any, on: any
   expect(drawn).toContain('2 of 35 rules');
 });
 
-test('a v2 corpus brief counts one decision per adr_id, headed by its title', async (fire: any, on: any) => {
+test('a v2 corpus brief counts one decision per heading, however many rule documents it merges', async (fire: any, on: any) => {
   // The brief format is a contract with the CLI (ADR header v2, AK-964). Two
-  // files that share an adr_id are one decision: one `## ` heading, the title
-  // of the best document, never the adr_id itself, and the rules of both under
-  // it. Their slugs carry the CLI's hash suffix. The shape is the one actual-cli
-  // 0.9.0 prints; if it changes, this is the test that says the parse did.
+  // rule documents that share an adr_id are one decision: the CLI prints one
+  // `## ` heading for them and lists the rules of both under it, with slugs
+  // that carry its hash suffix. The mod counts headings and rule lines, so
+  // this pins how the mod parses that shape (hand-written here, as actual-cli
+  // 0.9.0 prints it). It cannot notice the CLI changing its output.
   const brief = [
     "This repository's own rules that apply to `src/a.ts`:",
     '',
@@ -1091,7 +1092,8 @@ test('a no-brief token the mod has never seen is quiet, not an error', async (fi
   // A newer CLI may name a new reason, such as a rule document whose status
   // excludes it. Unknown tokens, including ones that spell an Object
   // prototype key, fall back to the generic quiet row and break nothing.
-  const tokens = ['excluded-status', 'constructor', 'to-string'];
+  // `constructor` is the only such key the parser's /[a-z-]+/ can produce.
+  const tokens = ['excluded-status', 'constructor'];
   let call = 0;
   const logs: string[] = [];
   harness(on, {
@@ -1112,8 +1114,11 @@ test('a no-brief token the mod has never seen is quiet, not an error', async (fi
 
   const drawn = await drawnText(fire, 'Pane', 'rules-brief', { bodyColumns: 90 });
   expect(drawn).toContain('no new');
+  // The row says what the CLI said, not a reason it did not give.
+  expect(drawn).toContain('no brief: excluded-status');
+  expect(drawn).toContain('no brief: constructor');
   expect(drawn).not.toContain('[object');
-  expect(drawn).not.toContain('function');
+  expect(drawn).not.toContain('function Object');
 });
 
 test('a brief of one rule counts it in the singular, in the line and the pane', async (fire: any, on: any) => {
