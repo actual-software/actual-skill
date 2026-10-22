@@ -185,16 +185,14 @@ test('holds no wording of its own: a form it has never seen shows word for word'
   await band.unmount()
 })
 
-test('ignores fields it does not read: adr_id on a decision, and keys it has never seen', async ($, on) => {
-  // ADR header v2 (AK-964): the CLI names each decision by its adr_id, and a
-  // later CLI may add more. Only `line` is read, so none of it can break the band.
+test('ignores fields it does not read: decision keys, and keys it has never seen', async ($, on) => {
+  // ADR header v2 (AK-964): the CLI lists the decisions X counted as key
+  // strings such as `id:adr-1`, and a later CLI may add more fields. Only
+  // `line` is read, so none of it can break the band.
   const answer = {
     x: 1,
     y: 2,
-    decisions: [
-      { adr_id: 'adr-1', title: 'Sign With RS256', briefed: true },
-      { adr_id: 'adr-2', title: 'Expire tokens', briefed: false, status: 'proposed' },
-    ],
+    decisions: ['id:adr-1', 'id:adr-2'],
     gaps: 0,
     areas_without_adr: [],
     some_future_field: { nested: [1, 2, 3] },

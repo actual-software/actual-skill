@@ -1061,8 +1061,9 @@ test('the report states the decision and rule counts', async (fire: any, on: any
 test('a v2 corpus brief counts one decision per heading, however many rule documents it merges', async (fire: any, on: any) => {
   // The brief format is a contract with the CLI (ADR header v2, AK-964). Two
   // rule documents that share an adr_id are one decision: the CLI prints one
-  // `## ` heading for them and lists the rules of both under it, with slugs
-  // that carry its hash suffix. The mod counts headings and rule lines, so
+  // `## ` heading for them and lists the rules of both under it, one document
+  // after another, as MUST or MUST NOT lines, with slugs that carry its hash
+  // suffix. The mod counts headings and rule lines, so
   // this pins how the mod parses that shape (hand-written here, as actual-cli
   // 0.9.0 prints it). It cannot notice the CLI changing its output.
   const brief = [
@@ -1070,8 +1071,8 @@ test('a v2 corpus brief counts one decision per heading, however many rule docum
     '',
     '## Sign With RS256',
     '- [auth-sign-1a2b/R-A-001] MUST sign with RS256.',
+    '- [auth-sign-1a2b/R-A-003] MUST NOT log private keys.',
     '- [auth-sign-keys-3c4d/R-A-002] MUST rotate keys.',
-    '- [auth-sign-1a2b/R-A-003] SHOULD log key ids.',
     '- (3 of 5 rules shown)',
     '',
     '## Pin Terraform Providers',
