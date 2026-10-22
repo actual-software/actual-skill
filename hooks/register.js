@@ -713,6 +713,21 @@ async function rulesBriefAvailable($, sessionId, cwd) {
   return ok;
 }
 
+// A session's probe answer is kept while it is positive. A negative one (no
+// marker, no `rules brief`, or no answer) is dropped at the end of each turn, so
+// a CLI upgraded mid-session is noticed by the next governed read, as it is by
+// the shell hooks. Costs one `--help` spawn a turn while the CLI stays old.
+async function forgetNegativeProbe($) {
+  try {
+    const sessionId = await $.session.id();
+    if (!sessionId || briefReadsV2.get(sessionId) === true) return;
+    briefAvailable.delete(sessionId);
+    briefReadsV2.delete(sessionId);
+  } catch {
+    // Nothing to forget without a session; the next read probes as usual.
+  }
+}
+
 // True when `text` opens with an ADR header v2: the rule the CLI's own parser
 // applies (frontmatter_end in actual-cli's src/rules/parse.rs, which is the
 // source of truth and should be read before changing this). A leading UTF-8 BOM
@@ -751,19 +766,26 @@ async function adrV2Unsupported($, sessionId, rulesDir) {
   const cached = rulesAreV2.get(key);
   if (cached && cached.signature === listing?.signature) return cached.v2;
   let v2 = false;
-  try {
-    for (const name of listing?.names ?? []) {
-      if (hasV2Header(String(await $.fs.read(`${rulesDir}/${name}`)))) {
-        v2 = true;
-        break;
-      }
+  let unreadable = false;
+  for (const name of listing?.names ?? []) {
+    let text;
+    try {
+      text = String(await $.fs.read(`${rulesDir}/${name}`));
+    } catch {
+      // Skip the file and go on, as the CLI does (it records an unreadable rule
+      // file and keeps discovering) and the shell loop does: one bad file must
+      // not hide a v2 header in the next one.
+      unreadable = true;
+      continue;
     }
-  } catch {
-    // Cannot read the files: treat them as v1, the behaviour before v2 existed.
-    // Not cached, so the next read tries again.
-    return false;
+    if (hasV2Header(text)) {
+      v2 = true;
+      break;
+    }
   }
-  rulesAreV2.set(key, { signature: listing?.signature, v2 });
+  // An answer reached past a file it could not read is not cached, so the next
+  // read tries that file again.
+  if (!unreadable) rulesAreV2.set(key, { signature: listing?.signature, v2 });
   return v2;
 }
 
@@ -1308,7 +1330,10 @@ export function register(on, options = {}) {
 
   // A subagent's turn ends inside its parent's, whose own end refreshes.
   on('turn.complete', ($, e, next) => {
-    if (e.agentId === undefined) void refreshCount($);
+    if (e.agentId === undefined) {
+      void forgetNegativeProbe($);
+      void refreshCount($);
+    }
     return next(e);
   });
 

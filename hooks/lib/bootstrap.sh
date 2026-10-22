@@ -397,7 +397,8 @@ rules_have_v2_header() {
   [ -d "$dir" ] || return 1
   for f in "$dir"/*.md; do
     [ -e "$f" ] || continue
-    rules_file_has_v2_header "$f" && return 0
+    # A file that cannot be opened is skipped, as the CLI skips it.
+    rules_file_has_v2_header "$f" 2>/dev/null && return 0
   done
   return 1
 }

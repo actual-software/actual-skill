@@ -314,7 +314,7 @@ if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
 fi
 
 case "$mode" in
-  allow|no-plan-check|no-impl-check|no-turn-start)
+  allow|no-plan-check|no-impl-check|no-turn-start|no-adr-v2)
     # Conforming plan: silent on permissionDecision so the user's dialog stays.
     exit 0
     ;;

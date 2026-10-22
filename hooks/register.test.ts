@@ -57,7 +57,7 @@ function harness(
     helpExit?: number;
     // What it prints. Default: a current CLI, which names the ADR header v2
     // marker (actual-cli 0.9.0), so only a test about v2 has to say anything.
-    helpStdout?: string;
+    helpStdout?: string | (() => string);
     // What $.fs.read returns for each rule file, by entry name: one string for
     // all of them, or a map. Default: a v1 file, which opens with a `# ` title.
     ruleText?: string | Record<string, string> | (() => string | Record<string, string>);
@@ -67,7 +67,8 @@ function harness(
     // Collects every $.fs.read path, so a test can see the files left unread.
     reads?: string[];
     // $.fs.read rejects, as it does for a file the process may not open.
-    readFails?: boolean;
+    // A list of entry names fails only those files.
+    readFails?: boolean | string[];
     // The `--help` probe rejects instead of returning, as it does past its
     // timeout. Receives the probe's 1-based ordinal; return true to reject it.
     rejectHelp?: (n: number) => boolean;
@@ -123,7 +124,10 @@ function harness(
   });
   on('fs.read', async (_$: any, e: any) => {
     opts.reads?.push(e.path);
-    if (opts.readFails) throw new Error(`EACCES: ${e.path}`);
+    const entry = String(e.path).split('/').pop() as string;
+    if (opts.readFails === true || (Array.isArray(opts.readFails) && opts.readFails.includes(entry))) {
+      throw new Error(`EACCES: ${e.path}`);
+    }
     const text = typeof opts.ruleText === 'function' ? opts.ruleText() : opts.ruleText;
     if (typeof text === 'string') return { value: text };
     const name = String(e.path).split('/').pop() as string;
@@ -165,7 +169,9 @@ function harness(
     // The once-a-session probe for the subcommand is not a brief either.
     if (e.argv?.includes('--help')) {
       if (opts.rejectHelp?.(++helpSpawns)) throw new Error('timed out');
-      const stdout = opts.helpStdout ?? 'Usage: actual rules brief\nCapability marker: adr-header-v2\n';
+      const stdout =
+        (typeof opts.helpStdout === 'function' ? opts.helpStdout() : opts.helpStdout) ??
+        'Usage: actual rules brief\nCapability marker: adr-header-v2\n';
       return { value: { exitCode: opts.helpExit ?? 0, stdout, stderr: '' } };
     }
     // The repo-root query is not a brief; answer it without recording a run.
@@ -2079,6 +2085,71 @@ for (const [name, text, v2] of HEADER_CASES) {
     expect(briefed(r)).toBe(v2 ? '' : BRIEF);
   });
 }
+
+const TURN = { answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer' as const, turnId: 't1' };
+
+test('an unreadable rule file is skipped, not allowed to hide a v2 header in the next', async (fire: any, on: any) => {
+  const runs = harness(on, {
+    sessionId: 'v2-skip-1', helpStdout: OLD_CLI_HELP,
+    rules: ['a.md', 'b.md'], ruleText: { 'b.md': V2_FILE }, readFails: ['a.md'],
+  });
+
+  const r = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v2s_1' });
+
+  expect(runs.length).toBe(0);
+  expect(briefed(r)).toBe('');
+});
+
+test('an answer reached past an unreadable file is asked again next time', async (fire: any, on: any) => {
+  const reads: string[] = [];
+  harness(on, {
+    sessionId: 'v2-skip-2', helpStdout: OLD_CLI_HELP, reads,
+    rules: ['a.md', 'b.md'], ruleText: '# T\n', readFails: ['a.md'],
+  });
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v2u_1' });
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/b.ts', tool_use_id: 'v2u_2' });
+
+  // a.md is tried on both reads; a v1 verdict that skipped it is not final.
+  expect(reads.filter((p) => p.endsWith('/a.md')).length).toBe(2);
+});
+
+test('a CLI upgraded mid-session is noticed after the next turn', async (fire: any, on: any) => {
+  let help = OLD_CLI_HELP;
+  const spawns: any[] = [];
+  const runs = harness(on, {
+    sessionId: 'v2-upg-1', helpStdout: () => help, ruleText: V2_FILE, spawns,
+  });
+  on('turn.complete', () => ({ text: '' }));
+
+  const before = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/a.ts', tool_use_id: 'v2g_1' });
+  help = 'Usage: actual rules brief\nCapability marker: adr-header-v2\n';
+  // Within the turn the answer holds, as it does for every other read.
+  const same = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/b.ts', tool_use_id: 'v2g_2' });
+  await fire.turn.complete(TURN);
+  await new Promise((r) => setTimeout(r, 0));
+  const after = await fire.tool.call({ tool: 'Bash', command: 'cat src/persistence/c.ts', tool_use_id: 'v2g_3' });
+
+  expect(briefed(before)).toBe('');
+  expect(briefed(same)).toBe('');
+  expect(briefed(after)).toBe(BRIEF);
+  // The turn's own `session summary` spawn is not a brief.
+  expect(runs.filter((r: any) => r.argv.includes('--claude-hook')).length).toBe(1);
+  expect(spawns.filter((s) => s.argv.includes('--help')).length).toBe(2);
+});
+
+test('a positive probe survives the end of a turn', async (fire: any, on: any) => {
+  const spawns: any[] = [];
+  harness(on, { sessionId: 'v2-pos-1', spawns });
+  on('turn.complete', () => ({ text: '' }));
+
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts', tool_use_id: 'v2p_1' });
+  await fire.turn.complete(TURN);
+  await new Promise((r) => setTimeout(r, 0));
+  await fire.tool.call({ tool: 'Bash', command: 'cat src/b.ts', tool_use_id: 'v2p_2' });
+
+  expect(spawns.filter((s) => s.argv.includes('--help')).length).toBe(1);
+});
 
 test('a probe that times out is not remembered as an old CLI', async (fire: any, on: any) => {
   // `process.run` rejects past its timeout, which says nothing about the CLI.

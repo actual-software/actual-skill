@@ -1916,7 +1916,9 @@ for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF"; do
         fail "plan-gate ($label, $cli CLI): expected a stand-down notice" "status=$st stdout=$(cat "${WORK}/out")"
       fi
     else
-      if [ "$st" = "0" ] && ! grep -q "ADR header v2" "${WORK}/out" && [ -e "${cap}.argv" ]; then
+      # Empty stdout too: a gate that ran into a failing CLI prints a "did not
+      # run" notice, which would satisfy the other two checks.
+      if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ -e "${cap}.argv" ]; then
         pass "plan-gate ($label, $cli CLI): delegates to plan-check as before"
       else
         fail "plan-gate ($label, $cli CLI): expected plan-check to run" "status=$st stdout=$(cat "${WORK}/out")"
@@ -1934,7 +1936,9 @@ for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF"; do
         fail "impl-gate ($label, $cli CLI): expected a stand-down notice" "status=$st stdout=$(cat "${WORK}/out")"
       fi
     else
-      if [ "$st" = "0" ] && ! grep -q "ADR header v2" "${WORK}/out" && [ -e "${cap}.argv" ]; then
+      # Empty stdout too: a gate that ran into a failing CLI prints a "did not
+      # run" notice, which would satisfy the other two checks.
+      if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ -e "${cap}.argv" ]; then
         pass "impl-gate ($label, $cli CLI): delegates to impl-check as before"
       else
         fail "impl-gate ($label, $cli CLI): expected impl-check to run" "status=$st stdout=$(cat "${WORK}/out")"
@@ -2010,6 +2014,22 @@ printf -- '\n---\nadr_id: x\n---\n' > "$HDR";                               chec
 printf -- ' ---\nadr_id: x\n---\n' > "$HDR";                                 check_header "an indented opening fence" no
 printf -- '# Persistence\n\n### Rules\n' > "$HDR";                           check_header "a v1 title" no
 : > "$HDR";                                                                   check_header "an empty file" no
+
+# An unreadable rule file is skipped, silently, and does not hide a header in the
+# next one (the CLI records it and keeps discovering).
+UNREADABLE="${WORK}/unreadable-rules"; mkdir -p "$UNREADABLE"
+printf '# A\n' > "${UNREADABLE}/a.md"; chmod 000 "${UNREADABLE}/a.md"
+printf -- '---\nadr_id: x\n---\n# B\n' > "${UNREADABLE}/b.md"
+err=$( . "${HOOKS_DIR}/lib/bootstrap.sh"; rules_have_v2_header "$UNREADABLE" 2>&1 >/dev/null ); st=0
+( . "${HOOKS_DIR}/lib/bootstrap.sh"; rules_have_v2_header "$UNREADABLE" ) 2>/dev/null || st=$?
+if [ "$(id -u)" = 0 ]; then
+  pass "an unreadable rule file is skipped (skipped: running as root, chmod 000 is readable)"
+elif [ "$st" = 0 ] && [ -z "$err" ]; then
+  pass "an unreadable rule file is skipped, silently, and a later v2 file is still found"
+else
+  fail "an unreadable rule file should be skipped" "status=$st stderr=$err"
+fi
+chmod 644 "${UNREADABLE}/a.md"
 
 echo
 echo "=== ADR header v2: per-binary capability cache ==="
