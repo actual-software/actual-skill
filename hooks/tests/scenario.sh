@@ -90,7 +90,7 @@ cmd_doctor() {
   # the capability marker, so a scenario against them would measure nothing.
   # Same first-line test as rules_have_v2_header in hooks/lib/bootstrap.sh.
   if [ "$count" -gt 0 ]; then
-    local f first v2=0
+    local f first v2=0 help have_marker
     for f in "$rules"/*.md; do
       [ -e "$f" ] || continue
       IFS= read -r first <"$f" || true
@@ -98,7 +98,11 @@ cmd_doctor() {
       if [ "$first" = '---' ]; then v2=1; break; fi
     done
     if [ "$v2" -eq 1 ]; then
-      if "$CLI" rules brief --help 2>/dev/null | grep -q 'adr-header-v2'; then
+      # Captured, not piped into grep -q: under pipefail a grep that exits on
+      # its first match can SIGPIPE the CLI and fail the pipeline.
+      help=$("$CLI" rules brief --help 2>/dev/null) || help=
+      case "$help" in *adr-header-v2*) have_marker=1 ;; *) have_marker=0 ;; esac
+      if [ "$have_marker" -eq 1 ]; then
         printf '  ok    v2 rule headers present and %s reads them (adr-header-v2)\n' "$CLI"
       else
         printf '  FAIL  rule documents carry a v2 header but %s lacks the adr-header-v2\n' "$CLI"
