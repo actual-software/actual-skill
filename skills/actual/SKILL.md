@@ -532,19 +532,18 @@ does not reach Claude; the instruction to the agent is the SessionStart text abo
 
 | Feature | Minimum `actual` | Probe |
 |---------|------------------|-------|
-| `plan-check` (plan gate) | the release that added it (AK-672) | `actual plan-check --help` |
-| `impl-check` (Stop gate) | the release that added it (AK-755) | `actual impl-check --help` |
+| `plan-check` (plan gate) | earlier releases; any current CLI has it | `actual plan-check --help` |
+| `impl-check` (Stop gate) | earlier releases; any current CLI has it | `actual impl-check --help` |
 | Turn-start marker | 0.7.0 | `actual impl-check --help` names `UserPromptSubmit` |
-| `rules brief` (briefing) | the release that added it (AK-789) | `actual rules brief --help` |
+| `rules brief` (briefing) | earlier releases; any current CLI has it | `actual rules brief --help` |
 | Rule files with a YAML header (ADR header v2) | 0.9.0 | `actual rules brief --help` names `adr-header-v2` |
 
-A repository with headed rule files and a CLI below 0.9.0 gets this at `SessionStart`,
-and a one-line notice from each gate in place of a check:
+A repository with headed rule files and a CLI below 0.9.0 gets an upgrade instruction at `SessionStart`,
+and each gate prints this instead of running a check:
 
 > Actual governance stood down: .actual/rules/ uses the ADR header v2 format, which the installed `actual` CLI is too old to read (needs 0.9.0+), so this plan was not checked against them. Upgrade with `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
 
-(`impl-gate.sh` says "this turn's diff was not checked against them".) Upgrade with
-`npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
+(`impl-gate.sh` says "this turn's diff was not checked against them".)
 
 ### The revision loop, overrides, and round limits
 
