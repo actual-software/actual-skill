@@ -93,6 +93,7 @@ cmd_doctor() {
     local f first v2=0 help have_marker
     for f in "$rules"/*.md; do
       [ -e "$f" ] || continue
+      first=
       IFS= read -r first <"$f" || true
       first=${first%$'\r'}
       if [ "$first" = '---' ]; then v2=1; break; fi
