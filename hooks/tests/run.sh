@@ -179,9 +179,9 @@ else
 fi
 
 if grep -q "already declined it in this session, don't ask again" "${WORK}/out"; then
-  pass "missing binary: every plan repeats the install offer, so not again after a no"
+  pass "missing binary: the install guidance includes the don't-ask-again sentence"
 else
-  fail "missing binary: expected the install offer not to repeat after a no" "stdout=$(cat "${WORK}/out")"
+  fail "missing binary: expected the don't-ask-again sentence in the install guidance" "stdout=$(cat "${WORK}/out")"
 fi
 
 if [ "$(decision)" = "none" ]; then
