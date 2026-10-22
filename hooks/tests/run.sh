@@ -385,7 +385,7 @@ fi
 
 echo
 echo "=== plan-gate: fail open ==="
-for mode in crash garbage; do
+for mode in crash garbage cannot-run; do
   st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
   if [ "$st" = "0" ] && [ "$(decision)" != "deny" ]; then
     pass "$mode: fails open (exit 0, no deny)"
@@ -605,7 +605,7 @@ fi
 
 echo
 echo "=== impl-gate: fail open ==="
-for mode in crash garbage; do
+for mode in crash garbage cannot-run; do
   st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
   if [ "$st" = "0" ] && [ "$(stop_decision)" != "block" ]; then
     pass "$mode: fails open (exit 0, no block)"
@@ -826,47 +826,6 @@ else
   fail "missing-CLI preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-plan-check)
-if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
-   && grep -q "Offer to upgrade it now" "${WORK}/out" \
-   && grep -q "no .plan-check. subcommand" "${WORK}/out"; then
-  pass "rules + CLI missing plan-check entirely: upgrade guidance as session context, framed as an offer"
-else
-  fail "old-CLI preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
-fi
-
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-impl-check)
-if [ "$st" = "0" ] && grep -q "brew upgrade" "${WORK}/out" \
-   && grep -q "Offer to upgrade it now" "${WORK}/out" \
-   && grep -q "no .impl-check. subcommand" "${WORK}/out"; then
-  pass "rules + CLI has plan-check but not impl-check yet: its own upgrade guidance, framed as an offer"
-else
-  fail "impl-check-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
-fi
-
-# `rules brief` is advisory, so a CLI that lacks only it must still be told the
-# two gates ARE running -- the upgrade note rides along as a suffix instead of
-# replacing the success message, and must not carry the gates' blocking wording.
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-rules-brief)
-ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
-if [ "$st" = "0" ] \
-   && printf '%s' "$ctx" | grep -q "governance is active" \
-   && printf '%s' "$ctx" | grep -q "1 rule file" \
-   && printf '%s' "$ctx" | grep -q "brew upgrade" \
-   && printf '%s' "$ctx" | grep -q "advisory only"; then
-  pass "rules + CLI has both gates but not rules brief: success message kept, upgrade note appended"
-else
-  fail "rules-brief-missing preflight wrong" "status=$st stdout=$(cat "${WORK}/out")"
-fi
-
-if ! printf '%s' "$ctx" | grep -qE "Offer to upgrade it now|do not continue this task|AskUserQuestion|worth interrupting"; then
-  pass "the rules-brief note carries none of the gates' blocking wording"
-else
-  fail "rules-brief note escalates like a gate" "$ctx"
-fi
-
-# The healthy case gets the positive counterpart of that sentence, so the agent
-# knows briefing is on rather than inferring it from silence.
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow)
 ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
 if [ "$st" = "0" ] \
@@ -877,6 +836,341 @@ if [ "$st" = "0" ] \
   pass "rules + full CLI: success message makes no briefing promise a compaction would break, and no upgrade note"
 else
   fail "healthy preflight promises briefing, carries an upgrade note, or ends in a space" "status=$st ctx=$ctx"
+fi
+
+echo
+echo "=== preflight: minimum CLI version ==="
+
+session_context() {
+  jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null
+}
+
+# The nearest version under $1.
+version_below() {
+  local major=${1%%.*} rest=${1#*.} minor patch
+  minor=${rest%%.*} patch=${rest#*.}
+  if [ "$patch" -gt 0 ]; then
+    printf '%s' "${major}.${minor}.$((patch - 1))"
+  elif [ "$minor" -gt 0 ]; then
+    printf '%s' "${major}.$((minor - 1)).99"
+  else
+    printf '%s' "$((major - 1)).99.99"
+  fi
+}
+
+# Both floors are read from the library rather than repeated here, so raising
+# either needs no test change. BELOW is the nearest version under the minimum
+# and BELOW_GATES the nearest under the release every check runs in full on.
+# NUMERIC is newer by number but sorts first as a string ("0.18.0" before
+# "0.8.0"), which a string comparison would get wrong.
+MIN=$(bash -c '. "$1" && printf "%s" "$MIN_CLI_VERSION"' _ "${HOOKS_DIR}/lib/bootstrap.sh")
+GATES=$(bash -c '. "$1" && printf "%s" "$GATES_MIN_CLI_VERSION"' _ "${HOOKS_DIR}/lib/bootstrap.sh")
+BELOW=$(version_below "$MIN")
+BELOW_GATES=$(version_below "$GATES")
+min_major=${MIN%%.*} min_rest=${MIN#*.}
+min_minor=${min_rest%%.*}
+NUMERIC="${min_major}.$((min_minor + 10)).0"
+CALLS="${WORK}/calls"
+INTERRUPT='worth interrupting|do not continue this task|regardless of what else is in progress'
+
+for v in "$MIN" "$NUMERIC" "${MIN}-rc.1" "unreadable"; do
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$v")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -q "governance is active" \
+     && ! printf '%s' "$ctx" | grep -q "upgrade"; then
+    pass "rules + CLI reporting ${v}: governance active, no upgrade offer"
+  else
+    fail "rules + CLI reporting ${v}: expected the success message alone" "status=$st ctx=$ctx"
+  fi
+
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$v")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "no rules + CLI reporting ${v}: silent"
+  else
+    fail "no rules + CLI reporting ${v}: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+rm -f "$CALLS"
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_CALLS="$CALLS")
+if [ "$st" = "0" ] && [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
+  pass "rules + CLI at or above the minimum: one CLI spawn, \`actual --version\`"
+else
+  fail "healthy preflight spawned more than actual --version" "calls=$(cat "$CALLS" 2>/dev/null)"
+fi
+
+rm -f "$CALLS"
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES" ACTUAL_TEST_CALLS="$CALLS")
+ctx=$(session_context)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -qF "CLI is ${BELOW_GATES} " \
+   && printf '%s' "$ctx" | grep -qF "need ${GATES} or" \
+   && printf '%s' "$ctx" | grep -qF "needs ${MIN} or" \
+   && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+   && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual" \
+   && printf '%s' "$ctx" | grep -q "second copy" \
+   && ! printf '%s' "$ctx" | grep -q "governance is active"; then
+  pass "rules + CLI below ${GATES} and older than \`version\`: all three versions, both commands, how to tell which applies, no claim that governance is active"
+else
+  fail "below-gates preflight wrong" "status=$st ctx=$ctx"
+fi
+
+if printf '%s' "$ctx" | grep -q "Offer to upgrade it now" \
+   && printf '%s' "$ctx" | grep -q "regardless of what else is in progress" \
+   && printf '%s' "$ctx" | grep -q "ask using an interactive question tool" \
+   && printf '%s' "$ctx" | grep -q "does not satisfy this"; then
+  pass "rules + CLI below ${GATES}: interrupts the task and waits for an answer, like the install offer"
+else
+  fail "below-gates offer in a governed repo lost the interrupt-and-wait wording" "$ctx"
+fi
+
+if [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
+  pass "below the minimum: \`actual --version\`, then \`actual version --json\` without --check, so no registry request"
+else
+  fail "below-minimum preflight made the wrong CLI calls" "calls=$(cat "$CALLS" 2>/dev/null)"
+fi
+
+# From GATES up to the minimum every check runs, so a governed repository keeps
+# the message that governance is active, and the offer after it waits for a
+# pause, since SessionStart repeats it after every compaction.
+for v in "$GATES" "$BELOW"; do
+  rm -f "$CALLS"
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$v" ACTUAL_TEST_CALLS="$CALLS")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] \
+     && [ "${ctx#Actual plan- and implementation-stage governance is active: 1 rule file}" != "$ctx" ] \
+     && printf '%s' "$ctx" | grep -qF "CLI is ${v}," \
+     && printf '%s' "$ctx" | grep -qF "needs ${MIN} or" \
+     && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+     && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual" \
+     && printf '%s' "$ctx" | grep -q "AskUserQuestion" \
+     && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT" \
+     && [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
+    pass "rules + CLI reporting ${v}: governance active, then the upgrade offer at a pause, without interrupting the task"
+  else
+    fail "rules + CLI reporting ${v}: expected governance active and an offer at a pause" "status=$st ctx=$ctx calls=$(cat "$CALLS" 2>/dev/null)"
+  fi
+done
+
+for channel in homebrew npm npm-bare; do
+  case "$channel" in
+    homebrew) want="brew upgrade actual-software/actual/actual" wrong="npm install" ;;
+    npm)      want="npm install -g @actualai/actual@latest" wrong="brew upgrade" ;;
+    npm-bare) want="npm install -g @actualai/actual" wrong="brew upgrade" ;;
+  esac
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL="$channel")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -qxF "  ${want}" \
+     && ! printf '%s' "$ctx" | grep -qF "$wrong" \
+     && ! printf '%s' "$ctx" | grep -q "second copy"; then
+    pass "installed with ${channel}: only that channel's command, from \`actual version --json\`"
+  else
+    fail "installed with ${channel}: expected only ${want}" "status=$st ctx=$ctx"
+  fi
+done
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL=other)
+ctx=$(session_context)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -qF "https://github.com/actual-software/actual-releases/releases/latest" \
+   && ! printf '%s' "$ctx" | grep -q "npm install" \
+   && ! printf '%s' "$ctx" | grep -q "brew upgrade"; then
+  pass "installed some other way: the release page, and neither package manager's command"
+else
+  fail "channel other: expected the release page alone" "status=$st ctx=$ctx"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL=other ACTUAL_TEST_RELEASE_URL="https://example.invalid/injected")
+ctx=$(session_context)
+if [ "$st" = "0" ] \
+   && printf '%s' "$ctx" | grep -qF "https://github.com/actual-software/actual-releases/releases/latest" \
+   && ! printf '%s' "$ctx" | grep -q "injected"; then
+  pass "installed some other way: always the actual-releases page, whatever release_url names"
+else
+  fail "a release_url elsewhere reached the session context" "status=$st ctx=$ctx"
+fi
+
+# foreign and suffixed are made of plain characters, so only comparing the whole
+# command keeps them out; suffixed would pass a prefix match.
+for channel in unsafe escaped foreign suffixed; do
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL="$channel")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] && ! printf '%s' "$ctx" | grep -q "injected" \
+     && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+     && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual"; then
+    pass "an upgrade_command that is ${channel} is not passed on: both commands instead"
+  else
+    fail "a ${channel} upgrade_command reached the session context" "status=$st ctx=$ctx"
+  fi
+done
+
+# Nothing is checked where no rules are committed, so an old CLI there is not
+# the plugin's business: no offer, and no `actual` call at all.
+for v in "$BELOW" "$BELOW_GATES"; do
+  rm -f "$CALLS"
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$v" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "$CALLS" ]; then
+    pass "no rules + CLI reporting ${v}: silent, and \`actual\` is never run"
+  else
+    fail "no rules + CLI reporting ${v}: expected silence and no CLI call" "status=$st stdout=$(cat "${WORK}/out") calls=$(cat "$CALLS" 2>/dev/null)"
+  fi
+done
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES" ACTUAL_PLAN_GATE=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_PLAN_GATE=off silences the version check too"
+else
+  fail "ACTUAL_PLAN_GATE=off did not silence the version check" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES" ACTUAL_CLI_SUBPROCESS=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_CLI_SUBPROCESS=1: no upgrade offer inside actual-cli's own subprocess"
+else
+  fail "subprocess guard did not silence the version check" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook_no_cli "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "no rules + no CLI: silent, so the plugin asks nobody to install a CLI they never chose"
+else
+  fail "no rules + no CLI: expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+echo
+echo "=== preflight: a SessionStart after the one that starts the session ==="
+
+# SessionStart fires again on resume, clear, compact and fork. Only the start of
+# a session may interrupt for a CLI below the gates floor; every later one keeps
+# the news and offers at a pause, so a user who said no is not stopped again.
+for src in resume clear compact fork; do
+  sed "s/\"startup\"/\"${src}\"/" "${RESOLVED}/sessionstart-startup.json" > "${WORK}/sessionstart-${src}.json"
+done
+printf '{"session_id":"s","hook_event_name":"SessionStart"}' > "${WORK}/sessionstart-nosource.json"
+printf '{"session_id":"s","hook_event_name":"SessionStart","source":"startup"}' > "${WORK}/sessionstart-unspaced.json"
+
+for src in resume clear compact fork nosource; do
+  label="source ${src}"
+  [ "$src" = nosource ] && label="with no source"
+  rm -f "$CALLS"
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${WORK}/sessionstart-${src}.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES" ACTUAL_TEST_CALLS="$CALLS")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] \
+     && printf '%s' "$ctx" | grep -qF "CLI is ${BELOW_GATES} " \
+     && printf '%s' "$ctx" | grep -qF "need ${GATES} or" \
+     && printf '%s' "$ctx" | grep -q "can go unchecked" \
+     && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+     && printf '%s' "$ctx" | grep -q "AskUserQuestion" \
+     && printf '%s' "$ctx" | grep -q "already declined it in this session, don't ask again" \
+     && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT" \
+     && ! printf '%s' "$ctx" | grep -q "governance is active" \
+     && [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
+    pass "rules + CLI below ${GATES}, SessionStart ${label}: the same news, offered at a pause and not again after a no"
+  else
+    fail "rules + CLI below ${GATES}, SessionStart ${label}: expected the offer at a pause" "status=$st ctx=$ctx calls=$(cat "$CALLS" 2>/dev/null)"
+  fi
+done
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${WORK}/sessionstart-unspaced.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES")
+ctx=$(session_context)
+if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -q "Offer to upgrade it now" \
+   && printf '%s' "$ctx" | grep -q "regardless of what else is in progress"; then
+  pass "rules + CLI below ${GATES}, startup envelope without whitespace: still interrupts"
+else
+  fail "rules + CLI below ${GATES}, unspaced startup envelope: expected the interrupt" "status=$st ctx=$ctx"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${WORK}/sessionstart-compact.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW")
+ctx=$(session_context)
+if [ "$st" = "0" ] \
+   && [ "${ctx#Actual plan- and implementation-stage governance is active}" != "$ctx" ] \
+   && printf '%s' "$ctx" | grep -q "already declined it in this session, don't ask again" \
+   && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT"; then
+  pass "rules + CLI reporting ${BELOW} after a compaction: governance active, then the offer at a pause, not again after a no"
+else
+  fail "rules + CLI reporting ${BELOW} after a compaction: expected governance active and the offer" "status=$st ctx=$ctx"
+fi
+
+echo
+echo "=== preflight: a CLI that cannot run ==="
+
+# 1 is npm's launcher without its platform package, or on a platform it does
+# not support. 127 is that launcher with no node to run it.
+for code in 1 127; do
+  rm -f "$CALLS"
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=cannot-run ACTUAL_TEST_EXIT="$code" ACTUAL_TEST_CALLS="$CALLS")
+  ctx=$(session_context)
+  if [ "$st" = "0" ] \
+     && printf '%s' "$ctx" | grep -q "CLI does not run" \
+     && printf '%s' "$ctx" | grep -qxF "  npm install -g @actualai/actual" \
+     && printf '%s' "$ctx" | grep -qxF "  brew reinstall actual-software/actual/actual" \
+     && printf '%s' "$ctx" | grep -q "second copy" \
+     && ! printf '%s' "$ctx" | grep -qF "brew install actual-software" \
+     && ! printf '%s' "$ctx" | grep -q "governance is active"; then
+    pass "rules + \`actual --version\` exits ${code}: says the CLI does not run, with both reinstall commands and how to tell which applies, and no claim that governance is active"
+  else
+    fail "rules + \`actual --version\` exits ${code}: expected the reinstall offer" "status=$st ctx=$ctx"
+  fi
+
+  if printf '%s' "$ctx" | grep -q "Offer to reinstall it now" \
+     && printf '%s' "$ctx" | grep -q "regardless of what else is in progress" \
+     && printf '%s' "$ctx" | grep -q "ask using an interactive question tool" \
+     && printf '%s' "$ctx" | grep -q "does not satisfy this"; then
+    pass "rules + \`actual --version\` exits ${code}: interrupts the task and waits for an answer, like the install offer"
+  else
+    fail "rules + \`actual --version\` exits ${code}: the reinstall offer lost the interrupt-and-wait wording" "$ctx"
+  fi
+
+  if [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
+    pass "\`actual --version\` exits ${code}: no \`actual version --json\` after it, which that CLI cannot answer either"
+  else
+    fail "\`actual --version\` exits ${code}: wrong CLI calls" "calls=$(cat "$CALLS" 2>/dev/null)"
+  fi
+
+  rm -f "$CALLS"
+  st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=cannot-run ACTUAL_TEST_EXIT="$code" ACTUAL_TEST_CALLS="$CALLS")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "$CALLS" ]; then
+    pass "no rules + a CLI whose \`--version\` exits ${code}: silent, and \`actual\` is never run"
+  else
+    fail "no rules + \`actual --version\` exits ${code}: expected silence and no CLI call" "status=$st stdout=$(cat "${WORK}/out") calls=$(cat "$CALLS" 2>/dev/null)"
+  fi
+done
+
+echo
+echo "=== preflight: a CLI that does not answer ==="
+
+# The bound is read from the library, like the floors. The fake prints its
+# answer and then a child holds stdout open for HANG seconds, as npm's launcher
+# would with the real binary stuck under it, so a hook that waited on the call
+# or on a pipe from it would take HANG seconds. The answer printed before the
+# hang must not be used either.
+TIMEOUT=$(bash -c '. "$1" && printf "%s" "$CLI_CALL_TIMEOUT"' _ "${HOOKS_DIR}/lib/bootstrap.sh")
+HANG=$((TIMEOUT + 7))
+
+start=$SECONDS
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES" ACTUAL_TEST_HANG=--version ACTUAL_TEST_HANG_SECONDS="$HANG")
+elapsed=$((SECONDS - start))
+ctx=$(session_context)
+if [ "$st" = "0" ] && [ "$elapsed" -le $((TIMEOUT + 2)) ] \
+   && printf '%s' "$ctx" | grep -q "governance is active" \
+   && ! printf '%s' "$ctx" | grep -q "upgrade" \
+   && ! printf '%s' "$ctx" | grep -q "does not run"; then
+  pass "rules + \`actual --version\` that never finishes: given up after ${TIMEOUT}s (took ${elapsed}s) and read as an unreadable version, so no offer and no reinstall"
+else
+  fail "a --version that never finishes was not bounded, or was read as old or broken" "status=$st elapsed=${elapsed}s ctx=$ctx"
+fi
+
+start=$SECONDS
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_HANG=version ACTUAL_TEST_HANG_SECONDS="$HANG")
+elapsed=$((SECONDS - start))
+ctx=$(session_context)
+if [ "$st" = "0" ] && [ "$elapsed" -le $((TIMEOUT + 2)) ] \
+   && printf '%s' "$ctx" | grep -qF "CLI is ${BELOW}," \
+   && printf '%s' "$ctx" | grep -q "npm install -g @actualai/actual@latest" \
+   && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual"; then
+  pass "rules + \`actual version --json\` that never finishes: given up after ${TIMEOUT}s (took ${elapsed}s), so both commands"
+else
+  fail "a version --json that never finishes was not bounded, or its partial answer was used" "status=$st elapsed=${elapsed}s ctx=$ctx"
 fi
 
 echo
