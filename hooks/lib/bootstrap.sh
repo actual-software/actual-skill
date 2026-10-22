@@ -984,9 +984,7 @@ emit_stop_block() {
 # hookSpecificOutput.additionalContext -- both force continuation ("the same
 # loop protections as decision: block", per the docs); neither is safe for a
 # fail-open notice that must let the turn end normally. So this emits a plain,
-# user-facing systemMessage and nothing else -- unlike
-# emit_pretooluse_notice, there is no agent-facing counterpart here to also
-# populate.
+# user-facing systemMessage and nothing else.
 emit_stop_notice() {
   printf '{"systemMessage":"%s"}\n' "$(json_escape "$1")"
 }
