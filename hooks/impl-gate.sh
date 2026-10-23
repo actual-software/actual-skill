@@ -69,7 +69,7 @@ fi
 #    without also forcing continuation, and a missing CLI must never force
 #    continuation. stop_install_notice is the short user-facing form;
 #    install_message is an instruction to the agent and belongs on
-#    SessionStart / plan-gate, where that text actually reaches Claude.
+#    SessionStart, where that text actually reaches Claude.
 if ! have_actual; then
   emit_stop_notice "$(stop_install_notice)"
   exit 0
