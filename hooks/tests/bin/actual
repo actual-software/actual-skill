@@ -45,6 +45,9 @@
 #   no-turn-start   a 0.6.x CLI: impl-check exists, but its --help does not name
 #                   UserPromptSubmit, the dispatch turn-start.sh probes for
 #                   (both subcommands, if invoked, still behave as "allow")
+#   no-adr-v2    a 0.8.x CLI: every subcommand exists, but `rules brief --help`
+#                does not name the adr-header-v2 capability marker (every other
+#                mode does, as a current CLI)
 #   crash        the subcommand panics
 #   garbage      the subcommand exits 0 but prints non-JSON
 #   cannot-run   the CLI does not run at all, like npm's launcher with its
@@ -168,6 +171,11 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
   fi
   if [ "${1:-}" = "--help" ]; then
     echo "Usage: actual rules brief [--claude-hook] [--rules-dir <dir>]"
+    # The capability marker the plugin probes for (AK-962); a 0.8.x CLI lacks it.
+    # ACTUAL_TEST_ADR_V2=old does the same alongside a rules brief mode.
+    if [ "$mode" != "no-adr-v2" ] && [ "${ACTUAL_TEST_ADR_V2:-}" != "old" ]; then
+      echo "Capability marker: adr-header-v2"
+    fi
     exit 0
   fi
   has_claude_hook=0
@@ -306,7 +314,7 @@ if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
 fi
 
 case "$mode" in
-  allow|no-plan-check|no-impl-check|no-turn-start)
+  allow|no-plan-check|no-impl-check|no-turn-start|no-adr-v2)
     # Conforming plan: silent on permissionDecision so the user's dialog stays.
     exit 0
     ;;

@@ -37,7 +37,16 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
-if ! rules_present || ! have_actual; then
+dir=$(rules_dir)
+if ! rules_present "$dir" || ! have_actual; then
+  exit 0
+fi
+
+# ADR header v2 rule files this CLI cannot read: impl-gate.sh stands down, so
+# there is no turn to mark.
+# refresh re-probes once a turn: an upgrade that keeps an older mtime (Homebrew's
+# does) is invisible to the cache's -nt test.
+if adr_v2_unsupported "$dir" refresh; then
   exit 0
 fi
 
@@ -53,7 +62,6 @@ fi
 # Resolve --rules-dir and the root exactly as impl-gate.sh does. The CLI keys
 # the record on (session_id, rules dir), so the Stop check only finds it under
 # the same directory.
-dir=$(rules_dir)
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 

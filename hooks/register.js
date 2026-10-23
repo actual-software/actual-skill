@@ -301,6 +301,7 @@ const QUIET_OUTCOMES = {
 // process -- as though they were this one's.
 // Sessions that have already been told the budget is spent.
 const budgetAnnounced = new Set();
+const v2Announced = new Set();
 
 const outcomes = new Map();
 
@@ -675,6 +676,20 @@ async function resolveHome($, sessionId) {
 // the CLI, so the next read asks again.
 const briefAvailable = new Map();
 
+// What the same probe learned about ADR header v2 (AK-963): whether the CLI's
+// `rules brief --help` names the capability marker. Set beside briefAvailable,
+// so it is as definite as that answer is.
+const ADR_V2_MARKER = 'adr-header-v2';
+const briefReadsV2 = new Map();
+// Whether the rule files carry a v2 header, per session and rules directory, with
+// the listing signature the answer was made under.
+const rulesAreV2 = new Map();
+
+// The rule files governedRulesDir last saw in each directory, and a signature of
+// their names, sizes and mtimes, so the ADR header v2 check reads them without
+// listing the directory a second time and knows when its answer has gone stale.
+const ruleFileListing = new Map();
+
 async function rulesBriefAvailable($, sessionId, cwd) {
   if (briefAvailable.has(sessionId)) return briefAvailable.get(sessionId);
   let ok = false;
@@ -685,6 +700,9 @@ async function rulesBriefAvailable($, sessionId, cwd) {
       timeoutMs: SPAWN_TIMEOUT_MS,
     });
     ok = run.exitCode === 0;
+    // The same capability marker bootstrap.sh's have_adr_v2 reads: the help of
+    // a CLI that parses the ADR header v2 names it.
+    briefReadsV2.set(sessionId, ok && (run.stdout ?? '').includes(ADR_V2_MARKER));
   } catch {
     // Cannot start (no `actual` on PATH) or still running at the timeout. The
     // first is as definite as an exit code; the second is not distinguishable
@@ -693,6 +711,82 @@ async function rulesBriefAvailable($, sessionId, cwd) {
   }
   if (definite) briefAvailable.set(sessionId, ok);
   return ok;
+}
+
+// A session's probe answer is kept while it is positive. A negative one (no
+// marker, no `rules brief`, or no answer) is dropped at the end of each turn, so
+// a CLI upgraded mid-session is noticed by the next governed read, as it is by
+// the shell hooks. Costs one `--help` spawn a turn while the CLI stays old.
+async function forgetNegativeProbe($) {
+  try {
+    const sessionId = await $.session.id();
+    if (!sessionId || briefReadsV2.get(sessionId) === true) return;
+    briefAvailable.delete(sessionId);
+    briefReadsV2.delete(sessionId);
+  } catch {
+    // Nothing to forget without a session; the next read probes as usual.
+  }
+}
+
+// True when `text` opens with an ADR header v2: the rule the CLI's own parser
+// applies (frontmatter_end in actual-cli's src/rules/parse.rs, which is the
+// source of truth and should be read before changing this). A leading UTF-8 BOM
+// is ignored; the first line is `---` once trailing whitespace is trimmed; a
+// closing `---` follows; and no line between them is an unindented ATX heading,
+// because a block with a heading in it is a markdown horizontal rule and the
+// parser reads the file as v1. Mirrors rules_file_has_v2_header in bootstrap.sh.
+function hasV2Header(text) {
+  const lines = text.replace(/^\uFEFF/, '').split('\n').map((l) => l.replace(/\r$/, ''));
+  if (lines[0].trimEnd() !== '---') return false;
+  let heading = false;
+  for (const line of lines.slice(1)) {
+    if (line.trimEnd() === '---') return !heading;
+    if (!/^\s/.test(line) && /^#{1,6} /.test(line.trimEnd())) heading = true;
+  }
+  return false;
+}
+
+// True when the rule files carry an ADR header v2 and the installed CLI cannot
+// read it, so a brief built from them would be wrong. Mirrors adr_v2_unsupported
+// in bootstrap.sh: the same header test, the same silent pass for v1
+// repositories and for a CLI that names the marker. Call after
+// rulesBriefAvailable, which is what learns the marker.
+//
+// The files are read in-process (no spawn), and only when the CLI lacks the
+// marker, so a current CLI and a v1 repository on a current CLI pay nothing.
+// The answer is cached against the directory listing governedRulesDir already
+// fetched on this call (names, sizes, mtimes), so it holds while the rule files
+// do and is asked again the moment one is added, removed or rewritten: a
+// repository converted to v2 mid-session is caught on the next read, as the
+// shell hooks catch it.
+async function adrV2Unsupported($, sessionId, rulesDir) {
+  if (briefReadsV2.get(sessionId)) return false;
+  const listing = ruleFileListing.get(rulesDir);
+  const key = `${sessionId}\n${rulesDir}`;
+  const cached = rulesAreV2.get(key);
+  if (cached && cached.signature === listing?.signature) return cached.v2;
+  let v2 = false;
+  let unreadable = false;
+  for (const name of listing?.names ?? []) {
+    let text;
+    try {
+      text = String(await $.fs.read(`${rulesDir}/${name}`));
+    } catch {
+      // Skip the file and go on, as the CLI does (it records an unreadable rule
+      // file and keeps discovering) and the shell loop does: one bad file must
+      // not hide a v2 header in the next one.
+      unreadable = true;
+      continue;
+    }
+    if (hasV2Header(text)) {
+      v2 = true;
+      break;
+    }
+  }
+  // An answer reached past a file it could not read is not cached, so the next
+  // read tries that file again.
+  if (!unreadable) rulesAreV2.set(key, { signature: listing?.signature, v2 });
+  return v2;
 }
 
 async function resolveRepoRoot($, sessionId, cwd) {
@@ -752,7 +846,13 @@ async function governedRulesDir($, sessionId, cwd) {
   } catch {
     return null;
   }
-  return (entries ?? []).some((entry) => entry.name.endsWith('.md')) ? rulesDir : null;
+  const names = (entries ?? []).map((entry) => entry.name).filter((name) => name.endsWith('.md'));
+  const files = (entries ?? []).filter((entry) => entry.name.endsWith('.md'));
+  ruleFileListing.set(rulesDir, {
+    names,
+    signature: files.map((f) => `${f.name}:${f.size}:${f.mtimeMs}`).join('\n'),
+  });
+  return names.length ? rulesDir : null;
 }
 
 // Which keys exist, and the CLI flag each one forwards to. maxSessionChars has
@@ -875,6 +975,18 @@ async function deliverBrief($, e, result, paths, ctx) {
   if (!(await rulesBriefAvailable($, sessionId, cwd))) {
     recordOutcome(sessionId, e.tool_use_id, { outcome: 'no-cli', files: paths });
     return withContext(result, await debugNote($, 'not briefed', '`actual rules brief` is not available in this CLI'));
+  }
+
+  if (await adrV2Unsupported($, sessionId, rulesDir)) {
+    recordOutcome(sessionId, e.tool_use_id, { outcome: 'v2-cli-old', files: paths });
+    // Once a session, as the budget row is: the state holds for every later read.
+    if (!v2Announced.has(sessionId)) {
+      v2Announced.add(sessionId);
+      // 0.9.0 is ADR_V2_MIN_CLI in lib/bootstrap.sh, which the shell messages share;
+      // a bash variable cannot reach this file, so change both together.
+      $.ui.log(row('OLD CLI', 'rules use ADR header v2; upgrade actual to 0.9.0+ for briefs'));
+    }
+    return withContext(result, await debugNote($, 'not briefed', 'the rule files use ADR header v2, which this CLI cannot read'));
   }
 
   let appended = '';
@@ -1055,6 +1167,7 @@ const OUTCOME_LABELS = {
   budget: 'budget   ',
   'cli-error': 'error    ',
   'no-cli': 'old CLI   ',
+  'v2-cli-old': 'v2 unread',
   unresolved: 'no match ',
   'no-paths': 'no path  ',
   'not-read-only': 'writes   ',
@@ -1217,7 +1330,10 @@ export function register(on, options = {}) {
 
   // A subagent's turn ends inside its parent's, whose own end refreshes.
   on('turn.complete', ($, e, next) => {
-    if (e.agentId === undefined) void refreshCount($);
+    if (e.agentId === undefined) {
+      void forgetNegativeProbe($);
+      void refreshCount($);
+    }
     return next(e);
   });
 

@@ -56,7 +56,10 @@ fi
 #    all -- so installing the plugin is invisible in unrelated repositories.
 #    Unconditional: this must fire and decide on its own regardless of
 #    whether plan-gate.sh ran earlier in this session.
-if ! rules_present; then
+#    The rules directory is resolved once, here, and reused by 4b and 5 (it
+#    spawns `git rev-parse`), before the cd below for the reason plan-gate.sh gives.
+dir=$(rules_dir)
+if ! rules_present "$dir"; then
   exit 0
 fi
 
@@ -72,12 +75,17 @@ if ! have_actual; then
   exit 0
 fi
 
-# 5. Delegate. Resolve --rules-dir before the cd, same reasoning as
+# 4b. ADR header v2 rule files the installed CLI cannot read: stand down with
+#     the one-line user-facing notice, same channel and reason as step 4.
+if adr_v2_unsupported "$dir"; then
+  emit_stop_notice "$(adr_v2_standdown_notice "this turn's diff was not checked against them")"
+  exit 0
+fi
+
+# 5. Delegate. `dir` was resolved before the cd, same reasoning as
 #    plan-gate.sh: resolve_repo_root and rules_dir both read cwd.
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-impl-gate.XXXXXX") || exit 0
 trap 'rm -f "$stderr_file"' EXIT
-
-dir=$(rules_dir)
 
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true

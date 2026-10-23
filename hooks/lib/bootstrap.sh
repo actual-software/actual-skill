@@ -3,7 +3,8 @@
 #
 # Sourced by all four hooks: plan-gate.sh (PreToolUse:ExitPlanMode),
 # impl-gate.sh (Stop), rules-brief.sh (PostToolUse:Read, PreToolUse:Edit|Write) and preflight.sh
-# (SessionStart). Read-only: never modifies files, config, or state.
+# (SessionStart). Never modifies the repository, config, or settings; the one thing it
+# writes is the capability cache under ~/.cache/actual-skill (see have_adr_v2).
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
 # beyond bash builtins, `command`, `git`, and the POSIX `cat`, `mktemp`, `sleep`
@@ -292,6 +293,129 @@ have_turn_start() {
   return 1
 }
 
+# The first CLI release that reads ADR header v2. User-facing text says it in one
+# place; register.js repeats the number in its own OLD CLI line and must be kept
+# in step by hand.
+ADR_V2_MIN_CLI=0.9.0
+
+# ADR header v2 (a YAML header at the top of a rule file) is read by the CLI, not
+# by this plugin, and a CLI that predates it reads such a file as a flat v1
+# document: wrong scope, wrong briefs, nothing said. There is no flag to probe, so
+# like have_turn_start this reads the help that documents it. `rules brief --help`
+# names the capability marker `adr-header-v2` (actual-cli 0.9.0, AK-962). The
+# marker is an agreed literal, not a version comparison: it is true for exactly
+# the builds that parse the header.
+#
+# The answer is a property of the installed binary, so it is cached on disk, keyed
+# by the binary's absolute path, instead of re-spawning the CLI on every Read,
+# prompt, Stop and plan exit of a v2 repository. An entry is valid only while it
+# is newer than the binary (`-nt`, a builtin: a hit spawns nothing). That test
+# cannot see a replacement that keeps an older mtime, which is what Homebrew does
+# (it installs the release archive's build time). So `refresh` re-probes: preflight
+# passes it at every SessionStart and turn-start at every prompt, which bounds a
+# stale entry to one turn, and only a definite answer is stored. A cache that cannot be read or written is
+# a miss, never an error: the probe runs and the hook proceeds.
+adr_v2_cache_file() {
+  local base="${ACTUAL_HOOK_CACHE_DIR:-}" bin
+  if [ -z "$base" ]; then
+    [ -n "${XDG_CACHE_HOME:-${HOME:-}}" ] || return 1
+    base="${XDG_CACHE_HOME:-$HOME/.cache}/actual-skill"
+  fi
+  bin=$(command -v actual) || return 1
+  [ -n "$bin" ] || return 1
+  # PATH may name a relative directory; two working directories would share a key.
+  case "$bin" in /*) ;; *) bin="$PWD/${bin#./}" ;; esac
+  # `_` -> `_u`, `/` -> `_s`: unambiguous, so distinct paths never share a key.
+  bin=${bin//_/_u}
+  printf '%s/adr-v2-%s' "$base" "${bin//\//_s}"
+}
+
+# $1 = refresh skips the read and rewrites the entry. Returns 0 when the CLI names
+# the marker, 1 when it does not or cannot be asked.
+have_adr_v2() {
+  local file bin help verdict
+  file=$(adr_v2_cache_file) || file=""
+  if [ -n "$file" ] && [ "${1:-}" != refresh ]; then
+    bin=$(command -v actual)
+    if [ -f "$file" ] && [ "$file" -nt "$bin" ]; then
+      verdict=
+      IFS= read -r verdict <"$file" || true
+      case "$verdict" in
+        supported) return 0 ;;
+        unsupported) return 1 ;;
+      esac
+    fi
+  fi
+  # No entry, or not a usable one. A failed spawn says nothing about the CLI, so
+  # it is not stored.
+  help=$(actual rules brief --help 2>/dev/null) || return 1
+  case "$help" in
+    *adr-header-v2*) verdict=supported ;;
+    *) verdict=unsupported ;;
+  esac
+  if [ -n "$file" ]; then
+    # Owner-only directory, atomic replace: best effort, every failure ignored.
+    local dir="${file%/*}" tmp="$file.$$"
+    { mkdir -p "$dir" && chmod 700 "$dir" 2>/dev/null; [ -O "$dir" ] \
+      && printf '%s\n' "$verdict" >"$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null \
+      || rm -f "$tmp" 2>/dev/null
+  fi
+  [ "$verdict" = supported ]
+}
+
+# True when the file opens with an ADR header v2, by the rule the CLI's own parser
+# applies (frontmatter_end in actual-cli's src/rules/parse.rs, the source of truth:
+# read it before changing this). A leading UTF-8 BOM is ignored; the first line is
+# `---` once trailing whitespace is trimmed; a closing `---` follows; and no line
+# between them is an unindented ATX heading, because a block with a heading in it
+# is a markdown horizontal rule and the parser reads the file as v1. This plugin
+# still never parses YAML: it only finds the fences. Reads with builtins and stops
+# at the closing fence, so a v1 file (which starts with a `# ` title) costs one
+# `read` and nothing is spawned. Mirrored by hasV2Header in register.js.
+rules_file_has_v2_header() {
+  local line first=1 heading=0 hashes rest
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    if [ "$first" = 1 ]; then
+      first=0
+      line=${line#$'\xef\xbb\xbf'}
+      line=${line%"${line##*[![:space:]]}"}
+      [ "$line" = '---' ] || return 1
+      continue
+    fi
+    case "$line" in [[:space:]]*) continue ;; esac
+    line=${line%"${line##*[![:space:]]}"}
+    [ "$line" = '---' ] && { [ "$heading" = 0 ]; return; }
+    hashes=${line%%[!#]*}
+    rest=${line:${#hashes}}
+    if [ "${#hashes}" -ge 1 ] && [ "${#hashes}" -le 6 ]; then
+      case "$rest" in ' '*) heading=1 ;; esac
+    fi
+  done <"$1"
+  return 1
+}
+
+# True when any rule file in the directory opens with an ADR header v2.
+rules_have_v2_header() {
+  local dir="$1" f
+  [ -d "$dir" ] || return 1
+  for f in "$dir"/*.md; do
+    [ -e "$f" ] || continue
+    # A file that cannot be opened is skipped, as the CLI skips it.
+    rules_file_has_v2_header "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# True when this repository has v2 rule files and the installed CLI cannot read
+# them. The only state that changes behaviour: a v1 repository, or a CLI that
+# has the marker, behaves exactly as before. Callers have already checked
+# have_actual, because the probe spawns it. The cheap file check goes first so a
+# v1 repository never spawns the probe.
+adr_v2_unsupported() {
+  rules_have_v2_header "$1" && ! have_adr_v2 "${2:-}"
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
@@ -457,6 +581,46 @@ ${how}
 Then verify with: actual --version. If they decline, don't run anything --
 upgrading stays optional.
 EOF
+}
+
+# The ADR header v2 counterpart of the upgrade messages above. Same escalation
+# as them, for the same reason: the gates are supposed to block, and against v2
+# files an old CLI would judge from the wrong scope, so the user believes they
+# are governed when they are not. The gates stand down on this path (see
+# adr_v2_unsupported), so nothing is checked until the CLI is upgraded.
+adr_v2_upgrade_message() {
+  local msg
+  msg=$(cat <<'EOF'
+Actual governance is configured for this repository, and its .actual/rules/ files
+use the ADR header v2 format (a YAML header at the top of each file), but the
+installed `actual` CLI is too old to read it (it needs @MIN_CLI@ or newer). Plans and
+changes are not being checked against these rules, and rule briefing is off, until
+the CLI is upgraded.
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to upgrade it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+If they agree, run one of these with the Bash tool:
+  npm install -g @actualai/actual@latest
+  brew upgrade actual-software/actual/actual
+
+Then verify with: actual rules brief --help (it should name adr-header-v2). If they
+decline, don't run anything -- upgrading stays optional -- but only resume the
+original task once they have actually answered either way.
+EOF
+)
+  printf '%s\n' "${msg//@MIN_CLI@/$ADR_V2_MIN_CLI}"
+}
+
+# One line, for the places the full message above does not fit: a PreToolUse
+# notice and Stop's user-facing systemMessage, both repeated on every plan and
+# every turn. What failed and the command that fixes it.
+adr_v2_standdown_notice() {
+  printf '%s' "Actual governance stood down: .actual/rules/ uses the ADR header v2 format, which the installed \`actual\` CLI is too old to read (needs ${ADR_V2_MIN_CLI}+), so $1. Upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\`."
 }
 
 # For a CLI from GATES_MIN_CLI_VERSION up to MIN_CLI_VERSION. Every check runs

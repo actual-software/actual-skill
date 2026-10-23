@@ -64,10 +64,14 @@ run_hook() {
   shift 3
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
+  # The fake CLI changes answer by env var on one unchanged binary, which a
+  # per-binary cache cannot see, so every run starts cold unless it pins a cache.
+  [ -n "${KEEP_CACHE:-}" ] || rm -rf "${WORK}/cache"
   ( cd "$workdir" || exit 1
     env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
+        ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
         "$@" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
@@ -97,10 +101,12 @@ run_hook_cwd() {
   local script="$1" payload="$2" project_dir="$3" workdir="$4"
   shift 4
   local status
+  [ -n "${KEEP_CACHE:-}" ] || rm -rf "${WORK}/cache"
   ( cd "$workdir" || exit 1
     env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
+        ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
         "$@" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
@@ -1857,6 +1863,238 @@ done
 for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh"; do
   if [ -x "$f" ]; then pass "$(basename "$f") is executable"; else fail "$(basename "$f") is not executable" ""; fi
 done
+
+echo "=== ADR header v2: version gate (AK-963) ==="
+
+# {v1 files, v2 files} x {old CLI, current CLI}. Only (v2, old) changes anything.
+REPO_V2="${WORK}/with-rules-v2"
+mkdir -p "${REPO_V2}/.actual/rules"
+git -C "${REPO_V2}" init -q
+printf -- '---\nadr_id: persistence\nroot: .\npaths:\n  - "src/persistence/**"\n---\n# Persistence\n\n### Rules\n**R-001** MUST: all persistence goes through the repository layer.\n' \
+  > "${REPO_V2}/.actual/rules/persistence.md"
+# CRLF line endings must not hide the header.
+REPO_V2_CRLF="${WORK}/with-rules-v2-crlf"
+mkdir -p "${REPO_V2_CRLF}/.actual/rules"
+git -C "${REPO_V2_CRLF}" init -q
+printf -- '---\r\nadr_id: persistence\r\n---\r\n# Persistence\r\n' > "${REPO_V2_CRLF}/.actual/rules/persistence.md"
+
+V2_PLAN="${RESOLVED}/pretooluse-plan-file.json"
+V2_STOP="${RESOLVED}/stop-turn.json"
+
+for pair in "v1:$REPO_WITH_RULES" "v2:$REPO_V2" "v2-crlf:$REPO_V2_CRLF"; do
+  label=${pair%%:*}; repo=${pair#*:}
+  for cli in current old; do
+    mode=allow; [ "$cli" = old ] && mode=no-adr-v2
+    expect_notice=0; [ "$label" != v1 ] && [ "$cli" = old ] && expect_notice=1
+
+    # SessionStart: the upgrade message replaces the success message.
+    st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$repo" ACTUAL_TEST_MODE="$mode")
+    ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -q "ADR header v2" && printf '%s' "$ctx" | grep -q "0.9.0" \
+         && printf '%s' "$ctx" | grep -q "AskUserQuestion" && ! printf '%s' "$ctx" | grep -q "governance is active"; then
+        pass "preflight ($label, $cli CLI): upgrade message, no success message"
+      else
+        fail "preflight ($label, $cli CLI): expected the v2 upgrade message" "status=$st ctx=$ctx"
+      fi
+    else
+      if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -q "governance is active" && ! printf '%s' "$ctx" | grep -q "ADR header v2"; then
+        pass "preflight ($label, $cli CLI): unchanged success message"
+      else
+        fail "preflight ($label, $cli CLI): expected the ordinary success message" "status=$st ctx=$ctx"
+      fi
+    fi
+
+    # ExitPlanMode gate: a one-line notice, no deny, no call to plan-check.
+    cap="${WORK}/v2-capture"; rm -f "$cap" "${cap}.argv"
+    st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "$V2_PLAN" "$repo" ACTUAL_TEST_MODE="$mode" ACTUAL_TEST_CAPTURE="$cap")
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && jq -e '.systemMessage | test("ADR header v2")' "${WORK}/out" >/dev/null 2>&1 \
+         && ! grep -q "permissionDecision" "${WORK}/out" && [ ! -e "${cap}.argv" ]; then
+        pass "plan-gate ($label, $cli CLI): stands down with a notice, plan-check not called"
+      else
+        fail "plan-gate ($label, $cli CLI): expected a stand-down notice" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    else
+      # Empty stdout too: a gate that ran into a failing CLI prints a "did not
+      # run" notice, which would satisfy the other two checks.
+      if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ -e "${cap}.argv" ]; then
+        pass "plan-gate ($label, $cli CLI): delegates to plan-check as before"
+      else
+        fail "plan-gate ($label, $cli CLI): expected plan-check to run" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    fi
+
+    # Stop gate: a user-facing systemMessage, never a block.
+    rm -f "$cap" "${cap}.argv"
+    st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "$V2_STOP" "$repo" ACTUAL_TEST_MODE="$mode" ACTUAL_TEST_CAPTURE="$cap")
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && jq -e '.systemMessage | test("ADR header v2")' "${WORK}/out" >/dev/null 2>&1 \
+         && ! jq -e 'has("decision")' "${WORK}/out" >/dev/null 2>&1 && [ ! -e "${cap}.argv" ]; then
+        pass "impl-gate ($label, $cli CLI): stands down with a notice, impl-check not called"
+      else
+        fail "impl-gate ($label, $cli CLI): expected a stand-down notice" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    else
+      # Empty stdout too: a gate that ran into a failing CLI prints a "did not
+      # run" notice, which would satisfy the other two checks.
+      if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ -e "${cap}.argv" ]; then
+        pass "impl-gate ($label, $cli CLI): delegates to impl-check as before"
+      else
+        fail "impl-gate ($label, $cli CLI): expected impl-check to run" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    fi
+
+    # Turn start: nothing to record when the Stop gate stands down.
+    rm -f "$cap" "${cap}.argv"
+    st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$repo" ACTUAL_TEST_MODE="$mode" ACTUAL_TEST_CAPTURE="$cap")
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${cap}.argv" ]; then
+        pass "turn-start ($label, $cli CLI): silent, nothing recorded"
+      else
+        fail "turn-start ($label, $cli CLI): expected silence" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    else
+      if [ "$st" = "0" ] && [ -e "${cap}.argv" ]; then
+        pass "turn-start ($label, $cli CLI): records the turn as before"
+      else
+        fail "turn-start ($label, $cli CLI): expected the turn to be recorded" "status=$st"
+      fi
+    fi
+
+    # Read-time briefing: silent either way on the stand-down path (no brief
+    # reaches the model), and the CLI is not asked to build one.
+    rm -f "$cap" "${cap}.argv"
+    st=$(run_hook "$RB" "$GOV" "$repo" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="$cap" ACTUAL_TEST_ADR_V2="$cli")
+    if [ "$expect_notice" = 1 ]; then
+      if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${cap}.argv" ]; then
+        pass "rules-brief ($label, $cli CLI): stands down, no brief requested"
+      else
+        fail "rules-brief ($label, $cli CLI): expected a silent stand-down" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    else
+      # Every repository, CRLF header included, gets the brief back from a CLI
+      # that names the marker. The fake CLI answers for any payload naming
+      # /src/persistence/, so one payload serves all three repos. Asserting the
+      # brief itself, not just that the CLI was asked: a hook that spawned it and
+      # then dropped the reply would otherwise pass.
+      if [ "$st" = "0" ] && [ -e "${cap}.argv" ] \
+         && [ "$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)" = "R-001 MUST: all persistence goes through the repository layer." ]; then
+        pass "rules-brief ($label, $cli CLI): the brief comes back, as before"
+      else
+        fail "rules-brief ($label, $cli CLI): expected the brief to be delivered" "status=$st stdout=$(cat "${WORK}/out")"
+      fi
+    fi
+  done
+done
+
+echo
+echo "=== ADR header v2: what counts as a header ==="
+# The CLI's parser (frontmatter_end in actual-cli) is the rule; these are the same
+# cases as HEADER_CASES in register.test.ts, so the two implementations cannot
+# drift apart unnoticed.
+HDR="${WORK}/hdr.md"
+check_header() {
+  local name="$1" want="$2" got=no
+  # shellcheck disable=SC1090
+  ( . "${HOOKS_DIR}/lib/bootstrap.sh"; rules_file_has_v2_header "$HDR" ) && got=yes
+  if [ "$got" = "$want" ]; then pass "header check, ${name}: ${want}"; else fail "header check, ${name}: want ${want}, got ${got}" "$(od -c "$HDR" | head -3)"; fi
+}
+printf '\xef\xbb\xbf---\nadr_id: x\n---\n# T\n' > "$HDR";                 check_header "a UTF-8 BOM before the opening fence" yes
+printf -- '---  \nadr_id: x\n--- \t\n# T\n' > "$HDR";                       check_header "trailing spaces on the fences" yes
+printf '\xef\xbb\xbf---\r\nadr_id: x\r\n---\r\n# T\r\n' > "$HDR";        check_header "CRLF line endings and a BOM together" yes
+printf -- '---\n---\n# T\n' > "$HDR";                                        check_header "an empty header" yes
+printf -- '---\n#not a heading\nadr_id: x\n---\n# T\n' > "$HDR";            check_header "a # comment line in the YAML" yes
+printf -- '---\nnote: |\n  # not a heading\n---\n# T\n' > "$HDR";           check_header "an indented heading-like line in the YAML" yes
+printf -- '---\nadr_id: x\n---' > "$HDR";                                    check_header "a closing fence with no final newline" yes
+printf -- '---\nadr_id: x\n# T\n' > "$HDR";                                  check_header "no closing fence" no
+printf -- '---\n# Title\n---\nbody\n' > "$HDR";                             check_header "a horizontal rule block holding a heading" no
+printf -- '---\n\n# Title\n\n### Rules\n' > "$HDR";                         check_header "a rule file that merely opens with a rule line" no
+printf -- '\n---\nadr_id: x\n---\n' > "$HDR";                               check_header "a leading blank line before the fence" no
+printf -- ' ---\nadr_id: x\n---\n' > "$HDR";                                 check_header "an indented opening fence" no
+printf -- '# Persistence\n\n### Rules\n' > "$HDR";                           check_header "a v1 title" no
+: > "$HDR";                                                                   check_header "an empty file" no
+
+# An unreadable rule file is skipped, silently, and does not hide a header in the
+# next one (the CLI records it and keeps discovering).
+UNREADABLE="${WORK}/unreadable-rules"; mkdir -p "$UNREADABLE"
+printf '# A\n' > "${UNREADABLE}/a.md"; chmod 000 "${UNREADABLE}/a.md"
+printf -- '---\nadr_id: x\n---\n# B\n' > "${UNREADABLE}/b.md"
+err=$( . "${HOOKS_DIR}/lib/bootstrap.sh"; rules_have_v2_header "$UNREADABLE" 2>&1 >/dev/null ); st=0
+( . "${HOOKS_DIR}/lib/bootstrap.sh"; rules_have_v2_header "$UNREADABLE" ) 2>/dev/null || st=$?
+if [ "$(id -u)" = 0 ]; then
+  pass "an unreadable rule file is skipped (skipped: running as root, chmod 000 is readable)"
+elif [ "$st" = 0 ] && [ -z "$err" ]; then
+  pass "an unreadable rule file is skipped, silently, and a later v2 file is still found"
+else
+  fail "an unreadable rule file should be skipped" "status=$st stderr=$err"
+fi
+chmod 644 "${UNREADABLE}/a.md"
+
+echo
+echo "=== ADR header v2: per-binary capability cache ==="
+# One cold run writes the answer; later hooks read it without spawning the CLI;
+# preflight re-probes; an upgraded binary (newer than the entry) invalidates it.
+CACHE_FILE_GLOB="${WORK}/cache/adr-v2-*"
+cap="${WORK}/cache-capture"
+# Capture file records every spawn argv, so count --help spawns via a wrapper log.
+HELP_LOG="${WORK}/help-spawns"; rm -f "$HELP_LOG"
+CACHE_BIN="${WORK}/cache-bin"; mkdir -p "$CACHE_BIN"
+cat > "${CACHE_BIN}/actual" <<EOF2
+#!/usr/bin/env bash
+[ "\${2:-}" = brief ] && [ "\${3:-}" = --help ] && echo spawn >> "$HELP_LOG"
+exec "${TESTS_DIR}/bin/actual" "\$@"
+EOF2
+chmod +x "${CACHE_BIN}/actual"; touch -t 202001010000 "${CACHE_BIN}/actual"
+spawns() { [ -f "$HELP_LOG" ] && wc -l < "$HELP_LOG" | tr -d ' ' || printf 0; }
+rm -rf "${WORK}/cache"
+for i in 1 2 3; do
+  KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
+done
+if [ "$(spawns)" = 1 ] && [ "$(cat ${CACHE_FILE_GLOB} 2>/dev/null)" = supported ]; then
+  pass "three hook runs in a v2 repo spawn the probe once; the answer is cached"
+else
+  fail "expected one probe and a cached 'supported'" "spawns=$(spawns) cache=$(cat ${CACHE_FILE_GLOB} 2>/dev/null)"
+fi
+# preflight refreshes: a wrong warm entry is overwritten by the session's probe.
+echo unsupported > ${CACHE_FILE_GLOB}
+KEEP_CACHE=1 run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" >/dev/null
+if [ "$(cat ${CACHE_FILE_GLOB})" = supported ]; then pass "preflight re-probes (refresh) even with a warm cache"; else fail "preflight should refresh the cache" "cache=$(cat ${CACHE_FILE_GLOB})"; fi
+# An upgraded binary is newer than the entry: the next hook probes again.
+before=$(spawns)
+touch -t 203001010000 "${CACHE_BIN}/actual"
+KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
+if [ "$(spawns)" -gt "$before" ]; then pass "a binary newer than the entry invalidates it"; else fail "expected a re-probe after the binary changed" "spawns=$(spawns)"; fi
+# A v1 repository never probes, cached or not.
+rm -f "$HELP_LOG"
+KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_WITH_RULES" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
+if [ "$(spawns)" = 0 ]; then pass "a v1 repository spawns no probe"; else fail "v1 repo should not probe" "spawns=$(spawns)"; fi
+# Garbage in the entry is a miss, not an error.
+echo garbage > ${CACHE_FILE_GLOB}
+KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
+if [ "$(cat ${CACHE_FILE_GLOB})" = supported ]; then pass "an unreadable entry is a miss and is rewritten"; else fail "expected garbage to be re-probed" "cache=$(cat ${CACHE_FILE_GLOB})"; fi
+# A replacement that predates the entry (Homebrew keeps the archive's build mtime)
+# is invisible to -nt: turn-start re-probes every prompt, so it is noticed there.
+rm -rf "${WORK}/cache"
+KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief ACTUAL_TEST_ADR_V2=old >/dev/null
+touch -t 202001010000 "${CACHE_BIN}/actual"
+if [ "$(cat ${CACHE_FILE_GLOB} 2>/dev/null)" = unsupported ]; then
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=allow >/dev/null
+  if [ "$(cat ${CACHE_FILE_GLOB})" = supported ]; then pass "turn-start re-probes a cached 'unsupported' after an older-mtime replacement"; else fail "turn-start kept a stale 'unsupported'" "cache=$(cat ${CACHE_FILE_GLOB})"; fi
+else
+  fail "setup: expected a cached 'unsupported'" "cache=$(cat ${CACHE_FILE_GLOB} 2>/dev/null)"
+fi
+# Distinct binary paths must not share an entry.
+key_of() { ( PATH="$1:/usr/bin:/bin"; ACTUAL_HOOK_CACHE_DIR=/c; . "${HOOKS_DIR}/lib/bootstrap.sh"; adr_v2_cache_file ); }
+mkdir -p "${WORK}/k/a/b_c" "${WORK}/k/a_b/c"
+cp "${TESTS_DIR}/bin/actual" "${WORK}/k/a/b_c/actual"; cp "${TESTS_DIR}/bin/actual" "${WORK}/k/a_b/c/actual"
+k1=$(key_of "${WORK}/k/a/b_c"); k2=$(key_of "${WORK}/k/a_b/c")
+if [ -n "$k1" ] && [ "$k1" != "$k2" ]; then pass "paths differing only in / versus _ get distinct cache keys"; else fail "cache keys collide" "$k1 vs $k2"; fi
+mkdir -p "${WORK}/k/r1/bin" "${WORK}/k/r2/bin"
+cp "${TESTS_DIR}/bin/actual" "${WORK}/k/r1/bin/actual"; cp "${TESTS_DIR}/bin/actual" "${WORK}/k/r2/bin/actual"
+k1=$(cd "${WORK}/k/r1" && key_of ./bin); k2=$(cd "${WORK}/k/r2" && key_of ./bin)
+if [ -n "$k1" ] && [ "$k1" != "$k2" ]; then pass "a relative PATH entry is keyed by its absolute path"; else fail "relative PATH keys collide" "$k1 vs $k2"; fi
+rm -rf "${WORK}/cache"
 
 echo
 echo "=== Summary ==="
