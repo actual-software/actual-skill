@@ -44,7 +44,9 @@ fi
 
 # ADR header v2 rule files this CLI cannot read: impl-gate.sh stands down, so
 # there is no turn to mark.
-if adr_v2_unsupported "$dir"; then
+# refresh re-probes once a turn: an upgrade that keeps an older mtime (Homebrew's
+# does) is invisible to the cache's -nt test.
+if adr_v2_unsupported "$dir" refresh; then
   exit 0
 fi
 

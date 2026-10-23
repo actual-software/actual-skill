@@ -2073,6 +2073,27 @@ if [ "$(spawns)" = 0 ]; then pass "a v1 repository spawns no probe"; else fail "
 echo garbage > ${CACHE_FILE_GLOB}
 KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief >/dev/null
 if [ "$(cat ${CACHE_FILE_GLOB})" = supported ]; then pass "an unreadable entry is a miss and is rewritten"; else fail "expected garbage to be re-probed" "cache=$(cat ${CACHE_FILE_GLOB})"; fi
+# A replacement that predates the entry (Homebrew keeps the archive's build mtime)
+# is invisible to -nt: turn-start re-probes every prompt, so it is noticed there.
+rm -rf "${WORK}/cache"
+KEEP_CACHE=1 run_hook "$RB" "$GOV" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=brief ACTUAL_TEST_ADR_V2=old >/dev/null
+touch -t 202001010000 "${CACHE_BIN}/actual"
+if [ "$(cat ${CACHE_FILE_GLOB} 2>/dev/null)" = unsupported ]; then
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_V2" PATH="${CACHE_BIN}:${TESTS_DIR}/bin:${PATH}" ACTUAL_TEST_MODE=allow >/dev/null
+  if [ "$(cat ${CACHE_FILE_GLOB})" = supported ]; then pass "turn-start re-probes a cached 'unsupported' after an older-mtime replacement"; else fail "turn-start kept a stale 'unsupported'" "cache=$(cat ${CACHE_FILE_GLOB})"; fi
+else
+  fail "setup: expected a cached 'unsupported'" "cache=$(cat ${CACHE_FILE_GLOB} 2>/dev/null)"
+fi
+# Distinct binary paths must not share an entry.
+key_of() { ( PATH="$1:/usr/bin:/bin"; ACTUAL_HOOK_CACHE_DIR=/c; . "${HOOKS_DIR}/lib/bootstrap.sh"; adr_v2_cache_file ); }
+mkdir -p "${WORK}/k/a/b_c" "${WORK}/k/a_b/c"
+cp "${TESTS_DIR}/bin/actual" "${WORK}/k/a/b_c/actual"; cp "${TESTS_DIR}/bin/actual" "${WORK}/k/a_b/c/actual"
+k1=$(key_of "${WORK}/k/a/b_c"); k2=$(key_of "${WORK}/k/a_b/c")
+if [ -n "$k1" ] && [ "$k1" != "$k2" ]; then pass "paths differing only in / versus _ get distinct cache keys"; else fail "cache keys collide" "$k1 vs $k2"; fi
+mkdir -p "${WORK}/k/r1/bin" "${WORK}/k/r2/bin"
+cp "${TESTS_DIR}/bin/actual" "${WORK}/k/r1/bin/actual"; cp "${TESTS_DIR}/bin/actual" "${WORK}/k/r2/bin/actual"
+k1=$(cd "${WORK}/k/r1" && key_of ./bin); k2=$(cd "${WORK}/k/r2" && key_of ./bin)
+if [ -n "$k1" ] && [ "$k1" != "$k2" ]; then pass "a relative PATH entry is keyed by its absolute path"; else fail "relative PATH keys collide" "$k1 vs $k2"; fi
 rm -rf "${WORK}/cache"
 
 echo

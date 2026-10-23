@@ -307,13 +307,13 @@ ADR_V2_MIN_CLI=0.9.0
 # the builds that parse the header.
 #
 # The answer is a property of the installed binary, so it is cached on disk, keyed
-# by the binary's path, instead of re-spawning the CLI on every Read, prompt, Stop
-# and plan exit of a v2 repository. An entry is valid only while it is newer than
-# the binary (`-nt`, a builtin: a hit spawns nothing), so an upgrade in place
-# invalidates it by itself. Two things bound the cases that test cannot see, such
-# as a binary swapped in with an older preserved mtime: preflight passes `refresh`
-# and re-probes at every SessionStart, so a stale entry lives at most one session,
-# and only a definite answer is stored. A cache that cannot be read or written is
+# by the binary's absolute path, instead of re-spawning the CLI on every Read,
+# prompt, Stop and plan exit of a v2 repository. An entry is valid only while it
+# is newer than the binary (`-nt`, a builtin: a hit spawns nothing). That test
+# cannot see a replacement that keeps an older mtime, which is what Homebrew does
+# (it installs the release archive's build time). So `refresh` re-probes: preflight
+# passes it at every SessionStart and turn-start at every prompt, which bounds a
+# stale entry to one turn, and only a definite answer is stored. A cache that cannot be read or written is
 # a miss, never an error: the probe runs and the hook proceeds.
 adr_v2_cache_file() {
   local base="${ACTUAL_HOOK_CACHE_DIR:-}" bin
@@ -323,7 +323,11 @@ adr_v2_cache_file() {
   fi
   bin=$(command -v actual) || return 1
   [ -n "$bin" ] || return 1
-  printf '%s/adr-v2-%s' "$base" "${bin//\//_}"
+  # PATH may name a relative directory; two working directories would share a key.
+  case "$bin" in /*) ;; *) bin="$PWD/${bin#./}" ;; esac
+  # `_` -> `_u`, `/` -> `_s`: unambiguous, so distinct paths never share a key.
+  bin=${bin//_/_u}
+  printf '%s/adr-v2-%s' "$base" "${bin//\//_s}"
 }
 
 # $1 = refresh skips the read and rewrites the entry. Returns 0 when the CLI names
