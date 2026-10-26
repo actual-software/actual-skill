@@ -420,15 +420,14 @@ adr_v2_unsupported() {
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
 #
-# Phrased as an instruction to the agent, not just information for a human: this
-# text is consumed as hook context (SessionStart additionalContext, or a PreToolUse
-# systemMessage), so ask the agent to actively offer the install rather than passively
-# describe it. It must still ask the user first -- installing a global CLI is a
-# machine-wide change the agent should never make unprompted. Do not use it from
-# impl-gate.sh: Stop's systemMessage is shown to the user and never reaches
-# Claude (see stop_install_notice).
+# Phrased as an instruction to the agent, not just information for a human: the
+# agent reads this text as SessionStart additionalContext, so ask it to actively
+# offer the install rather than passively describe it. It must still ask the user
+# first -- installing a global CLI is a machine-wide change the agent should never
+# make unprompted. Do not use it from impl-gate.sh: Stop's systemMessage is shown to
+# the user and never reaches Claude (see stop_install_notice).
 #
-# additionalContext/systemMessage is advisory, not a directive the agent is forced to
+# additionalContext is advisory, not a directive the agent is forced to
 # act on -- unlike a deny, nothing about the hook protocol makes the agent interrupt
 # what it is already doing to surface this. Observed on Claude Code 2.1.206, in two
 # stages:
@@ -446,6 +445,10 @@ adr_v2_unsupported() {
 # This is still a probability improvement, not a guarantee: the fail-open contract
 # (see plan-gate.sh) means a missing CLI can never become a real interrupt (a deny)
 # just to make this more reliable, so the agent is always free to disregard it.
+#
+# Every SessionStart emits this, compaction and resume included, so it asks the
+# agent not to repeat an offer the user already declined. plan-gate.sh's copy is a
+# PreToolUse systemMessage, which reaches the user and not Claude.
 install_message() {
   cat <<'EOF'
 Actual plan-stage governance is configured for this repository (.actual/rules/ is
@@ -456,7 +459,8 @@ regardless of what else is in progress. Offer to install it now rather than just
 describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
 so your turn actually pauses for the user's answer, and do not continue this task --
 exploring, planning, or implementing -- until they respond. Mentioning this and then
-carrying on anyway does not satisfy this; wait for the answer first.
+carrying on anyway does not satisfy this; wait for the answer first. If the user
+already declined it in this session, don't ask again.
 
 If they agree, run one of these with the Bash tool:
   npm install -g @actualai/actual
@@ -509,7 +513,8 @@ regardless of what else is in progress. Offer to reinstall it now rather than ju
 describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
 so your turn actually pauses for the user's answer, and do not continue this task --
 exploring, planning, or implementing -- until they respond. Mentioning this and then
-carrying on anyway does not satisfy this; wait for the answer first.
+carrying on anyway does not satisfy this; wait for the answer first. If the user
+already declined it in this session, don't ask again.
 
 If they agree, run whichever of these installed it, with the Bash tool:
   npm install -g @actualai/actual
@@ -979,9 +984,7 @@ emit_stop_block() {
 # hookSpecificOutput.additionalContext -- both force continuation ("the same
 # loop protections as decision: block", per the docs); neither is safe for a
 # fail-open notice that must let the turn end normally. So this emits a plain,
-# user-facing systemMessage and nothing else -- unlike
-# emit_pretooluse_notice, there is no agent-facing counterpart here to also
-# populate.
+# user-facing systemMessage and nothing else.
 emit_stop_notice() {
   printf '{"systemMessage":"%s"}\n' "$(json_escape "$1")"
 }
