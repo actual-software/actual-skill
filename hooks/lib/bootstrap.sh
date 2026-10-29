@@ -293,6 +293,18 @@ have_turn_start() {
   return 1
 }
 
+# `actual check-override --claude-hook` records an /override typed in the
+# session (override-prompt.sh). Like have_turn_start there is no version to
+# compare, so this reads the help that documents the flag.
+have_override_hook() {
+  local help
+  help=$(actual check-override --help 2>/dev/null) || return 1
+  case "$help" in
+    *claude-hook*) return 0 ;;
+  esac
+  return 1
+}
+
 # The first CLI release that reads ADR header v2. User-facing text says it in one
 # place; register.js repeats the number in its own OLD CLI line and must be kept
 # in step by hand.

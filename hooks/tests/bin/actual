@@ -48,6 +48,8 @@
 #   no-adr-v2    a 0.8.x CLI: every subcommand exists, but `rules brief --help`
 #                does not name the adr-header-v2 capability marker (every other
 #                mode does, as a current CLI)
+#   no-override-hook  a CLI whose check-override --help does not name --claude-hook
+#                (every other subcommand behaves as "allow")
 #   crash        the subcommand panics
 #   garbage      the subcommand exits 0 but prints non-JSON
 #   cannot-run   the CLI does not run at all, like npm's launcher with its
@@ -162,6 +164,30 @@ if [ "${1:-}" = "version" ]; then
 fi
 
 subcommand="${1:-}"
+# `actual check-override --claude-hook` (override-prompt.sh): answers every call
+# with the additionalContext line the real CLI prints for a recorded override.
+if [ "$subcommand" = "check-override" ]; then
+  shift
+  if [ "${1:-}" = "--help" ]; then
+    echo "Usage: actual check-override --session <id> --rule <key> [--reason <text>]"
+    [ "$mode" = "no-override-hook" ] || echo "       actual check-override --claude-hook [--rules-dir <dir>]"
+    exit 0
+  fi
+  has_claude_hook=0
+  for arg in "$@"; do [ "$arg" = "--claude-hook" ] && has_claude_hook=1; done
+  if [ "$has_claude_hook" -eq 0 ]; then
+    echo "error: check-override must be run interactively" >&2
+    exit 2
+  fi
+  if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
+    printf '%s\n' "$@" > "${ACTUAL_TEST_CAPTURE}.argv"
+    cat > "$ACTUAL_TEST_CAPTURE"
+  else
+    cat > /dev/null
+  fi
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"The user overrode doc::R-001 via /override."}}'
+  exit 0
+fi
 # `actual rules brief` is the one two-word subcommand: handled on its own below.
 if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
   shift 2

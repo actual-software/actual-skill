@@ -806,6 +806,77 @@ fi
 if [ -x "${HOOKS_DIR}/turn-start.sh" ]; then pass "turn-start.sh is executable"; else fail "turn-start.sh is not executable" ""; fi
 
 echo
+echo "=== override-prompt: /override typed in the session ==="
+OV="${HOOKS_DIR}/override-prompt.sh"
+CAPTURE_OV="${WORK}/captured-override.json"
+
+rm -f "$CAPTURE_OV" "${CAPTURE_OV}.argv"
+st=$(run_hook "$OV" "${RESOLVED}/userpromptsubmit-override.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_OV")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/err" ] \
+   && [ "$(jq -r '.hookSpecificOutput.hookEventName' "${WORK}/out" 2>/dev/null)" = "UserPromptSubmit" ] \
+   && [ -n "$(jq -r '.hookSpecificOutput.additionalContext' "${WORK}/out" 2>/dev/null)" ]; then
+  pass "/override: the CLI's additionalContext is forwarded as the hook's output"
+else
+  fail "/override output not forwarded" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+if grep -Fxq -- '--claude-hook' "${CAPTURE_OV}.argv" \
+   && [ "$(argv_after --rules-dir "${CAPTURE_OV}.argv")" = "${REPO_WITH_RULES}/.actual/rules" ] \
+   && [ "$(jq -r '.prompt' "$CAPTURE_OV" 2>/dev/null)" = "/override R-001 reviewed by security" ]; then
+  pass "/override: the raw envelope and the gates' rules dir reach check-override --claude-hook"
+else
+  fail "/override argv/envelope wrong" "argv=$(cat "${CAPTURE_OV}.argv" 2>/dev/null) captured=$(cat "$CAPTURE_OV" 2>/dev/null)"
+fi
+
+rm -f "$CAPTURE_OV" "${CAPTURE_OV}.argv"
+st=$(run_hook "$OV" "${RESOLVED}/userpromptsubmit-override-plugin.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_OV")
+if [ "$st" = "0" ] && [ -e "${CAPTURE_OV}.argv" ]; then
+  pass "the plugin-namespaced /<plugin>:override reaches the CLI"
+else
+  fail "namespaced override not forwarded" "status=$st"
+fi
+
+# Prompts that only mention the word, or have no rules: the CLI is never reached.
+rm -f "$CAPTURE_OV" "${CAPTURE_OV}.argv"
+st=$(run_hook "$OV" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_OV")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${CAPTURE_OV}.argv" ]; then
+  pass "an ordinary prompt: silent, CLI not invoked"
+else
+  fail "ordinary prompt reached the CLI" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+st=$(run_hook "$OV" "${RESOLVED}/userpromptsubmit-mentions-override.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-override-hook)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "a prompt that merely mentions 'override' stays silent even on an old CLI"
+else
+  fail "mention of override produced output" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+rm -f "$CAPTURE_OV" "${CAPTURE_OV}.argv"
+st=$(run_hook "$OV" "${RESOLVED}/userpromptsubmit-override.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_OV")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${CAPTURE_OV}.argv" ]; then
+  pass "no rules: silent no-op that never invokes the CLI"
+else
+  fail "no-rules /override reached the CLI" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+st=$(ACTUAL_PLAN_GATE=off run_hook "$OV" "${RESOLVED}/userpromptsubmit-override.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_PLAN_GATE=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_PLAN_GATE=off: silent no-op"
+else
+  fail "ACTUAL_PLAN_GATE=off did not silence override-prompt" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# A CLI that predates --claude-hook: tell the agent nothing was overridden and
+# point at the terminal. Never errors, never blocks.
+st=$(run_hook "$OV" "${RESOLVED}/userpromptsubmit-override.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=no-override-hook)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/err" ] \
+   && jq -r '.hookSpecificOutput.additionalContext' "${WORK}/out" 2>/dev/null | grep -q "too old"; then
+  pass "CLI without --claude-hook: a context line says nothing was overridden"
+else
+  fail "old CLI /override not explained" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+for mode in crash garbage; do
+  st=$(run_hook "$OV" "${RESOLVED}/userpromptsubmit-override.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE="$mode")
+  if [ "$st" = "0" ]; then pass "$mode: hook still exits 0"; else fail "$mode: override-prompt failed the prompt" "status=$st"; fi
+done
+
 echo "=== preflight: SessionStart ==="
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=allow)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
