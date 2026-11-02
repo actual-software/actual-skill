@@ -150,7 +150,7 @@ repository. They are registered automatically on install — there is no manual 
 
 | Hook | Event | What it does |
 |------|-------|--------------|
-| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight: reports whether the `actual` CLI is installed and new enough for `plan-check` and `impl-check`. Re-runs after compact so the reminder survives summarization |
+| `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight, silent and without running the CLI unless the repository has rules. It reports whether the `actual` CLI is installed, and compares `actual --version` with the minimum the plugin declares (`MIN_CLI_VERSION` in `hooks/lib/bootstrap.sh`). On an older CLI it asks the agent to offer the upgrade: the command `actual version --json` names for the channel that installed it, when it is one of the two commands actual-cli uses, the actual-releases page for a CLI installed some other way, or both the npm and Homebrew commands otherwise. Below `GATES_MIN_CLI_VERSION`, where a check stops running in full, the offer interrupts the task when the session starts (`startup`), and every later SessionStart repeats the news with the offer at a pause, asking the agent not to repeat it after a no. From that floor up it follows the report that governance is active, at a pause. A CLI whose `actual --version` fails runs no check, so it interrupts with the npm and Homebrew reinstall commands instead. The install and reinstall offers interrupt at every SessionStart, and ask the agent not to repeat them after a no. Each CLI call gets `CLI_CALL_TIMEOUT` seconds, and a `--version` that takes longer prompts nothing. When the rule files carry a YAML header (ADR header v2) and the CLI is too old to read it, it reports that instead (see "ADR header v2 rule files"). Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
 | `hooks/turn-start.sh` | `UserPromptSubmit` | Marks where each turn starts: runs `actual impl-check --claude-hook`, which on a `UserPromptSubmit` envelope records `HEAD` for the session, so the `Stop` check also covers work the agent commits, or commits and pushes, during the turn. Silent on every path, since this event's stdout is added to the prompt. Without it, the check diffs against `HEAD`. The dispatch needs CLI 0.7.0 or later, and on an older CLI the call would run a full check on every prompt, so the hook first checks that `actual impl-check --help` names `UserPromptSubmit` and does nothing when it doesn't |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes plus untracked, non-ignored files, against the commit `turn-start.sh` recorded when the turn began, or `HEAD` when none was) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
@@ -239,6 +239,30 @@ Claude Code logs `Hook returned 'allow' for ExitPlanMode, but ask rule/safety ch
 requires full permission pipeline` and prompts the user anyway — but that safety
 check is undocumented, so the wrapper drops an `allow` verdict rather than rely on it.
 
+### ADR header v2 rule files
+
+A file in `.actual/rules/` may open with a YAML header (`---` on its first line)
+carrying `adr_id`, `root`, `paths` and the like. The plugin never parses it. It counts
+`*.md` files exactly as before, and the CLI reads the header to decide which decisions
+govern a file. Files without a header are still the original format, and a repository
+can hold both.
+
+The CLI must be 0.9.0 or later to read the header. `rules brief --help` names the
+capability marker `adr-header-v2` on a CLI that does, and the hooks probe for that
+literal rather than comparing versions. A repository with a headed rule file and a CLI
+without the marker is the one state that changes anything:
+
+- `preflight.sh` emits an upgrade message (an instruction to the agent, escalated like
+  the `plan-check` and `impl-check` ones) instead of the success message.
+- `plan-gate.sh` and `impl-gate.sh` fail open with a one-line notice naming the
+  upgrade, and run no check.
+- `rules-brief.sh`, `turn-start.sh` and the mod's briefing stand down silently (the mod
+  logs one `OLD CLI` row a session), because a brief built from the wrong scope would
+  mislead and a notice on every read would be noise.
+
+v1 repositories, and every CLI that names the marker, behave exactly as before. The
+override syntax `<doc-slug>::<rule-id>` is unchanged.
+
 ### Which repository root is governed
 
 `<repo>` is the checkout the session is actually working in. Two signals decide it,
@@ -320,7 +344,7 @@ place that distinction is applied.
 
 | Variable | Effect |
 |----------|--------|
-| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, `turn-start.sh`, and their `preflight.sh` reminder) |
+| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, `turn-start.sh`, and `preflight.sh`, including its minimum-version check) |
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). Each hook forwards the resolved path to the CLI as `--rules-dir`; `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_TURN_START_LOG` | Path of a file `turn-start.sh` appends the CLI's output and exit status to, for diagnosing a turn-start record that is never written, or a `skipped` line when the CLI has no `UserPromptSubmit` dispatch. Unset by default, which keeps the hook fully silent; set, the hook is still silent on stdout and stderr |
@@ -471,21 +495,57 @@ The hook always invokes `actual impl-check --claude-hook --rules-dir <dir>`, sam
 
 ### Requirements
 
-`actual plan-check` and `actual impl-check` are only present in newer CLI builds
-(`impl-check` newer still — see AK-755). On an older CLI the relevant hook emits an
-upgrade message instead of a flag error — check with:
+The hooks need the `actual` CLI at the version `MIN_CLI_VERSION` names in
+`hooks/lib/bootstrap.sh`, or newer. In a repository with rules, `preflight.sh`
+compares `actual --version` with it at `SessionStart` and on an older CLI asks the
+agent to offer the upgrade. The command comes from `actual version --json`, which
+names the one for the channel that installed the CLI without making a network
+request. The agent runs it on a yes, so it is passed on only when it is one of the
+two actual-cli uses, compared whole: `brew upgrade actual-software/actual/actual`, or
+`npm install -g @actualai/actual` with or without `@latest`. Any other answer, and a
+CLI older than that subcommand, gets both the npm and Homebrew commands, with a way
+to tell which one installed it, since running the other would leave a second copy on
+`PATH`. A CLI installed some other way gets the actual-releases page.
 
-```bash
-actual plan-check --help
-actual impl-check --help
-```
+The offer interrupts the task only on a CLI older than `GATES_MIN_CLI_VERSION`, the
+oldest release every check runs in full on, and only when a session starts. On a CLI
+older than 0.7.0, the `Stop` check misses work committed during a turn, because
+`turn-start.sh` needs that release's `UserPromptSubmit` dispatch. SessionStart fires
+again on resume, clear, compact and fork, and each of those repeats the news with the
+offer at a pause, asking the agent not to repeat it once the user has declined. A CLI
+between that floor and `MIN_CLI_VERSION` runs every check, so the agent is told
+governance is active and offers the upgrade at a pause.
 
-`preflight.sh` probes both independently at `SessionStart` and surfaces whichever is
-missing — a CLI can have `plan-check` without `impl-check` (it shipped first), but
-not the reverse, so `plan-check`'s own upgrade guidance takes priority when neither
-is present. That SessionStart text is an instruction to the agent. `impl-gate.sh`
-does not repeat it: Stop's `systemMessage` is shown to the user and does not reach
-Claude, so a missing CLI or a CLI without `impl-check` is a one-line warning there.
+A CLI that is on `PATH` but fails `actual --version` runs no check at all, which is
+how npm's launcher behaves when its platform package is missing. Where rules are
+committed, `preflight.sh` interrupts with the reinstall commands for both channels,
+`npm install -g @actualai/actual` and `brew reinstall actual-software/actual/actual`,
+and a way to tell which one installed it. Like the install offer for a CLI missing
+from `PATH`, it interrupts at every SessionStart and asks the agent not to repeat it
+once the user has declined. A `--version` that succeeds but names no
+version prompts nothing, and neither does one still running after `CLI_CALL_TIMEOUT`
+seconds, since a slow machine is not a broken install. `version --json` has the same
+bound, and the two commands stand in for an answer that does not arrive.
+
+A CLI too old for `plan-check` or `impl-check` is also caught where those run: the
+relevant gate emits an upgrade message instead of a flag error. In `impl-gate.sh`
+that is a one-line warning, because Stop's `systemMessage` is shown to the user and
+does not reach Claude; the instruction to the agent is the SessionStart text above.
+
+| Feature | Minimum `actual` | Probe |
+|---------|------------------|-------|
+| `plan-check` (plan gate) | earlier releases; any current CLI has it | `actual plan-check --help` |
+| `impl-check` (Stop gate) | earlier releases; any current CLI has it | `actual impl-check --help` |
+| Turn-start marker | 0.7.0 | `actual impl-check --help` names `UserPromptSubmit` |
+| `rules brief` (briefing) | earlier releases; any current CLI has it | `actual rules brief --help` |
+| Rule files with a YAML header (ADR header v2) | 0.9.0 | `actual rules brief --help` names `adr-header-v2` |
+
+A repository with headed rule files and a CLI below 0.9.0 gets an upgrade instruction at `SessionStart`,
+and each gate prints this instead of running a check:
+
+> Actual governance stood down: .actual/rules/ uses the ADR header v2 format, which the installed `actual` CLI is too old to read (needs 0.9.0+), so this plan was not checked against them. Upgrade with `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
+
+(`impl-gate.sh` says "this turn's diff was not checked against them".)
 
 ### The revision loop, overrides, and round limits
 

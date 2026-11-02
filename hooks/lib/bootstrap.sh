@@ -3,10 +3,12 @@
 #
 # Sourced by all four hooks: plan-gate.sh (PreToolUse:ExitPlanMode),
 # impl-gate.sh (Stop), rules-brief.sh (PostToolUse:Read, PreToolUse:Edit|Write) and preflight.sh
-# (SessionStart). Read-only: never modifies files, config, or state.
+# (SessionStart). Never modifies the repository, config, or settings; the one thing it
+# writes is the capability cache under ~/.cache/actual-skill (see have_adr_v2).
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
-# beyond bash builtins, `command`, and `git`. In particular it never parses JSON,
+# beyond bash builtins, `command`, `git`, and the POSIX `cat`, `mktemp`, `sleep`
+# and `rm`. In particular it never parses JSON,
 # so `jq` and `python3` are not required -- neither ships on stock macOS. JSON is
 # only ever *written* here, which is trivial. Parsing the hook envelope is the
 # CLI's job (see `actual plan-check --claude-hook`).
@@ -147,23 +149,102 @@ inside_actual_subprocess() {
   [ "${ACTUAL_CLI_SUBPROCESS:-}" = "1" ]
 }
 
+# True when a SessionStart envelope ($1) names source "startup": a session
+# starting, rather than one resumed, cleared, compacted or forked. A substring
+# match with whitespace dropped, like is_deny_decision, so nothing parses JSON.
+# An envelope it cannot read counts as a later SessionStart, the gentler case.
+is_session_startup() {
+  local s="$1"
+  s=${s// /}
+  s=${s//$'\n'/}
+  s=${s//$'\t'/}
+  s=${s//$'\r'/}
+  [ "${s#*\"source\":\"startup\"}" != "$s" ]
+}
+
 # --- CLI detection ---
 
 have_actual() {
   command -v actual >/dev/null 2>&1
 }
 
-# Capability probe rather than a version comparison: it is version-agnostic, and it
-# turns "unrecognized subcommand" noise into a clean boolean. A CLI too old to know
-# `plan-check` fails this and gets an actionable upgrade message instead of a
-# confusing flag error.
-have_plan_check() {
-  actual plan-check --help >/dev/null 2>&1
+# The oldest CLI release this plugin supports. 0.8.0 is the first whose
+# `session summary --json` returns the line the band above the prompt shows.
+# Raise it in the change that starts relying on a newer release, along with
+# plugin.json's version and the README's requirement.
+MIN_CLI_VERSION=0.8.0
+
+# The oldest release every check runs in full on. 0.7.0 added the
+# UserPromptSubmit dispatch turn-start.sh needs, and without it the Stop check
+# misses work committed during a turn. Below this version the upgrade offer
+# interrupts the task when a session starts (min_version_interrupt). Raise it
+# in the change that makes a check rely on a newer release.
+GATES_MIN_CLI_VERSION=0.7.0
+
+# Seconds each `actual` call preflight.sh makes may take: the budget the mod
+# gives each of its own spawns (SPAWN_TIMEOUT_MS in register.js).
+CLI_CALL_TIMEOUT=2
+
+# Run `actual "$@"` with stdin closed and print its stdout. A call still running
+# after CLI_CALL_TIMEOUT seconds is killed and fails with status 124, as
+# timeout(1) does, which stock macOS lacks. Output goes through a file because
+# npm's launcher runs the real binary as a child that inherits stdout, and a
+# killed launcher would leave that child holding a pipe open. A CLI killed by
+# SIGKILL from elsewhere, or a temp file that cannot be made, also gives 124.
+run_actual() {
+  local out pid watchdog status
+  out=$(mktemp "${TMPDIR:-/tmp}/actual-preflight.XXXXXX") || return 124
+  actual "$@" </dev/null >"$out" 2>/dev/null &
+  pid=$!
+  # The watchdog kills its own sleep when it is stopped, so a call that answers
+  # in time leaves no process behind.
+  ( sleeper=""
+    trap '[ -n "$sleeper" ] && kill "$sleeper"; exit 0' TERM
+    sleep "$CLI_CALL_TIMEOUT" &
+    sleeper=$!
+    wait "$sleeper" && kill -KILL "$pid" ) </dev/null >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid"
+  status=$?
+  kill "$watchdog" 2>/dev/null && wait "$watchdog" 2>/dev/null
+  [ "$status" -eq 137 ] && status=124
+  printf '%s' "$(<"$out")"
+  rm -f "$out"
+  return "$status"
+}
+
+# The installed CLI's version as MAJOR.MINOR.PATCH, from `actual --version`
+# ("actual 0.8.0"). A pre-release suffix is dropped, so 0.8.0-rc.1 counts as
+# 0.8.0. Prints nothing and fails when the output names no version or no answer
+# came in time, with status 2 when `actual --version` itself fails: that CLI
+# cannot run at all, as npm's launcher shows when its platform package is
+# missing. A slow answer is not that, so it reads as an unreadable version.
+cli_version() {
+  local out status re='[0-9]+\.[0-9]+\.[0-9]+'
+  out=$(run_actual --version)
+  status=$?
+  [ "$status" -eq 124 ] && return 1
+  [ "$status" -eq 0 ] || return 2
+  [[ $out =~ $re ]] || return 1
+  printf '%s' "${BASH_REMATCH[0]}"
+}
+
+# True when version $1 is older than version $2. Each dot-separated part is
+# compared as a number, so 0.10.0 is newer than 0.8.0.
+version_older_than() {
+  local a="$1." b="$2." x y
+  while [ -n "$a" ] && [ -n "$b" ]; do
+    x=${a%%.*} y=${b%%.*}
+    [ "$x" -lt "$y" ] && return 0
+    [ "$x" -gt "$y" ] && return 1
+    a=${a#*.} b=${b#*.}
+  done
+  return 1
 }
 
 # True when plan-check exited 2 because this CLI build has no such subcommand.
-# Used by the gate instead of a second --help spawn: an unknown subcommand must
-# fail open with upgrade guidance, not be treated as a deny (exit 2 fallback).
+# Used by the gate instead of a --help spawn: an unknown subcommand must fail
+# open with upgrade guidance, not be treated as a deny (exit 2 fallback).
 is_unrecognized_plan_check() {
   local err
   err=$(<"$1") || return 1
@@ -171,14 +252,6 @@ is_unrecognized_plan_check() {
     *unrecognized\ subcommand*plan-check*) return 0 ;;
   esac
   return 1
-}
-
-# impl-check's own counterpart of have_plan_check -- see that function's
-# comment. Checked separately because a CLI can have one subcommand without
-# the other: plan-check shipped first (AK-672-era builds), impl-check later
-# (AK-755), so "has plan-check" does not imply "has impl-check".
-have_impl_check() {
-  actual impl-check --help >/dev/null 2>&1
 }
 
 # impl-check's own counterpart of is_unrecognized_plan_check.
@@ -207,13 +280,7 @@ is_cli_usage_error() {
   return 1
 }
 
-# `rules brief` (AK-789..AK-791) post-dates impl-check, so a CLI can have both
-# gates and still lack it. Probed separately, for the same reason as the others.
-have_rules_brief() {
-  actual rules brief --help >/dev/null 2>&1
-}
-
-# impl-check's UserPromptSubmit dispatch (CLI 0.7.0) post-dates impl-check too,
+# impl-check's UserPromptSubmit dispatch (CLI 0.7.0) post-dates impl-check,
 # and a CLI without it runs the whole check on that envelope instead of
 # recording where the turn starts. The dispatch has no flag of its own, so this
 # reads the help that documents it; no earlier release names the event there.
@@ -226,19 +293,141 @@ have_turn_start() {
   return 1
 }
 
+# The first CLI release that reads ADR header v2. User-facing text says it in one
+# place; register.js repeats the number in its own OLD CLI line and must be kept
+# in step by hand.
+ADR_V2_MIN_CLI=0.9.0
+
+# ADR header v2 (a YAML header at the top of a rule file) is read by the CLI, not
+# by this plugin, and a CLI that predates it reads such a file as a flat v1
+# document: wrong scope, wrong briefs, nothing said. There is no flag to probe, so
+# like have_turn_start this reads the help that documents it. `rules brief --help`
+# names the capability marker `adr-header-v2` (actual-cli 0.9.0, AK-962). The
+# marker is an agreed literal, not a version comparison: it is true for exactly
+# the builds that parse the header.
+#
+# The answer is a property of the installed binary, so it is cached on disk, keyed
+# by the binary's absolute path, instead of re-spawning the CLI on every Read,
+# prompt, Stop and plan exit of a v2 repository. An entry is valid only while it
+# is newer than the binary (`-nt`, a builtin: a hit spawns nothing). That test
+# cannot see a replacement that keeps an older mtime, which is what Homebrew does
+# (it installs the release archive's build time). So `refresh` re-probes: preflight
+# passes it at every SessionStart and turn-start at every prompt, which bounds a
+# stale entry to one turn, and only a definite answer is stored. A cache that cannot be read or written is
+# a miss, never an error: the probe runs and the hook proceeds.
+adr_v2_cache_file() {
+  local base="${ACTUAL_HOOK_CACHE_DIR:-}" bin
+  if [ -z "$base" ]; then
+    [ -n "${XDG_CACHE_HOME:-${HOME:-}}" ] || return 1
+    base="${XDG_CACHE_HOME:-$HOME/.cache}/actual-skill"
+  fi
+  bin=$(command -v actual) || return 1
+  [ -n "$bin" ] || return 1
+  # PATH may name a relative directory; two working directories would share a key.
+  case "$bin" in /*) ;; *) bin="$PWD/${bin#./}" ;; esac
+  # `_` -> `_u`, `/` -> `_s`: unambiguous, so distinct paths never share a key.
+  bin=${bin//_/_u}
+  printf '%s/adr-v2-%s' "$base" "${bin//\//_s}"
+}
+
+# $1 = refresh skips the read and rewrites the entry. Returns 0 when the CLI names
+# the marker, 1 when it does not or cannot be asked.
+have_adr_v2() {
+  local file bin help verdict
+  file=$(adr_v2_cache_file) || file=""
+  if [ -n "$file" ] && [ "${1:-}" != refresh ]; then
+    bin=$(command -v actual)
+    if [ -f "$file" ] && [ "$file" -nt "$bin" ]; then
+      verdict=
+      IFS= read -r verdict <"$file" || true
+      case "$verdict" in
+        supported) return 0 ;;
+        unsupported) return 1 ;;
+      esac
+    fi
+  fi
+  # No entry, or not a usable one. A failed spawn says nothing about the CLI, so
+  # it is not stored.
+  help=$(actual rules brief --help 2>/dev/null) || return 1
+  case "$help" in
+    *adr-header-v2*) verdict=supported ;;
+    *) verdict=unsupported ;;
+  esac
+  if [ -n "$file" ]; then
+    # Owner-only directory, atomic replace: best effort, every failure ignored.
+    local dir="${file%/*}" tmp="$file.$$"
+    { mkdir -p "$dir" && chmod 700 "$dir" 2>/dev/null; [ -O "$dir" ] \
+      && printf '%s\n' "$verdict" >"$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null \
+      || rm -f "$tmp" 2>/dev/null
+  fi
+  [ "$verdict" = supported ]
+}
+
+# True when the file opens with an ADR header v2, by the rule the CLI's own parser
+# applies (frontmatter_end in actual-cli's src/rules/parse.rs, the source of truth:
+# read it before changing this). A leading UTF-8 BOM is ignored; the first line is
+# `---` once trailing whitespace is trimmed; a closing `---` follows; and no line
+# between them is an unindented ATX heading, because a block with a heading in it
+# is a markdown horizontal rule and the parser reads the file as v1. This plugin
+# still never parses YAML: it only finds the fences. Reads with builtins and stops
+# at the closing fence, so a v1 file (which starts with a `# ` title) costs one
+# `read` and nothing is spawned. Mirrored by hasV2Header in register.js.
+rules_file_has_v2_header() {
+  local line first=1 heading=0 hashes rest
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    if [ "$first" = 1 ]; then
+      first=0
+      line=${line#$'\xef\xbb\xbf'}
+      line=${line%"${line##*[![:space:]]}"}
+      [ "$line" = '---' ] || return 1
+      continue
+    fi
+    case "$line" in [[:space:]]*) continue ;; esac
+    line=${line%"${line##*[![:space:]]}"}
+    [ "$line" = '---' ] && { [ "$heading" = 0 ]; return; }
+    hashes=${line%%[!#]*}
+    rest=${line:${#hashes}}
+    if [ "${#hashes}" -ge 1 ] && [ "${#hashes}" -le 6 ]; then
+      case "$rest" in ' '*) heading=1 ;; esac
+    fi
+  done <"$1"
+  return 1
+}
+
+# True when any rule file in the directory opens with an ADR header v2.
+rules_have_v2_header() {
+  local dir="$1" f
+  [ -d "$dir" ] || return 1
+  for f in "$dir"/*.md; do
+    [ -e "$f" ] || continue
+    # A file that cannot be opened is skipped, as the CLI skips it.
+    rules_file_has_v2_header "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# True when this repository has v2 rule files and the installed CLI cannot read
+# them. The only state that changes behaviour: a v1 repository, or a CLI that
+# has the marker, behaves exactly as before. Callers have already checked
+# have_actual, because the probe spawns it. The cheap file check goes first so a
+# v1 repository never spawns the probe.
+adr_v2_unsupported() {
+  rules_have_v2_header "$1" && ! have_adr_v2 "${2:-}"
+}
+
 # --- Operator-facing messages ---
 
 # Install matrix mirrors the one documented in skills/actual/SKILL.md.
 #
-# Phrased as an instruction to the agent, not just information for a human: this
-# text is consumed as hook context (SessionStart additionalContext, or a PreToolUse
-# systemMessage), so ask the agent to actively offer the install rather than passively
-# describe it. It must still ask the user first -- installing a global CLI is a
-# machine-wide change the agent should never make unprompted. Do not use it from
-# impl-gate.sh: Stop's systemMessage is shown to the user and never reaches
-# Claude (see stop_install_notice).
+# Phrased as an instruction to the agent, not just information for a human: the
+# agent reads this text as SessionStart additionalContext, so ask it to actively
+# offer the install rather than passively describe it. It must still ask the user
+# first -- installing a global CLI is a machine-wide change the agent should never
+# make unprompted. Do not use it from impl-gate.sh: Stop's systemMessage is shown to
+# the user and never reaches Claude (see stop_install_notice).
 #
-# additionalContext/systemMessage is advisory, not a directive the agent is forced to
+# additionalContext is advisory, not a directive the agent is forced to
 # act on -- unlike a deny, nothing about the hook protocol makes the agent interrupt
 # what it is already doing to surface this. Observed on Claude Code 2.1.206, in two
 # stages:
@@ -256,6 +445,10 @@ have_turn_start() {
 # This is still a probability improvement, not a guarantee: the fail-open contract
 # (see plan-gate.sh) means a missing CLI can never become a real interrupt (a deny)
 # just to make this more reliable, so the agent is always free to disregard it.
+#
+# Every SessionStart emits this, compaction and resume included, so it asks the
+# agent not to repeat an offer the user already declined. plan-gate.sh's copy is a
+# PreToolUse systemMessage, which reaches the user and not Claude.
 install_message() {
   cat <<'EOF'
 Actual plan-stage governance is configured for this repository (.actual/rules/ is
@@ -266,7 +459,8 @@ regardless of what else is in progress. Offer to install it now rather than just
 describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
 so your turn actually pauses for the user's answer, and do not continue this task --
 exploring, planning, or implementing -- until they respond. Mentioning this and then
-carrying on anyway does not satisfy this; wait for the answer first.
+carrying on anyway does not satisfy this; wait for the answer first. If the user
+already declined it in this session, don't ask again.
 
 If they agree, run one of these with the Bash tool:
   npm install -g @actualai/actual
@@ -302,13 +496,111 @@ actually answered either way.
 EOF
 }
 
-# impl-check's own counterpart of upgrade_message, for a CLI build that has
-# plan-check but predates AK-755 (no impl-check subcommand yet).
-impl_upgrade_message() {
+# For a repository with committed rules whose `actual` is on PATH but fails
+# `actual --version`. Nothing there is checked, and the gates only report that
+# they did not run, so this asks the way install_message does. A CLI that
+# cannot run cannot name the channel that installed it, so both commands go
+# out, and Homebrew's is `reinstall` because `brew install` leaves an installed
+# formula as it is.
+reinstall_interrupt() {
   cat <<'EOF'
-Actual implementation-stage governance is configured for this repository
-(.actual/rules/ is present), but the installed `actual` CLI has no `impl-check` subcommand,
-so your changes are not being checked as you go.
+Actual governance is configured for this repository (.actual/rules/ is present),
+but the installed `actual` CLI does not run: `actual --version` failed, so no plan
+or diff is being checked.
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to reinstall it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first. If the user
+already declined it in this session, don't ask again.
+
+If they agree, run whichever of these installed it, with the Bash tool:
+  npm install -g @actualai/actual
+  brew reinstall actual-software/actual/actual
+
+Check which first: `ls -l "$(command -v actual)"` shows a link into Homebrew's
+Cellar for a Homebrew install and into node_modules for an npm one. Running the
+other command would add a second copy instead of repairing this one, so ask the
+user if neither applies.
+
+Then verify with: actual --version. If they decline, don't run anything --
+reinstalling stays optional -- but only resume the original task once they have
+actually answered either way.
+EOF
+}
+
+# Upgrade advice for a CLI older than MIN_CLI_VERSION, which preflight.sh gives
+# in a repository with committed rules, in one of three forms. $1 is the
+# installed version.
+#
+# This one is for a CLI older than GATES_MIN_CLI_VERSION when a session starts.
+# Some check there is not running in full, so the user believes their work is
+# governed when part of it is not: the false sense of safety that earns
+# install_message its interrupt-and-wait wording.
+min_version_interrupt() {
+  local installed="$1" how
+  how=$(upgrade_instructions)
+  cat <<EOF
+Actual governance is configured for this repository (.actual/rules/ is present),
+but the installed \`actual\` CLI is ${installed} and its checks need ${GATES_MIN_CLI_VERSION} or
+later to run in full, so some of your changes can go unchecked. This plugin
+needs ${MIN_CLI_VERSION} or later.
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to upgrade it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+${how}
+
+Then verify with: actual --version. If they decline, don't run anything --
+upgrading stays optional -- but only resume the original task once they have
+actually answered either way.
+EOF
+}
+
+# The same news for every later SessionStart: resume, clear, compact and fork.
+# The interrupt asked when the session started, and asking that way again after
+# each compaction would put a user who said no in front of the same blocking
+# question until they upgrade. So this asks at a pause, and not after a no.
+min_version_reminder() {
+  local installed="$1" how
+  how=$(upgrade_instructions)
+  cat <<EOF
+Actual governance is configured for this repository (.actual/rules/ is present),
+but the installed \`actual\` CLI is ${installed} and its checks need ${GATES_MIN_CLI_VERSION} or
+later to run in full, so some of your changes can go unchecked. This plugin
+needs ${MIN_CLI_VERSION} or later.
+
+This session is already under way, so this does not need to interrupt the task
+in progress. At a natural pause, such as the end of your next reply, mention it
+once and offer to upgrade, asking with an interactive question tool (e.g.
+AskUserQuestion). If the user already declined it in this session, don't ask again.
+
+${how}
+
+Then verify with: actual --version. If they decline, don't run anything --
+upgrading stays optional.
+EOF
+}
+
+# The ADR header v2 counterpart of the upgrade messages above. Same escalation
+# as them, for the same reason: the gates are supposed to block, and against v2
+# files an old CLI would judge from the wrong scope, so the user believes they
+# are governed when they are not. The gates stand down on this path (see
+# adr_v2_unsupported), so nothing is checked until the CLI is upgraded.
+adr_v2_upgrade_message() {
+  local msg
+  msg=$(cat <<'EOF'
+Actual governance is configured for this repository, and its .actual/rules/ files
+use the ADR header v2 format (a YAML header at the top of each file), but the
+installed `actual` CLI is too old to read it (it needs @MIN_CLI@ or newer). Plans and
+changes are not being checked against these rules, and rule briefing is off, until
+the CLI is upgraded.
 
 This is worth interrupting the current task for: mention it in your very next reply,
 regardless of what else is in progress. Offer to upgrade it now rather than just
@@ -321,46 +613,96 @@ If they agree, run one of these with the Bash tool:
   npm install -g @actualai/actual@latest
   brew upgrade actual-software/actual/actual
 
-Then verify with: actual impl-check --help. If they decline, don't run anything --
-upgrading stays optional -- but only resume the original task once they have
-actually answered either way.
+Then verify with: actual rules brief --help (it should name adr-header-v2). If they
+decline, don't run anything -- upgrading stays optional -- but only resume the
+original task once they have actually answered either way.
+EOF
+)
+  printf '%s\n' "${msg//@MIN_CLI@/$ADR_V2_MIN_CLI}"
+}
+
+# One line, for the places the full message above does not fit: a PreToolUse
+# notice and Stop's user-facing systemMessage, both repeated on every plan and
+# every turn. What failed and the command that fixes it.
+adr_v2_standdown_notice() {
+  printf '%s' "Actual governance stood down: .actual/rules/ uses the ADR header v2 format, which the installed \`actual\` CLI is too old to read (needs ${ADR_V2_MIN_CLI}+), so $1. Upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\`."
+}
+
+# For a CLI from GATES_MIN_CLI_VERSION up to MIN_CLI_VERSION. Every check runs
+# on it, so nothing it lacks leaves work unchecked, and the agent offers the
+# upgrade at a pause rather than stopping the task. preflight.sh appends this
+# to the message that governance is active.
+min_version_offer() {
+  local installed="$1" how
+  how=$(upgrade_instructions)
+  cat <<EOF
+The installed \`actual\` CLI is ${installed}, and the actual plugin loaded in this
+session needs ${MIN_CLI_VERSION} or later, so some of what it adds may not work as
+documented.
+
+Every check above runs on this version, so this does not need to interrupt the
+task in progress. At a natural pause, such as the end of your next reply, mention
+it once and offer to upgrade, asking with an interactive question tool (e.g.
+AskUserQuestion). If the user already declined it in this session, don't ask again.
+
+${how}
+
+Then verify with: actual --version. If they decline, don't run anything --
+upgrading stays optional.
 EOF
 }
 
-# rules brief's counterpart of the *_upgrade_message functions above -- and
-# deliberately NOT one of them. A sentence folded into preflight's success
-# message, not a message that replaces it.
+# How to upgrade, for the messages above. `actual version --json` names the
+# command for the channel that installed this CLI, which it reads from its own
+# path. Without --check it answers from local facts, so a session start never
+# waits on the registry. A CLI older than that subcommand gets both commands,
+# and a way to tell which applies: running the other would leave a second
+# `actual` on PATH.
 #
-# The escalation those three share ("interrupt the current task", "do not
-# continue until they respond", AskUserQuestion) is earned by what their
-# absence costs: a missing CLI, plan-check or impl-check means a gate that is
-# supposed to BLOCK is silently not blocking, so the user believes they are
-# governed when they are not. That false sense of safety is worth a turn.
-#
-# A missing `rules brief` costs none of it. Briefing is advisory by
-# construction -- it never blocks anything, so its absence cannot create a
-# false sense of safety; the gates keep working exactly as before. Reusing the
-# blocking wording for it would also land badly on cadence: SessionStart fires
-# on startup, resume, clear, compact AND fork, so a user one release behind
-# would face a blocking question after every compaction to enable a nicety.
-#
-# It must also never displace the success message. Briefing is the optional
-# feature here; the fact that plan and diff checking ARE running is the more
-# important thing the agent needs to know, and the advisory must not push it
-# out. Hence a suffix, chosen by have_rules_brief, rather than an early exit.
-rules_brief_note() {
-  # Nothing to say when the subcommand is present. This used to promise that
-  # rules are surfaced on a read, which a compaction makes untrue: brief
-  # memory and the mod's budget survive it, so every decision briefed before
-  # the compaction stays quiet afterwards while the model has lost the text.
-  # Say it again when `--claude-session-start` resets that memory.
-  if have_rules_brief; then
-    return 0
+# The agent runs this command on the user's yes, so it is passed on only when
+# it is one actual-cli names for its two channels, compared whole: a prefix
+# match would also pass `npm install -g @actualai/actual @someone/else`. A CLI
+# installed some other way always gets the release page below, which is also
+# the release_url actual-cli reports.
+upgrade_instructions() {
+  local out="" channel="" cmd=""
+  out=$(run_actual version --json) || out=""
+  if [ -n "$out" ] && ! has_unicode_escape "$out"; then
+    channel=$(extract_json_string_field "$out" channel) || channel=""
+    cmd=$(extract_json_string_field "$out" upgrade_command) || cmd=""
   fi
-  printf '%s' "Rule briefing -- surfacing the rules that govern a file when you read it -- needs a newer \`actual\` CLI than the one installed. It is advisory only and the checks above are unaffected, so do not interrupt anything for it: mention it in passing when convenient, and upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\` only if the user asks."
+  case "$cmd" in
+    'brew upgrade actual-software/actual/actual') ;;
+    'npm install -g @actualai/actual'|'npm install -g @actualai/actual@latest') ;;
+    *) cmd="" ;;
+  esac
+
+  if [ -n "$cmd" ]; then
+    cat <<EOF
+If they agree, run this with the Bash tool:
+  ${cmd}
+EOF
+  elif [ "$channel" = "other" ]; then
+    cat <<'EOF'
+It was installed without Homebrew or npm, so don't run either of those: each would
+add a second copy instead of upgrading this one. If they agree, help them replace
+it with the latest release from https://github.com/actual-software/actual-releases/releases/latest.
+EOF
+  else
+    cat <<'EOF'
+If they agree, run whichever of these installed it, with the Bash tool:
+  npm install -g @actualai/actual@latest
+  brew upgrade actual-software/actual/actual
+
+Check which first: `ls -l "$(command -v actual)"` shows a link into Homebrew's
+Cellar for a Homebrew install and into node_modules for an npm one. Running the
+other command would add a second copy instead of upgrading this one, so ask the
+user if neither applies.
+EOF
+  fi
 }
 
-# User-facing counterparts of install_message and impl_upgrade_message, for
+# User-facing counterparts of install_message and the upgrade advice above, for
 # impl-gate.sh only. Stop's systemMessage is shown to the user and does not
 # reach Claude, and it is emitted again at the end of every turn until the CLI
 # can actually run the check. The agent-directed essay (AskUserQuestion, "your
@@ -642,9 +984,7 @@ emit_stop_block() {
 # hookSpecificOutput.additionalContext -- both force continuation ("the same
 # loop protections as decision: block", per the docs); neither is safe for a
 # fail-open notice that must let the turn end normally. So this emits a plain,
-# user-facing systemMessage and nothing else -- unlike
-# emit_pretooluse_notice, there is no agent-facing counterpart here to also
-# populate.
+# user-facing systemMessage and nothing else.
 emit_stop_notice() {
   printf '{"systemMessage":"%s"}\n' "$(json_escape "$1")"
 }

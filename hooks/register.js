@@ -295,12 +295,19 @@ const QUIET_OUTCOMES = {
   'no-rules': 'no-rule-set',
 };
 
+// Reasons the mod has a wording for. A token outside this set is one a newer
+// CLI named, such as a rule document whose status excludes it: shown as the
+// CLI said it rather than as a reason it did not give.
+const KNOWN_REASONS = new Set(['already-briefed', 'unknown', ...Object.keys(QUIET_OUTCOMES)]);
+const isUnrecognised = (reason) => !KNOWN_REASONS.has(reason);
+
 // Per session, not per process. `spent` and `repoRoots` are both
 // keyed by session and this was not, so a pane headed "this session" listed
 // reads from before a `/clear` -- and from any other session sharing the
 // process -- as though they were this one's.
 // Sessions that have already been told the budget is spent.
 const budgetAnnounced = new Set();
+const v2Announced = new Set();
 
 const outcomes = new Map();
 
@@ -417,9 +424,14 @@ function reportLine(record) {
         (record.files ?? []).filter((f) => ((record.reasons ?? {})[f] ?? 'unknown') === want);
       const known = by('already-briefed');
       const unsure = by('unknown');
+      const other = (record.files ?? []).filter((f) => isUnrecognised((record.reasons ?? {})[f] ?? 'unknown'));
       const groups = [];
       if (known.length) groups.push(`briefed earlier  ${names(known)}`);
       if (unsure.length) groups.push(`briefed earlier, or ungoverned  ${names(unsure)}`);
+      if (other.length) {
+        const tokens = [...new Set(other.map((f) => record.reasons[f]))].join(', ');
+        groups.push(`no brief (${tokens})  ${names(other)}`);
+      }
       if (groups.length === 0) return null;
       return row('NO CHANGE', groups.join('  \u00b7  '));
     }
@@ -665,16 +677,29 @@ async function resolveHome($, sessionId) {
   return home;
 }
 
-// Whether the installed CLI has `rules brief` at all, asked once a session the
-// way preflight asks it (`have_rules_brief` in bootstrap.sh). actual-cli v0.6.2,
-// the latest release, answers `unrecognized subcommand` with exit 2 -- and
-// without this every read in a governed repository logged a CLI ERROR row for
-// a state the person cannot do anything about mid-turn. Preflight already
-// tells the agent once to upgrade.
+// Whether the installed CLI has `rules brief` at all, asked once a session
+// with `actual rules brief --help`. actual-cli v0.6.2 and older answer
+// `unrecognized subcommand` with exit 2 -- and without this every read in a
+// governed repository logged a CLI ERROR row for a state the person cannot do
+// anything about mid-turn. Preflight already tells the agent once to upgrade.
 //
 // Only a definite answer is kept. A probe that times out says nothing about
 // the CLI, so the next read asks again.
 const briefAvailable = new Map();
+
+// What the same probe learned about ADR header v2 (AK-963): whether the CLI's
+// `rules brief --help` names the capability marker. Set beside briefAvailable,
+// so it is as definite as that answer is.
+const ADR_V2_MARKER = 'adr-header-v2';
+const briefReadsV2 = new Map();
+// Whether the rule files carry a v2 header, per session and rules directory, with
+// the listing signature the answer was made under.
+const rulesAreV2 = new Map();
+
+// The rule files governedRulesDir last saw in each directory, and a signature of
+// their names, sizes and mtimes, so the ADR header v2 check reads them without
+// listing the directory a second time and knows when its answer has gone stale.
+const ruleFileListing = new Map();
 
 async function rulesBriefAvailable($, sessionId, cwd) {
   if (briefAvailable.has(sessionId)) return briefAvailable.get(sessionId);
@@ -686,6 +711,9 @@ async function rulesBriefAvailable($, sessionId, cwd) {
       timeoutMs: SPAWN_TIMEOUT_MS,
     });
     ok = run.exitCode === 0;
+    // The same capability marker bootstrap.sh's have_adr_v2 reads: the help of
+    // a CLI that parses the ADR header v2 names it.
+    briefReadsV2.set(sessionId, ok && (run.stdout ?? '').includes(ADR_V2_MARKER));
   } catch {
     // Cannot start (no `actual` on PATH) or still running at the timeout. The
     // first is as definite as an exit code; the second is not distinguishable
@@ -694,6 +722,82 @@ async function rulesBriefAvailable($, sessionId, cwd) {
   }
   if (definite) briefAvailable.set(sessionId, ok);
   return ok;
+}
+
+// A session's probe answer is kept while it is positive. A negative one (no
+// marker, no `rules brief`, or no answer) is dropped at the end of each turn, so
+// a CLI upgraded mid-session is noticed by the next governed read, as it is by
+// the shell hooks. Costs one `--help` spawn a turn while the CLI stays old.
+async function forgetNegativeProbe($) {
+  try {
+    const sessionId = await $.session.id();
+    if (!sessionId || briefReadsV2.get(sessionId) === true) return;
+    briefAvailable.delete(sessionId);
+    briefReadsV2.delete(sessionId);
+  } catch {
+    // Nothing to forget without a session; the next read probes as usual.
+  }
+}
+
+// True when `text` opens with an ADR header v2: the rule the CLI's own parser
+// applies (frontmatter_end in actual-cli's src/rules/parse.rs, which is the
+// source of truth and should be read before changing this). A leading UTF-8 BOM
+// is ignored; the first line is `---` once trailing whitespace is trimmed; a
+// closing `---` follows; and no line between them is an unindented ATX heading,
+// because a block with a heading in it is a markdown horizontal rule and the
+// parser reads the file as v1. Mirrors rules_file_has_v2_header in bootstrap.sh.
+function hasV2Header(text) {
+  const lines = text.replace(/^\uFEFF/, '').split('\n').map((l) => l.replace(/\r$/, ''));
+  if (lines[0].trimEnd() !== '---') return false;
+  let heading = false;
+  for (const line of lines.slice(1)) {
+    if (line.trimEnd() === '---') return !heading;
+    if (!/^\s/.test(line) && /^#{1,6} /.test(line.trimEnd())) heading = true;
+  }
+  return false;
+}
+
+// True when the rule files carry an ADR header v2 and the installed CLI cannot
+// read it, so a brief built from them would be wrong. Mirrors adr_v2_unsupported
+// in bootstrap.sh: the same header test, the same silent pass for v1
+// repositories and for a CLI that names the marker. Call after
+// rulesBriefAvailable, which is what learns the marker.
+//
+// The files are read in-process (no spawn), and only when the CLI lacks the
+// marker, so a current CLI and a v1 repository on a current CLI pay nothing.
+// The answer is cached against the directory listing governedRulesDir already
+// fetched on this call (names, sizes, mtimes), so it holds while the rule files
+// do and is asked again the moment one is added, removed or rewritten: a
+// repository converted to v2 mid-session is caught on the next read, as the
+// shell hooks catch it.
+async function adrV2Unsupported($, sessionId, rulesDir) {
+  if (briefReadsV2.get(sessionId)) return false;
+  const listing = ruleFileListing.get(rulesDir);
+  const key = `${sessionId}\n${rulesDir}`;
+  const cached = rulesAreV2.get(key);
+  if (cached && cached.signature === listing?.signature) return cached.v2;
+  let v2 = false;
+  let unreadable = false;
+  for (const name of listing?.names ?? []) {
+    let text;
+    try {
+      text = String(await $.fs.read(`${rulesDir}/${name}`));
+    } catch {
+      // Skip the file and go on, as the CLI does (it records an unreadable rule
+      // file and keeps discovering) and the shell loop does: one bad file must
+      // not hide a v2 header in the next one.
+      unreadable = true;
+      continue;
+    }
+    if (hasV2Header(text)) {
+      v2 = true;
+      break;
+    }
+  }
+  // An answer reached past a file it could not read is not cached, so the next
+  // read tries that file again.
+  if (!unreadable) rulesAreV2.set(key, { signature: listing?.signature, v2 });
+  return v2;
 }
 
 async function resolveRepoRoot($, sessionId, cwd) {
@@ -753,7 +857,13 @@ async function governedRulesDir($, sessionId, cwd) {
   } catch {
     return null;
   }
-  return (entries ?? []).some((entry) => entry.name.endsWith('.md')) ? rulesDir : null;
+  const names = (entries ?? []).map((entry) => entry.name).filter((name) => name.endsWith('.md'));
+  const files = (entries ?? []).filter((entry) => entry.name.endsWith('.md'));
+  ruleFileListing.set(rulesDir, {
+    names,
+    signature: files.map((f) => `${f.name}:${f.size}:${f.mtimeMs}`).join('\n'),
+  });
+  return names.length ? rulesDir : null;
 }
 
 // Which keys exist, and the CLI flag each one forwards to. maxSessionChars has
@@ -878,6 +988,18 @@ async function deliverBrief($, e, result, paths, ctx) {
     return withContext(result, await debugNote($, 'not briefed', '`actual rules brief` is not available in this CLI'));
   }
 
+  if (await adrV2Unsupported($, sessionId, rulesDir)) {
+    recordOutcome(sessionId, e.tool_use_id, { outcome: 'v2-cli-old', files: paths });
+    // Once a session, as the budget row is: the state holds for every later read.
+    if (!v2Announced.has(sessionId)) {
+      v2Announced.add(sessionId);
+      // 0.9.0 is ADR_V2_MIN_CLI in lib/bootstrap.sh, which the shell messages share;
+      // a bash variable cannot reach this file, so change both together.
+      $.ui.log(row('OLD CLI', 'rules use ADR header v2; upgrade actual to 0.9.0+ for briefs'));
+    }
+    return withContext(result, await debugNote($, 'not briefed', 'the rule files use ADR header v2, which this CLI cannot read'));
+  }
+
   let appended = '';
   let exhausted = false;
   let cliError = null;
@@ -995,7 +1117,7 @@ async function deliverBrief($, e, result, paths, ctx) {
     const kinds = new Set(paths.map((f) => reasons.get(f) ?? 'unknown'));
     const only = kinds.size === 1 ? [...kinds][0] : null;
     recordOutcome(sessionId, e.tool_use_id, {
-      outcome: QUIET_OUTCOMES[only] ?? 'deduped',
+      outcome: Object.hasOwn(QUIET_OUTCOMES, only) ? QUIET_OUTCOMES[only] : 'deduped',
       files: paths,
       reasons: Object.fromEntries(reasons),
     });
@@ -1056,6 +1178,7 @@ const OUTCOME_LABELS = {
   budget: 'budget   ',
   'cli-error': 'error    ',
   'no-cli': 'old CLI   ',
+  'v2-cli-old': 'v2 unread',
   unresolved: 'no match ',
   'no-paths': 'no path  ',
   'not-read-only': 'writes   ',
@@ -1118,10 +1241,13 @@ function paneRows(elements, sessionId) {
       .map((f) => f.split('/').pop())
       .join(', ');
     const label = OUTCOME_LABELS[record.outcome] ?? record.outcome;
+    const unrecognised = [
+      ...new Set(Object.values(record.reasons ?? {}).filter(isUnrecognised)),
+    ].join(', ');
     const detail =
       record.outcome === 'delivered'
         ? `${counted(record.summary?.decisions?.length ?? 0, 'ADR')}, ${record.summary?.shown ?? 0} of ${counted(record.summary?.total || record.summary?.shown || 0, 'rule')}, ${record.summary?.chars ?? 0} chars`
-        : record.detail ?? files ?? '';
+        : record.detail ?? (record.outcome === 'deduped' && unrecognised ? `no brief: ${unrecognised}` : files ?? '');
     return Box({
       key: `row-${i}-${id}`,
       flexDirection: 'row',
@@ -1218,7 +1344,10 @@ export function register(on, options = {}) {
 
   // A subagent's turn ends inside its parent's, whose own end refreshes.
   on('turn.complete', ($, e, next) => {
-    if (e.agentId === undefined) void refreshCount($);
+    if (e.agentId === undefined) {
+      void forgetNegativeProbe($);
+      void refreshCount($);
+    }
     return next(e);
   });
 
