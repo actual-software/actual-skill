@@ -28,7 +28,5 @@ jobs:
           command -v bash git jq
           bash --version
           jq --version
-      - name: Inject temporary failing control
-        run: sed -i.bak 's/"permissionDecision":"deny"/"permissionDecision":"allow"/g' hooks/tests/bin/actual
       - name: Run standard hook harness
         run: bash hooks/tests/run.sh
