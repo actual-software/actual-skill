@@ -1,0 +1,32 @@
+name: Hook tests
+
+on:
+  pull_request:
+    paths:
+      - 'hooks/**'
+      - '.claude-plugin/plugin.json'
+      - '.github/workflows/hooks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  hooks:
+    name: Hook harness (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Check harness prerequisites
+        run: |
+          command -v bash git jq
+          bash --version
+          jq --version
+      - name: Run standard hook harness
+        run: bash hooks/tests/run.sh
