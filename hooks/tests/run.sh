@@ -2143,6 +2143,14 @@ if [ -n "$k1" ] && [ "$k1" != "$k2" ]; then pass "a relative PATH entry is keyed
 rm -rf "${WORK}/cache"
 
 echo
+echo "=== SessionEnd ==="
+if bash "${TESTS_DIR}/session-end.sh"; then
+  pass "SessionEnd registration, forwarding, silence and opt-outs"
+else
+  fail "SessionEnd regression checks"
+fi
+
+echo
 echo "=== Summary ==="
 printf '  %s passed, %s failed\n' "$pass_count" "$fail_count"
 [ "$fail_count" -eq 0 ]
