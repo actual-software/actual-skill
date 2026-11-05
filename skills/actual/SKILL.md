@@ -66,7 +66,7 @@ release.
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
 | `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
 | `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart (AK-755) | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes plus untracked, non-ignored files) against the commit the turn started from when a `UserPromptSubmit` call recorded one, otherwise against `HEAD`. Direct mode also accepts `--diff-file` or piped stdin, and diffs the working tree against `HEAD` when neither is given. Never emit `permissionDecision: "allow"` |
-| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user types `/override <rule-id\|all> [reason]`, which `hooks/override-prompt.sh` hands to `--claude-hook`; the agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` optional; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user types `/actual-cli:override <rule-id\|all> [reason]` (a bare `/override` is an unknown command in Claude Code), which `hooks/override-prompt.sh` hands to `--claude-hook`; the agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` optional; `--repo`/`--rules-dir` optional, defaulting to the current directory |
 
 ## Platform Identity & Advisor
 
@@ -205,8 +205,8 @@ conditions:
 - **The revision loop's own escape valves are additional, deliberate fail-open
   paths, not enforcement**: the round limit stops blocking a persistently
   unresolved rule specifically so the hook does not get uninstalled, and a human
-  can type `/override` in the session (or run `actual check-override` from a
-  terminal) to wave a specific rule through outright.
+  can type `/actual-cli:override` in the session (or run `actual check-override`
+  from a terminal) to wave a specific rule through outright.
   An override recorded against a session clears that rule for both `plan-check` and
   `impl-check` checks of that session — one override, not two independent
   mechanisms. Both round-limit passes and overrides are recorded
@@ -575,12 +575,15 @@ repo.
   about it. Edit the plan at all and the rule is judged fresh; a clearance is
   never a standing pass regardless of what the plan says later.
 - **An explicit, recorded override.** A human — never the agent — clears a rule
-  by typing `/override <rule-id|all> [reason]` as a message in the session. The
-  reason is optional. `hooks/override-prompt.sh` passes that `UserPromptSubmit`
-  envelope to `actual check-override --claude-hook`, which records the override
-  only for a user-typed prompt (an agent cannot produce one) and adds a context
-  line naming what was overridden, or why nothing was. **If the user asks to
-  override a rule, tell them to type `/override` themselves; never type it or run
+  by typing `/actual-cli:override <rule-id|all> [reason]` as a message in the
+  session. The reason is optional. Always give the user that full name: Claude
+  Code registers plugin commands only under their namespaced name, so a bare
+  `/override` is rejected as an unknown command before any hook sees it.
+  `hooks/override-prompt.sh` passes that `UserPromptSubmit` envelope to `actual
+  check-override --claude-hook`, which records the override only for a
+  user-typed prompt (an agent cannot produce one) and adds a context line naming
+  what was overridden, or why nothing was. **If the user asks to override a rule,
+  tell them to type `/actual-cli:override` themselves; never type it or run
   `actual check-override` on their behalf, and do not suggest an override as a
   way past a denial you could fix by revising.** The same override can still be
   issued from an ordinary terminal with `actual check-override --session <id>

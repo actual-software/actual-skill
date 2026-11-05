@@ -185,7 +185,7 @@ if [ "$subcommand" = "check-override" ]; then
   else
     cat > /dev/null
   fi
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"The user overrode doc::R-001 via /override."}}'
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"The user overrode doc::R-001 via /actual-cli:override."}}'
   exit 0
 fi
 # `actual rules brief` is the one two-word subcommand: handled on its own below.

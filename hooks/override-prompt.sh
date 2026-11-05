@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # override-prompt.sh - UserPromptSubmit hook: let the user override a denied
-# rule from inside the session by typing `/override <rule-id|all> [reason]`.
+# rule from inside the session by typing `/actual-cli:override <rule-id|all>
+# [reason]`. Claude Code registers plugin commands only under their namespaced
+# name and rejects a bare `/override` as an unknown command before any hook runs,
+# so every message that tells the user what to type uses the namespaced form.
+# The checks below still accept both.
 #
 # The plan and implementation gates deny a rule until a human clears it. That
 # used to mean leaving the session for a terminal, because the agent has a shell
@@ -51,7 +55,7 @@ cd "$repo_root" 2>/dev/null || true
 if ! have_override_hook; then
   if printf '%s' "$payload" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*/([A-Za-z0-9_-]+:)?override([[:space:]\\"]|$)'; then
     printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' \
-      "$(json_escape "The user typed /override, but the installed actual CLI is too old to record it from the session. Nothing was overridden. Tell them to update the CLI, or to run 'actual check-override' from an ordinary terminal (see 'actual check-override --help'). Do not run it yourself.")"
+      "$(json_escape "The user typed /actual-cli:override, but the installed actual CLI is too old to record it from the session. Nothing was overridden. Tell them to update the CLI, or to run 'actual check-override' from an ordinary terminal (see 'actual check-override --help'). Do not run it yourself.")"
   fi
   exit 0
 fi
