@@ -1369,10 +1369,22 @@ async function runOverride($, ctx, prompt, via) {
   }
 }
 
+// Whether a denial raises the override dialog. On by default; the
+// `overrideDialog` userConfig row or ACTUAL_OVERRIDE_DIALOG turns it off, env
+// winning as for every other setting. Off, the agent reads the denial as the
+// CLI wrote it and revises on its own; a typed /actual-cli:override still works.
+async function overrideDialogOn($, options) {
+  const env = await $.env.get('ACTUAL_OVERRIDE_DIALOG');
+  if (env === 'off') return false;
+  if (env === 'on') return true;
+  return options.overrideDialog !== false;
+}
+
 // Asks the user about a gate's denial and records what they chose; see
 // override-dialog.js. Resolves to `{ pass, note }` or `{ text }`, and to the
-// denial untouched on any failure or a dismissed dialog.
-async function askAboutDenial($, gate, reason) {
+// denial untouched on any failure, a dismissed dialog, or the dialog turned off.
+async function askAboutDenial($, gate, reason, options) {
+  if (!(await overrideDialogOn($, options))) return { text: reason };
   const q = denialQuestion(gate, reason);
   if (!q) return { text: reason };
   const ctx = await overrideContext($);
@@ -1400,7 +1412,7 @@ export function register(on, options = {}) {
     const r = await next(e);
     if (typeof r?.deny !== 'string') return r;
     try {
-      const settled = await askAboutDenial($, 'plan', r.deny);
+      const settled = await askAboutDenial($, 'plan', r.deny, options);
       if (settled.pass) {
         // Every blocking rule overridden: the call goes on to the plan's
         // approval. The agent is told by the tool.call hook below, since a
@@ -1441,7 +1453,7 @@ export function register(on, options = {}) {
     const r = await next(e);
     if (typeof r?.block !== 'string') return r;
     try {
-      const settled = await askAboutDenial($, 'impl', r.block);
+      const settled = await askAboutDenial($, 'impl', r.block, options);
       if (settled.pass) {
         const { block: _block, ...rest } = r;
         return rest;

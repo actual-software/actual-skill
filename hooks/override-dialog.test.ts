@@ -202,6 +202,30 @@ test('nothing governed or governance off: no dialog', async ($, on) => {
   expect(w.asked).toEqual([])
 })
 
+test('ACTUAL_OVERRIDE_DIALOG=off: no dialog, and the denial reaches the agent as the CLI wrote it', async ($, on) => {
+  const deny = denyText(['R-AUTH-001'])
+  const block = denyText(['R-HDR-001'], 'A revised change is re-checked automatically.')
+  const w = world(on, { planDeny: () => deny, stopBlock: () => block, env: { ACTUAL_OVERRIDE_DIALOG: 'off' } })
+  const r: any = await exitPlan($)
+  expect(r.text).toBe(deny)
+  const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(out.block).toBe(block)
+  expect(w.asked).toEqual([])
+  expect(w.overrides).toEqual([])
+})
+
+test('ACTUAL_OVERRIDE_DIALOG=off leaves a typed override working', async ($, on) => {
+  const w = world(on, { env: { ACTUAL_OVERRIDE_DIALOG: 'off' } })
+  await $.prompt.submit({ text: '/actual-cli:override R-AUTH-001', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override R-AUTH-001'])
+})
+
+test('ACTUAL_OVERRIDE_DIALOG=on asks, as the default does', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), answers: [null], env: { ACTUAL_OVERRIDE_DIALOG: 'on' } })
+  await exitPlan($)
+  expect(w.asked.length).toBe(1)
+})
+
 test('the implementation gate asks about the changes, and an override lets the turn end', async ($, on) => {
   const w = world(on, {
     stopBlock: () => denyText(['R-HDR-001', 'R-ADR-001'], 'A revised change is re-checked automatically.'),

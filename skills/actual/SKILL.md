@@ -350,6 +350,7 @@ place that distinction is applied.
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_TURN_START_LOG` | Path of a file `turn-start.sh` appends the CLI's output and exit status to, for diagnosing a turn-start record that is never written, or a `skipped` line when the CLI has no `UserPromptSubmit` dispatch. Unset by default, which keeps the hook fully silent; set, the hook is still silent on stdout and stderr |
 | `ACTUAL_IMPL_CHECK_MAX_ROUNDS` | Override `impl-check --claude-hook`'s round limit (default 3) |
+| `ACTUAL_OVERRIDE_DIALOG=off` | Stop the mod asking the user how to handle a `plan-check` or `impl-check` denial: the agent reads the denial as the CLI wrote it and revises on its own. A typed `/actual-cli:override` still works. On by default; `=on` forces it on over the `overrideDialog` row |
 | `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the mod — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
 | `ACTUAL_CLI_SUBPROCESS=1` | Set by actual-cli on the nested `claude -p` it runs as its conformance judge. Every hook and the mod exit silently when it is set: without it the judge's own `Stop` hook reruns `impl-check` and recurses, and briefing would inject rules into the judge's prompt that it was never asked to weigh |
 | `ACTUAL_HOOK_DEBUG=1` | Report what briefing did, on stderr for the hook and in the transcript plus the model's context for the mod, which also adds a note when it does not brief: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |
@@ -357,7 +358,8 @@ place that distinction is applied.
 | `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE` | Forwarded by the mod to `actual rules brief` as `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`, and only when set (`rules-brief.sh` forwards none of them), so the CLI keeps owning its own defaults. `_MIN_SCORE` especially: unset it defers to the repository's `rules_min_score`, and a score measures how narrowly a rule's `verify` glob is written rather than how relevant the rule is, so no cross-repository default is correct |
 
 The briefing limits (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, `_LIMIT`,
-`_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`) and `debug` also appear as
+`_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`), `ACTUAL_OVERRIDE_DIALOG`
+(as `overrideDialog`) and `debug` also appear as
 labelled `userConfig` rows under `/plugin`; the other variables have none, and
 all of them are read by the mod only. An environment variable wins over its
 row: the row is the durable preference, the variable is the override for one
