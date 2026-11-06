@@ -79,6 +79,20 @@
 // work. The Bash write path stays unbriefed: a shell write names its file
 // inside an arbitrary command string, and the Stop gate covers it.
 
+// The dialog a gate's denial raises, and the recording of a typed override, live
+// in their own file; a plugin loads one hooks module, so the hooks that use
+// them are registered here.
+import {
+  denialQuestion,
+  readAnswer,
+  overridePrompt,
+  overrideCall,
+  parseOverrideRun,
+  overrideOutcome,
+  isTypedOverride,
+  typedOverrideLine,
+} from './override-dialog.js';
+
 // --- Path extraction ---------------------------------------------------
 //
 // What this has to get right, measured against the 35 Bash calls of one real
@@ -1326,7 +1340,134 @@ async function refreshCount($) {
   }
 }
 
+// The note of an override the user chose in the plan gate's dialog, by session,
+// until the ExitPlanMode call it let through returns and can carry it.
+const overrideNotes = new Map();
+
+// What the override dialog needs to record against the gates' own context: the
+// session, and the rules directory and repository root they checked against.
+// Null where governance is off or nothing is governed, as for the gates.
+async function overrideContext($) {
+  if ((await $.env.get('ACTUAL_CLI_SUBPROCESS')) === '1') return null;
+  if ((await $.env.get('ACTUAL_PLAN_GATE')) === 'off') return null;
+  const [cwd, sessionId] = await Promise.all([$.session.cwd(), $.session.id()]);
+  if (!sessionId) return null;
+  const rulesDir = await governedRulesDir($, sessionId, cwd);
+  if (!rulesDir) return null;
+  const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+  return { sessionId, cwd, repoRoot, rulesDir };
+}
+
+// One `check-override --claude-hook` through the mod's own spawn, which the CLI
+// accepts and an agent's shell it refuses. Null when it recorded nothing.
+async function runOverride($, ctx, prompt, via) {
+  try {
+    const { argv, init } = overrideCall(ctx, prompt, via);
+    return parseOverrideRun(await $.process.run(argv, init));
+  } catch {
+    return null;
+  }
+}
+
+// Asks the user about a gate's denial and records what they chose; see
+// override-dialog.js. Resolves to `{ pass, note }` or `{ text }`, and to the
+// denial untouched on any failure or a dismissed dialog.
+async function askAboutDenial($, gate, reason) {
+  const q = denialQuestion(gate, reason);
+  if (!q) return { text: reason };
+  const ctx = await overrideContext($);
+  if (!ctx) return { text: reason };
+  let answer;
+  try {
+    answer = await $.ui.ask(q.question, { header: q.header, options: q.options });
+  } catch {
+    return { text: reason };
+  }
+  const read = readAnswer(q, answer);
+  if (!read.targets) return { text: read.text };
+  const answers = [];
+  for (const target of read.targets) {
+    answers.push(await runOverride($, ctx, overridePrompt(target), 'dialog'));
+  }
+  return overrideOutcome(q, read.targets, answers);
+}
+
 export function register(on, options = {}) {
+  // The plan gate is plan-gate.sh on PreToolUse:ExitPlanMode, and its answer is
+  // what next resolves to: a deny raises the override dialog
+  // (override-dialog.js). Every failure there leaves the answer as it was.
+  on('classic.PreToolUse', { tool: 'ExitPlanMode' }, async ($, e, next) => {
+    const r = await next(e);
+    if (typeof r?.deny !== 'string') return r;
+    try {
+      const settled = await askAboutDenial($, 'plan', r.deny);
+      if (settled.pass) {
+        // Every blocking rule overridden: the call goes on to the plan's
+        // approval. The agent is told by the tool.call hook below, since a
+        // PreToolUse answer's additionalContext did not reach the model once
+        // the call went on to the approval (probed on 2.1.287); the user by a
+        // transcript line.
+        if (settled.note) {
+          overrideNotes.set(await $.session.id(), settled.note);
+          $.ui.log(settled.note.replace('The user overrode', 'Overrode').replace(' in the override dialog', ' for this session'));
+        }
+        const { deny: _deny, ...rest } = r;
+        return rest;
+      }
+      return settled.text === r.deny ? r : { ...r, deny: settled.text };
+    } catch {
+      return r;
+    }
+  });
+
+  // Hands the agent the note of a dialog override with the plan's approval:
+  // a tool result's context is what the model reads after it.
+  on('tool.call', { tool: 'ExitPlanMode' }, async ($, e, next) => {
+    const r = await next(e);
+    try {
+      const sessionId = await $.session.id();
+      const note = overrideNotes.get(sessionId);
+      if (!note) return r;
+      overrideNotes.delete(sessionId);
+      if (r?.deny !== undefined || r?.isError || r?.result === undefined) return r;
+      return { ...r, context: [...(r.context ?? []), note] };
+    } catch {
+      return r;
+    }
+  });
+
+  // The implementation gate is impl-gate.sh on Stop; a block is its denial.
+  on('classic.Stop', async ($, e, next) => {
+    const r = await next(e);
+    if (typeof r?.block !== 'string') return r;
+    try {
+      const settled = await askAboutDenial($, 'impl', r.block);
+      if (settled.pass) {
+        const { block: _block, ...rest } = r;
+        return rest;
+      }
+      return settled.text === r.block ? r : { ...r, block: settled.text };
+    } catch {
+      return r;
+    }
+  });
+
+  // A typed /actual-cli:override is recorded here, not by a settings hook: the
+  // CLI refuses to record one from anything carrying CLAUDECODE, which a
+  // settings hook does, as an agent's shell does. What the CLI says goes to the
+  // agent with the prompt, where commands/override.md tells it what to do.
+  on('prompt.submit', async ($, e, next) => {
+    if (!isTypedOverride(e)) return next(e);
+    try {
+      const ctx = await overrideContext($);
+      if (!ctx) return next(e);
+      const line = typedOverrideLine(await runOverride($, ctx, e.text, 'prompt'));
+      return next({ ...e, context: [...(e.context ?? []), line] });
+    } catch {
+      return next(e);
+    }
+  });
+
   on('session.start', async ($, e, next) => {
     // The count's first reading belongs here: at startup classic.SessionStart
     // fires before the session binds.
