@@ -1,7 +1,7 @@
 {
   "name": "actual-cli",
   "description": "Feature-complete companion for the actual CLI \u2014 runs and troubleshoots sync, status, auth, config, runners, and models across all 5 runners and 3 output formats, and gates both implementation plans and the diffs agents produce against the ADR rules committed in .actual/rules/",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "author": {
     "name": "actual-software"
   },
@@ -48,6 +48,12 @@
       "title": "Rule brief: log the budget each call",
       "default": false,
       "description": "Write a dim transcript line with the characters injected so far and the session's context usage, and add the same line to the model's context. Like ACTUAL_HOOK_DEBUG=1, which it is ORed with, but it does not turn on the not-briefed notes that variable adds."
+    },
+    "overrideDialog": {
+      "type": "boolean",
+      "title": "Governance: ask how to handle a denial",
+      "default": true,
+      "description": "When plan-check or impl-check denies, ask in a dialog whether to revise or override the blocking rules. Turn off to let the agent revise on its own without asking; /actual-cli:override still works. ACTUAL_OVERRIDE_DIALOG=off or =on wins over this setting."
     }
   }
 }

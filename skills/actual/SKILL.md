@@ -66,7 +66,7 @@ release.
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
 | `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
 | `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart (AK-755) | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes plus untracked, non-ignored files) against the commit the turn started from when a `UserPromptSubmit` call recorded one, otherwise against `HEAD`. Direct mode also accepts `--diff-file` or piped stdin, and diffs the working tree against `HEAD` when neither is given. Never emit `permissionDecision: "allow"` |
-| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session (refuses to run non-interactively; never invoked by the agent). `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable), `--reason "<text>"` — all required; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user picks an override in the dialog a denial raises, or types `/actual-cli:override <rule-id\|all> [reason]` (a bare `/override` is an unknown command in Claude Code); the plugin's mod records either through `--claude-hook`, which refuses any process carrying `CLAUDECODE`, as every agent command does. The agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` optional; `--repo`/`--rules-dir` optional, defaulting to the current directory |
 
 ## Platform Identity & Advisor
 
@@ -205,7 +205,8 @@ conditions:
 - **The revision loop's own escape valves are additional, deliberate fail-open
   paths, not enforcement**: the round limit stops blocking a persistently
   unresolved rule specifically so the hook does not get uninstalled, and a human
-  can run `actual check-override` to wave a specific rule through outright.
+  can type `/actual-cli:override` in the session (or run `actual check-override`
+  from a terminal) to wave a specific rule through outright.
   An override recorded against a session clears that rule for both `plan-check` and
   `impl-check` checks of that session — one override, not two independent
   mechanisms. Both round-limit passes and overrides are recorded
@@ -349,6 +350,7 @@ place that distinction is applied.
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_TURN_START_LOG` | Path of a file `turn-start.sh` appends the CLI's output and exit status to, for diagnosing a turn-start record that is never written, or a `skipped` line when the CLI has no `UserPromptSubmit` dispatch. Unset by default, which keeps the hook fully silent; set, the hook is still silent on stdout and stderr |
 | `ACTUAL_IMPL_CHECK_MAX_ROUNDS` | Override `impl-check --claude-hook`'s round limit (default 3) |
+| `ACTUAL_OVERRIDE_DIALOG=off` | Stop the mod asking the user how to handle a `plan-check` or `impl-check` denial: the agent reads the denial as the CLI wrote it and revises on its own. A typed `/actual-cli:override` still works. On by default; `=on` forces it on over the `overrideDialog` row |
 | `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the mod — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
 | `ACTUAL_CLI_SUBPROCESS=1` | Set by actual-cli on the nested `claude -p` it runs as its conformance judge. Every hook and the mod exit silently when it is set: without it the judge's own `Stop` hook reruns `impl-check` and recurses, and briefing would inject rules into the judge's prompt that it was never asked to weigh |
 | `ACTUAL_HOOK_DEBUG=1` | Report what briefing did, on stderr for the hook and in the transcript plus the model's context for the mod, which also adds a note when it does not brief: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |
@@ -356,7 +358,8 @@ place that distinction is applied.
 | `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE` | Forwarded by the mod to `actual rules brief` as `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`, and only when set (`rules-brief.sh` forwards none of them), so the CLI keeps owning its own defaults. `_MIN_SCORE` especially: unset it defers to the repository's `rules_min_score`, and a score measures how narrowly a rule's `verify` glob is written rather than how relevant the rule is, so no cross-repository default is correct |
 
 The briefing limits (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, `_LIMIT`,
-`_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`) and `debug` also appear as
+`_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`), `ACTUAL_OVERRIDE_DIALOG`
+(as `overrideDialog`) and `debug` also appear as
 labelled `userConfig` rows under `/plugin`; the other variables have none, and
 all of them are read by the mod only. An environment variable wins over its
 row: the row is the durable preference, the variable is the override for one
@@ -573,18 +576,45 @@ repo.
   cannot re-flag it, even if the judge would otherwise be non-deterministic
   about it. Edit the plan at all and the rule is judged fresh; a clearance is
   never a standing pass regardless of what the plan says later.
-- **An explicit, recorded override.** A human — never the agent — runs
-  `actual check-override --session <id> --rule <doc-slug>::<rule-id>
-  --reason "<why>"` directly, from an interactive terminal (it refuses to run
-  non-interactively, since the whole point is that this is a human action).
-  `plan-check-override` still works as a backward-compatible alias. The deny
-  message names the session id but deliberately does not hand back a
-  ready-to-paste invocation — run `actual check-override --help` for the
-  exact flags, and pass `--repo`/`--rules-dir` if you are not standing in the
-  same repo the denial came from. An overridden rule is excluded from judging
-  from then on regardless of plan or diff text — by both commands, since they
-  share session state — and every subsequent round says so in a non-blocking
-  notice — an override is visible, never a silent bypass.
+- **An explicit, recorded override.** A human — never the agent — clears a rule.
+  When a gate denies, the plugin's mod (`hooks/override-dialog.js`, wired in
+  `hooks/register.js`) asks the user in Claude Code's own select dialog:
+  revise to conform (first, and recommended), or override all the blocking
+  rules (single rules are overridden by typing the command). The answer goes to
+  the mod, not to the agent.
+  What reaches the agent says what the user chose:
+  - **"The user chose to revise …"**: revise the plan or the code to satisfy
+    every rule in the denial. Do not suggest an override.
+  - **"The user overrode … in the override dialog"**: those rules no longer
+    block this session. If others still block, revise for those.
+  - **"The user answered the override dialog: …"**: act on their words.
+  - A denial still naming `/actual-cli:override` means the dialog was dismissed
+    or could not be shown: relay the denial, revise if you can, and tell the
+    user they can type the command.
+
+  The user can also type `/actual-cli:override <rule-id|all> [reason]` as a
+  message at any time; the reason is optional. Always give the user that full
+  name: Claude Code registers plugin commands only under their namespaced
+  name, so a bare `/override` is rejected as an unknown command. The mod
+  records it from the prompt, which Claude Code stamps as typed, and adds a
+  context line naming what was overridden, or why nothing was. Both paths go
+  through `actual check-override --claude-hook`, which refuses any process
+  carrying `CLAUDECODE` — every agent shell command and every settings hook —
+  so only the mod's own spawn records. **If the user asks to override a rule,
+  tell them to pick it in the dialog or type `/actual-cli:override` themselves;
+  never type it or run `actual check-override` on their behalf, and do not
+  suggest an override as a way past a denial you could fix by revising.** The
+  same override can still be
+  issued from an ordinary terminal with `actual check-override --session <id>
+  --rule <doc-slug>::<rule-id> [--reason "<why>"]` (it refuses to run
+  non-interactively; `plan-check-override` is a backward-compatible alias;
+  pass `--repo`/`--rules-dir` if you are not in the repo the denial came from).
+  An overridden rule is excluded from judging from then on regardless of plan
+  or diff text — by both commands, since they share session state — and every
+  subsequent round says so in a non-blocking notice — an override is visible,
+  never a silent bypass. Each override is recorded with `source`
+  (`session_dialog`, `session_prompt` or `terminal`) and `gate` (`plan`,
+  `impl`, or `both`).
 - **A round limit, tracked per rule.** After `--max-rounds` (default 3, or
   `ACTUAL_PLAN_CHECK_MAX_ROUNDS` / `ACTUAL_IMPL_CHECK_MAX_ROUNDS` respectively —
   each command's revision loop is budgeted independently) denials of the *same
