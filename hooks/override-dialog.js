@@ -9,6 +9,13 @@
 //   1. Revise the plan to conform (Recommended)
 //   2. Override all 3 rules
 //
+// The rules it lists are the denying gate's blocking rules as the CLI holds
+// them (`check-override --claude-hook --gate <gate> --list-blocking`), not ids
+// read from the deny text: that text quotes the plan or diff, which the agent
+// writes, so a rule-shaped line in it could add or hide a rule. "Override all"
+// records `all` with the same `--gate`, so what it turns off is exactly what
+// was listed, and never a rule only the other gate is denying.
+//
 // "Revise" hands the agent the denial with the user's choice and no override
 // commands in it. An override is recorded at once and, when it covers every
 // blocking rule, the call goes on: ExitPlanMode reaches its approval, or the turn
@@ -41,13 +48,6 @@ export const OVERRIDE_COMMAND = '/actual-cli:override';
 // here as a CLI too old to record it.
 const OVERRIDE_PROMPT = /^\s*\/(?:actual-cli:)?override(?:\s|$)/;
 
-// One line per blocking rule, as the CLI's hook_deny_reason writes them:
-// `DECISION R-AUTH-001 (MUST_NOT): ...` or `CONFLICT R-SRB-001 (MUST): ...`.
-// Not anchored to a line start: the first line can arrive behind a prefix, and
-// a live run lost the first rule to `^`. The `(LEVEL):` after the id keeps a
-// quoted word in a judge's reason from matching.
-const RULE_LINE = /(?:^|\s)(?:DECISION|CONFLICT) (\S+) \([A-Z_]+\):/g;
-
 // The sentence of the deny text that hands the user commands to type, from the
 // CLI's hook_deny_reason. Replaced once the user has answered the dialog.
 const INSTRUCTIONS = /Tell the user they can type `\/actual-cli:override[\s\S]*?`actual check-override --help`\)\./;
@@ -75,45 +75,65 @@ const GATE = {
 const TOO_OLD =
   'The user typed an override, but the installed actual CLI could not record it from the session (it may be too old). Nothing was overridden. Tell them to update the CLI, or to run `actual check-override` from an ordinary terminal. Do not run it yourself.';
 
-/**
- * The rule ids a deny text names, in order, each once, and how many blocking
- * rules it named in all. An id that names two blocking rules (the same id in
- * two rule documents) is left out: as a bare id the CLI would answer that it is
- * ambiguous, and "Override all" covers it.
- */
-export function ruleIdsFrom(reason) {
-  const counts = new Map();
-  for (const m of String(reason).matchAll(RULE_LINE)) {
-    counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
-  }
-  const blocked = [...counts.values()].reduce((a, n) => a + n, 0);
-  return { ids: [...counts].filter(([, n]) => n === 1).map(([id]) => id), blocked };
+/** Whether a deny names the in-session command, so a dialog may be worth raising. */
+export function offersOverride(reason) {
+  return typeof reason === 'string' && reason.includes(OVERRIDE_COMMAND);
 }
 
 /**
- * The dialog to raise for a denial from `gate` ('plan' or 'impl'), or null when
- * there is nothing to ask: a deny that does not name the command (another gate,
- * or a CLI too old to record an in-session override), or one whose rule lines
- * could not be read.
+ * The `check-override --claude-hook --list-blocking` call for `ctx`: the rules
+ * `gate` is blocking now, recording nothing.
  */
-export function denialQuestion(gate, reason) {
-  if (typeof reason !== 'string' || !reason.includes(OVERRIDE_COMMAND)) return null;
-  const { ids, blocked } = ruleIdsFrom(reason);
-  if (blocked === 0) return null;
+export function blockingCall(ctx, gate) {
+  return {
+    argv: ['actual', 'check-override', '--claude-hook', '--rules-dir', ctx.rulesDir, '--gate', gate, '--list-blocking'],
+    init: {
+      cwd: ctx.repoRoot ?? ctx.cwd,
+      stdin: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: ctx.sessionId }),
+      timeoutMs: 10000,
+    },
+  };
+}
+
+/**
+ * The full rule keys from a finished `blockingCall` spawn, or null when the CLI
+ * gave none: a build without `--list-blocking` exits non-zero on the flag.
+ */
+export function parseBlocking(run) {
+  const out = parseOverrideRun(run);
+  if (!Array.isArray(out?.blocking)) return null;
+  const keys = out.blocking.filter((k) => typeof k === 'string' && k);
+  return keys.length === out.blocking.length ? keys : null;
+}
+
+// How a key reads in the question: its bare rule id, or the whole key where
+// two blocking rules share that id.
+function displayNames(keys) {
+  const bare = keys.map((k) => k.split('::').pop());
+  return keys.map((k, i) => (bare.indexOf(bare[i]) === bare.lastIndexOf(bare[i]) ? bare[i] : k));
+}
+
+/**
+ * The dialog to raise for a denial from `gate` ('plan' or 'impl'), given the
+ * rules the CLI says that gate is blocking (`keys`), or null when there is
+ * nothing to ask: a deny that does not name the command (another gate, or a CLI
+ * too old to record an in-session override), or no blocking rules to list.
+ */
+export function denialQuestion(gate, reason, keys) {
+  if (!offersOverride(reason) || !Array.isArray(keys) || keys.length === 0) return null;
   const copy = GATE[gate];
-  const what = blocked === 1 ? '1 rule' : `${blocked} rules`;
-  const listed = ids.length ? `: ${ids.join(', ')}` : '';
-  const overrideAll = blocked === 1 ? `Override ${ids[0]}` : `Override all ${blocked} rules`;
+  const names = displayNames(keys);
+  const what = keys.length === 1 ? '1 rule' : `${keys.length} rules`;
+  const overrideAll = keys.length === 1 ? `Override ${names[0]}` : `Override all ${keys.length} rules`;
   // Overriding single rules is left to a typed /actual-cli:override: a
   // "Choose rules" step here read as confusing.
   const options = [copy.revise, overrideAll];
   return {
     gate,
     reason,
-    ids,
-    blocked,
+    keys,
     overrideAll,
-    question: `${copy.blocked} ${what}${listed}. What should happen?`,
+    question: `${copy.blocked} ${what}: ${names.join(', ')}. What should happen?`,
     header: copy.header,
     options,
   };
@@ -132,7 +152,8 @@ function withNote(reason, note) {
 export function readAnswer(q, answer) {
   const copy = GATE[q.gate];
   if (answer === copy.revise) return { text: withNote(q.reason, copy.revised) };
-  if (answer === q.overrideAll) return { targets: q.blocked === 1 ? [q.ids[0]] : ['all'] };
+  // `all` with the gate's --gate: the CLI resolves it to the keys listed.
+  if (answer === q.overrideAll) return { targets: ['all'] };
   // Typed under "Other": the user's own words, for the agent to act on.
   return {
     text: withNote(
@@ -150,12 +171,14 @@ export function overridePrompt(target) {
 /**
  * The `check-override --claude-hook` call for `ctx` ({ sessionId, cwd,
  * repoRoot, rulesDir }): its argv and spawn options. `via` is 'dialog' or
- * 'prompt'; a typed prompt passes no `--via`, so a CLI from before the flag
- * still records it.
+ * 'prompt'; a typed prompt passes no `--via` or `--gate`, so a CLI from before
+ * those flags still records it. A dialog passes the denying `gate`, which
+ * scopes `all` to the rules it listed.
  */
-export function overrideCall(ctx, prompt, via) {
+export function overrideCall(ctx, prompt, via, gate) {
   const argv = ['actual', 'check-override', '--claude-hook', '--rules-dir', ctx.rulesDir];
   if (via === 'dialog') argv.push('--via', 'dialog');
+  if (via === 'dialog' && gate) argv.push('--gate', gate);
   return {
     argv,
     init: {
@@ -179,8 +202,8 @@ export function parseOverrideRun(run) {
 /**
  * What recording the targets came to. `answers` holds the CLI's parsed answer
  * (or null) for each target in turn. Resolves to `{ pass: true, note }` when
- * the overrides cover every blocking rule, so the call should go on, or
- * `{ text }`, the denial the agent should read.
+ * the keys the CLI recorded cover every rule the dialog listed, so the call
+ * should go on, or `{ text }`, the denial the agent should read.
  */
 export function overrideOutcome(q, targets, answers) {
   const overridden = [];
@@ -191,7 +214,7 @@ export function overrideOutcome(q, targets, answers) {
     else failures.push(answers[i]?.hookSpecificOutput?.additionalContext ?? `${target}: the actual CLI did not record it.`);
   });
   const done = overridden.length ? `The user overrode ${overridden.join(', ')} in the override dialog.` : '';
-  const covered = targets.includes('all') || (q.ids.length === q.blocked && q.ids.every((id) => targets.includes(id)));
+  const covered = q.keys.every((k) => overridden.includes(k));
   if (failures.length === 0 && covered) return { pass: true, note: done };
   const failed = failures.length ? ` Not recorded: ${failures.join(' ')}` : '';
   return { text: withNote(q.reason, `${done}${failed} ${GATE[q.gate].rest}`.trim()) };

@@ -83,6 +83,9 @@
 // in their own file; a plugin loads one hooks module, so the hooks that use
 // them are registered here.
 import {
+  offersOverride,
+  blockingCall,
+  parseBlocking,
   denialQuestion,
   readAnswer,
   overridePrompt,
@@ -1360,9 +1363,9 @@ async function overrideContext($) {
 
 // One `check-override --claude-hook` through the mod's own spawn, which the CLI
 // accepts and an agent's shell it refuses. Null when it recorded nothing.
-async function runOverride($, ctx, prompt, via) {
+async function runOverride($, ctx, prompt, via, gate) {
   try {
-    const { argv, init } = overrideCall(ctx, prompt, via);
+    const { argv, init } = overrideCall(ctx, prompt, via, gate);
     return parseOverrideRun(await $.process.run(argv, init));
   } catch {
     return null;
@@ -1385,10 +1388,19 @@ async function overrideDialogOn($, options) {
 // denial untouched on any failure, a dismissed dialog, or the dialog turned off.
 async function askAboutDenial($, gate, reason, options) {
   if (!(await overrideDialogOn($, options))) return { text: reason };
-  const q = denialQuestion(gate, reason);
-  if (!q) return { text: reason };
+  if (!offersOverride(reason)) return { text: reason };
   const ctx = await overrideContext($);
   if (!ctx) return { text: reason };
+  // The rules to list come from the CLI's session state, not the deny text.
+  let keys = null;
+  try {
+    const { argv, init } = blockingCall(ctx, gate);
+    keys = parseBlocking(await $.process.run(argv, init));
+  } catch {
+    keys = null;
+  }
+  const q = denialQuestion(gate, reason, keys);
+  if (!q) return { text: reason };
   let answer;
   try {
     answer = await $.ui.ask(q.question, { header: q.header, options: q.options });
@@ -1399,7 +1411,7 @@ async function askAboutDenial($, gate, reason, options) {
   if (!read.targets) return { text: read.text };
   const answers = [];
   for (const target of read.targets) {
-    answers.push(await runOverride($, ctx, overridePrompt(target), 'dialog'));
+    answers.push(await runOverride($, ctx, overridePrompt(target), 'dialog', gate));
   }
   return overrideOutcome(q, read.targets, answers);
 }

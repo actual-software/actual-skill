@@ -1873,9 +1873,10 @@ fi
 # (the brief itself, the once-a-session `rules brief --help` probe for the
 # subcommand, `session summary` for the count above the prompt, and
 # `check-override --claude-hook` to record an override the user chose in the
-# dialog or typed) and the one read-only `git` query it needs -- `rev-parse`
-# for the repository root. The check-override argv is built in
-# override-dialog.js (overrideCall), so that file is pinned too.
+# dialog or typed, and to list the denying gate's blocking rules for that
+# dialog) and the one read-only `git` query it needs -- `rev-parse` for the
+# repository root. The check-override argvs are built in override-dialog.js
+# (overrideCall, blockingCall), so that file is pinned too.
 # `claude plugin validate` reports that it calls $.process.run at all; this
 # pins what it runs. Comment lines are stripped first, or the file's own
 # prose about $.process.run would count as a call site.
@@ -1887,7 +1888,7 @@ DIALOG_CODE="${WORK}/override-dialog.nocomments.js"
 grep -vE '^[[:space:]]*(//|\*|/\*)' "${HOOKS_DIR}/override-dialog.js" > "$DIALOG_CODE"
 DIALOG_ARGV=$(grep -cE "'actual', 'check-override', '--claude-hook'" "$DIALOG_CODE" || true)
 DIALOG_OTHER=$(grep -cE "\\\$\\.|argv *= *\\[" "$DIALOG_CODE" || true)
-if [ "$SPAWNS" = "5" ] && [ "$ALLOWED" = "5" ] && [ "$DIALOG_ARGV" = "1" ] && [ "$DIALOG_OTHER" = "1" ]; then
+if [ "$SPAWNS" = "6" ] && [ "$ALLOWED" = "6" ] && [ "$DIALOG_ARGV" = "2" ] && [ "$DIALOG_OTHER" = "1" ]; then
   pass "the mod spawns nothing but the actual CLI (brief, summary, check-override) and git rev-parse"
 else
   fail "the mod spawns an unexpected process" \

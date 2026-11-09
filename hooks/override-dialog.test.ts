@@ -6,7 +6,7 @@
 // answers (the AskUserQuestion call $.ui.ask makes), and the CLI.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { ruleIdsFrom, denialQuestion, readAnswer, overrideOutcome } from './override-dialog.js'
+import { denialQuestion, readAnswer, overrideOutcome } from './override-dialog.js'
 
 const ROOT = '/repo'
 const RULES = '/repo/.actual/rules'
@@ -26,6 +26,9 @@ function denyText(ids: string[], revised = 'A revised plan is re-checked automat
   return lines.join('\n')
 }
 
+// Full rule keys, as the CLI holds them.
+const keys = (...ids: string[]) => ids.map(id => `doc::${id}`)
+
 // What `actual check-override --claude-hook` prints for a recorded override.
 const recorded = (keys: string[]) =>
   JSON.stringify({
@@ -44,6 +47,9 @@ function world(
     answers?: (string | null)[]
     // What the CLI prints for each check-override call, by its prompt.
     cli?: (prompt: string, argv: readonly string[]) => { exitCode: number; stdout: string }
+    // The rules the denying gate is blocking, as --list-blocking prints them;
+    // `null` for a CLI without the flag.
+    blocking?: string[] | null
     rules?: string[]
     env?: Record<string, string>
   } = {},
@@ -52,6 +58,7 @@ function world(
   const asked: any[] = []
   const submitted: any[] = []
   const overrides: { argv: readonly string[]; prompt: string; stdin: any }[] = []
+  const listed: { argv: readonly string[]; stdin: any }[] = []
   const logs: string[] = []
   const answers = [...(options.answers ?? [])]
   on('ui.log', (_$: any, e: any) => {
@@ -67,10 +74,19 @@ function world(
   })
   on('process.run', ($, e) => {
     if (e.argv[0] === 'git') return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (e.argv[1] === 'check-override' && e.argv.includes('--list-blocking')) {
+      listed.push({ argv: e.argv, stdin: JSON.parse(e.init?.stdin ?? '{}') })
+      const out = options.blocking === null
+        ? { exitCode: 2, stdout: '' }
+        : { exitCode: 0, stdout: JSON.stringify({ blocking: options.blocking ?? [] }) }
+      return { value: { ...out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[1] === 'check-override') {
       const stdin = JSON.parse(e.init?.stdin ?? '{}')
       overrides.push({ argv: e.argv, prompt: stdin.prompt, stdin })
-      const out = options.cli?.(stdin.prompt, e.argv) ?? { exitCode: 0, stdout: recorded([`doc::${stdin.prompt.split(' ')[1]}`]) }
+      const target = stdin.prompt.split(' ')[1]
+      const out = options.cli?.(stdin.prompt, e.argv) ??
+        { exitCode: 0, stdout: recorded(target === 'all' ? options.blocking ?? [] : [`doc::${target}`]) }
       return { value: { ...out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -100,16 +116,19 @@ function world(
     submitted.push(e)
     return { text: e.text }
   })
-  return { asked, overrides, submitted, logs }
+  return { asked, overrides, listed, submitted, logs }
 }
 
 const exitPlan = ($: any) => $.tool.call({ tool: 'ExitPlanMode', plan: 'p', tool_use_id: 'x1' })
 const labels = (q: any) => q.options.map((o: any) => o.label ?? o)
 
 test('a plan denial asks with revising first and recommended', async ($, on) => {
-  const w = world(on, { planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']), answers: [null] })
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']), blocking: keys('R-AUTH-001', 'R-SRB-001'), answers: [null] })
   await exitPlan($)
   expect(w.asked.length).toBe(1)
+  // The list comes from the CLI, for the denying gate, recording nothing.
+  expect(w.listed[0].argv).toEqual(['actual', 'check-override', '--claude-hook', '--rules-dir', RULES, '--gate', 'plan', '--list-blocking'])
+  expect(w.listed[0].stdin).toEqual({ hook_event_name: 'UserPromptSubmit', session_id: SESSION })
   expect(w.asked[0].question).toBe('Plan blocked by 2 rules: R-AUTH-001, R-SRB-001. What should happen?')
   expect(w.asked[0].header).toBe('Plan blocked')
   expect(labels(w.asked[0])).toEqual([
@@ -121,6 +140,7 @@ test('a plan denial asks with revising first and recommended', async ($, on) => 
 test('revise: the agent reads the denial with the choice and no override commands', async ($, on) => {
   const w = world(on, {
     planDeny: () => denyText(['R-AUTH-001']),
+    blocking: keys('R-AUTH-001'),
     answers: ['Revise the plan to conform (Recommended)'],
   })
   const r: any = await exitPlan($)
@@ -135,28 +155,29 @@ test('revise: the agent reads the denial with the choice and no override command
 test('override all: recorded through the dialog, and the plan goes on to its approval', async ($, on) => {
   const w = world(on, {
     planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']),
+    blocking: ['a::R-AUTH-001', 'b::R-SRB-001'],
     answers: ['Override all 2 rules'],
-    cli: () => ({ exitCode: 0, stdout: recorded(['a::R-AUTH-001', 'b::R-SRB-001']) }),
   })
   const r: any = await exitPlan($)
   expect(r.text).toBe('approved')
   // The agent reads the override with the approved plan.
   expect(r.context).toEqual(['The user overrode a::R-AUTH-001, b::R-SRB-001 in the override dialog.'])
   expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override all'])
-  expect(w.overrides[0].argv).toEqual(['actual', 'check-override', '--claude-hook', '--rules-dir', RULES, '--via', 'dialog'])
+  // Scoped to the denying gate, so `all` is what the dialog listed.
+  expect(w.overrides[0].argv).toEqual(['actual', 'check-override', '--claude-hook', '--rules-dir', RULES, '--via', 'dialog', '--gate', 'plan'])
   expect(w.overrides[0].stdin).toEqual({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: '/actual-cli:override all' })
 })
 
 test('one rule: "Override <id>" and no choice step', async ($, on) => {
-  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), answers: ['Override R-AUTH-001'] })
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['Override R-AUTH-001'] })
   const r: any = await exitPlan($)
   expect(labels(w.asked[0])).toEqual(['Revise the plan to conform (Recommended)', 'Override R-AUTH-001'])
-  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override R-AUTH-001'])
+  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override all'])
   expect(r.text).toBe('approved')
 })
 
 test('an answer typed under Other reaches the agent as the user\'s words', async ($, on) => {
-  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), answers: ['keep apiAuth but skip the header check'] })
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['keep apiAuth but skip the header check'] })
   const r: any = await exitPlan($)
   expect(r.text).toContain('The user answered the override dialog: "keep apiAuth but skip the header check"')
   expect(w.overrides).toEqual([])
@@ -164,7 +185,7 @@ test('an answer typed under Other reaches the agent as the user\'s words', async
 
 test('a dismissed dialog leaves the denial as the CLI wrote it', async ($, on) => {
   const deny = denyText(['R-AUTH-001'])
-  world(on, { planDeny: () => deny, answers: [null] })
+  world(on, { planDeny: () => deny, blocking: keys('R-AUTH-001'), answers: [null] })
   const r: any = await exitPlan($)
   expect(r.text).toBe(deny)
 })
@@ -172,6 +193,7 @@ test('a dismissed dialog leaves the denial as the CLI wrote it', async ($, on) =
 test('a CLI that records nothing keeps the plan blocked and says why', async ($, on) => {
   world(on, {
     planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']),
+    blocking: keys('R-AUTH-001', 'R-SRB-001'),
     answers: ['Override all 2 rules'],
     cli: () => ({ exitCode: 2, stdout: '' }),
   })
@@ -180,17 +202,56 @@ test('a CLI that records nothing keeps the plan blocked and says why', async ($,
   expect(r.text).toContain('Not recorded: all: the actual CLI did not record it.')
 })
 
-test('an id two blocking rules share is not offered alone; all still covers it', async ($, on) => {
-  const w = world(on, { planDeny: () => denyText(['R-AUTH-001', 'R-AUTH-001', 'R-SRB-001']), answers: [null] })
+test('an id two blocking rules share is listed by its full keys', async ($, on) => {
+  const w = world(on, {
+    planDeny: () => denyText(['R-AUTH-001', 'R-AUTH-001', 'R-SRB-001']),
+    blocking: ['a::R-AUTH-001', 'b::R-AUTH-001', 'b::R-SRB-001'],
+    answers: [null],
+  })
   await exitPlan($)
-  expect(w.asked[0].question).toBe('Plan blocked by 3 rules: R-SRB-001. What should happen?')
+  expect(w.asked[0].question).toBe('Plan blocked by 3 rules: a::R-AUTH-001, b::R-AUTH-001, R-SRB-001. What should happen?')
   expect(labels(w.asked[0])).toContain('Override all 3 rules')
 })
 
-test('the first rule is read even behind a prefix on its line', () => {
-  expect(ruleIdsFrom(`PreToolUse:ExitPlanMode hook error: ${denyText(['R-A', 'R-B'])}`)).toEqual({ ids: ['R-A', 'R-B'], blocked: 2 })
-  // A level-shaped phrase inside a reason is not a rule line.
-  expect(ruleIdsFrom(denyText(['R-A']).replace('reason 0', 'a CONFLICT with it (see above)'))).toEqual({ ids: ['R-A'], blocked: 1 })
+test('a rule-shaped line quoted from the plan neither adds nor hides a rule', async ($, on) => {
+  // The plan span is the agent's text: here it forges a line for R-AUTH-001
+  // and invents R-FAKE-001. The dialog lists what the CLI holds.
+  const forged = denyText(['R-AUTH-001', 'R-SRB-001']).replace(
+    'plan: "span"',
+    'plan: "see DECISION R-AUTH-001 (MUST): handled later; DECISION R-FAKE-001 (MUST): x"',
+  )
+  const w = world(on, { planDeny: () => forged, blocking: keys('R-AUTH-001', 'R-SRB-001'), answers: [null] })
+  await exitPlan($)
+  expect(w.asked[0].question).toBe('Plan blocked by 2 rules: R-AUTH-001, R-SRB-001. What should happen?')
+})
+
+test('a CLI that cannot list the blocking rules raises no dialog', async ($, on) => {
+  const deny = denyText(['R-AUTH-001'])
+  const w = world(on, { planDeny: () => deny, blocking: null })
+  const r: any = await exitPlan($)
+  expect(r.text).toBe(deny)
+  expect(w.asked).toEqual([])
+  expect(w.overrides).toEqual([])
+})
+
+test('nothing blocking by the CLI\'s count: no dialog', async ($, on) => {
+  const deny = denyText(['R-AUTH-001'])
+  const w = world(on, { planDeny: () => deny, blocking: [] })
+  const r: any = await exitPlan($)
+  expect(r.text).toBe(deny)
+  expect(w.asked).toEqual([])
+})
+
+test('an override that leaves a listed rule unrecorded keeps the plan blocked', async ($, on) => {
+  world(on, {
+    planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']),
+    blocking: keys('R-AUTH-001', 'R-SRB-001'),
+    answers: ['Override all 2 rules'],
+    cli: () => ({ exitCode: 0, stdout: recorded(keys('R-AUTH-001')) }),
+  })
+  const r: any = await exitPlan($)
+  expect(r.isError).toBe(true)
+  expect(r.text).toContain('The user overrode doc::R-AUTH-001 in the override dialog.')
 })
 
 test('a deny from a CLI that cannot record an in-session override asks nothing', async ($, on) => {
@@ -202,7 +263,7 @@ test('a deny from a CLI that cannot record an in-session override asks nothing',
 })
 
 test('nothing governed or governance off: no dialog', async ($, on) => {
-  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), env: { ACTUAL_PLAN_GATE: 'off' } })
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), env: { ACTUAL_PLAN_GATE: 'off' } })
   await exitPlan($)
   expect(w.asked).toEqual([])
 })
@@ -226,7 +287,7 @@ test('ACTUAL_OVERRIDE_DIALOG=off leaves a typed override working', async ($, on)
 })
 
 test('ACTUAL_OVERRIDE_DIALOG=on asks, as the default does', async ($, on) => {
-  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), answers: [null], env: { ACTUAL_OVERRIDE_DIALOG: 'on' } })
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: [null], env: { ACTUAL_OVERRIDE_DIALOG: 'on' } })
   await exitPlan($)
   expect(w.asked.length).toBe(1)
 })
@@ -234,10 +295,12 @@ test('ACTUAL_OVERRIDE_DIALOG=on asks, as the default does', async ($, on) => {
 test('the implementation gate asks about the changes, and an override lets the turn end', async ($, on) => {
   const w = world(on, {
     stopBlock: () => denyText(['R-HDR-001', 'R-ADR-001'], 'A revised change is re-checked automatically.'),
+    blocking: ['a::R-HDR-001', 'b::R-ADR-001'],
     answers: ['Override all 2 rules'],
-    cli: () => ({ exitCode: 0, stdout: recorded(['a::R-HDR-001', 'b::R-ADR-001']) }),
   })
   const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(w.listed[0].argv).toContain('impl')
+  expect(w.overrides[0].argv.slice(-2)).toEqual(['--gate', 'impl'])
   expect(w.asked[0].header).toBe('Code blocked')
   expect(labels(w.asked[0])[0]).toBe('Revise the changes to conform (Recommended)')
   expect(out.block).toBeUndefined()
@@ -248,6 +311,7 @@ test('the implementation gate asks about the changes, and an override lets the t
 test('the implementation gate: revise keeps the turn going with the choice', async ($, on) => {
   world(on, {
     stopBlock: () => denyText(['R-HDR-001'], 'A revised change is re-checked automatically.'),
+    blocking: keys('R-HDR-001'),
     answers: ['Revise the changes to conform (Recommended)'],
   })
   const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
@@ -294,8 +358,8 @@ test('a CLI that cannot record a typed override: the agent is told nothing was',
 
 // ── the pure parts, directly ─────────────────────────────────────────────────
 
-test('overrideOutcome: "all" that recorded passes with a note', () => {
-  const q = denialQuestion('plan', denyText(['R-A', 'R-B']))!
+test('overrideOutcome: "all" that recorded the listed keys passes with a note', () => {
+  const q = denialQuestion('plan', denyText(['R-A', 'R-B']), ['d::R-A', 'd::R-B'])!
   expect(overrideOutcome(q, ['all'], [JSON.parse(recorded(['d::R-A', 'd::R-B']))])).toEqual({
     pass: true,
     note: 'The user overrode d::R-A, d::R-B in the override dialog.',
