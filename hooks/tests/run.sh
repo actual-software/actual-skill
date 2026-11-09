@@ -1860,7 +1860,7 @@ fi
 echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
-     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
+     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/session-end.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' > "${WORK}/deps" 2>/dev/null; then
   fail "shipped hooks reference a JSON/runtime dependency" "$(cat "${WORK}/deps")"
 else
@@ -1899,7 +1899,7 @@ for f in "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/register.js"; do
   fi
 done
 
-for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh"; do
+for f in "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/session-end.sh"; do
   if [ -x "$f" ]; then pass "$(basename "$f") is executable"; else fail "$(basename "$f") is not executable" ""; fi
 done
 
@@ -2141,6 +2141,14 @@ cp "${TESTS_DIR}/bin/actual" "${WORK}/k/r1/bin/actual"; cp "${TESTS_DIR}/bin/act
 k1=$(cd "${WORK}/k/r1" && key_of ./bin); k2=$(cd "${WORK}/k/r2" && key_of ./bin)
 if [ -n "$k1" ] && [ "$k1" != "$k2" ]; then pass "a relative PATH entry is keyed by its absolute path"; else fail "relative PATH keys collide" "$k1 vs $k2"; fi
 rm -rf "${WORK}/cache"
+
+echo
+echo "=== SessionEnd ==="
+if bash "${TESTS_DIR}/session-end.sh"; then
+  pass "SessionEnd registration, forwarding, applicability, silence and opt-outs"
+else
+  fail "SessionEnd regression checks"
+fi
 
 echo
 echo "=== Summary ==="
