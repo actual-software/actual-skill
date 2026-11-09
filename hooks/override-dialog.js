@@ -35,9 +35,11 @@
 // it too, which is how a deny from a CLI that can record it is recognised.
 export const OVERRIDE_COMMAND = '/actual-cli:override';
 
-// A prompt that is an override command, namespaced or bare, as the CLI's
-// parse_override_prompt accepts it.
-const OVERRIDE_PROMPT = /^\s*\/(?:[A-Za-z0-9_-]+:)?override(?:\s|$)/;
+// A prompt that is this plugin's override command, namespaced or bare, as the
+// CLI's parse_override_prompt accepts it. Another plugin's `/<name>:override`
+// is that plugin's command: the CLI answers it with silence, which would read
+// here as a CLI too old to record it.
+const OVERRIDE_PROMPT = /^\s*\/(?:actual-cli:)?override(?:\s|$)/;
 
 // One line per blocking rule, as the CLI's hook_deny_reason writes them:
 // `DECISION R-AUTH-001 (MUST_NOT): ...` or `CONFLICT R-SRB-001 (MUST): ...`.

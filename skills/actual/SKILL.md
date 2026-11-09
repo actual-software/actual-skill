@@ -66,7 +66,7 @@ release.
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
 | `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
 | `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart (AK-755) | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes plus untracked, non-ignored files) against the commit the turn started from when a `UserPromptSubmit` call recorded one, otherwise against `HEAD`. Direct mode also accepts `--diff-file` or piped stdin, and diffs the working tree against `HEAD` when neither is given. Never emit `permissionDecision: "allow"` |
-| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user picks an override in the dialog a denial raises, or types `/actual-cli:override <rule-id\|all> [reason]` (a bare `/override` is an unknown command in Claude Code); the plugin's mod records either through `--claude-hook`, which refuses any process carrying `CLAUDECODE`, as every agent command does. The agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` optional; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user picks an override in the dialog a denial raises, or types `/actual-cli:override <rule-id\|all> [reason]` (a bare `/override` is an unknown command in Claude Code); the plugin's mod records either through `--claude-hook`, which refuses any process carrying `CLAUDECODE`, as every agent command does. The agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` required through v0.12.0, optional in later builds (verify with `actual check-override --help`); `--repo`/`--rules-dir` optional, defaulting to the current directory |
 
 ## Platform Identity & Advisor
 
@@ -606,8 +606,8 @@ repo.
   suggest an override as a way past a denial you could fix by revising.** The
   same override can still be
   issued from an ordinary terminal with `actual check-override --session <id>
-  --rule <doc-slug>::<rule-id> [--reason "<why>"]` (it refuses to run
-  non-interactively; `plan-check-override` is a backward-compatible alias;
+  --rule <doc-slug>::<rule-id> --reason "<why>"` (`--reason` is required
+  through v0.12.0; it refuses to run non-interactively; `plan-check-override` is a backward-compatible alias;
   pass `--repo`/`--rules-dir` if you are not in the repo the denial came from).
   An overridden rule is excluded from judging from then on regardless of plan
   or diff text — by both commands, since they share session state — and every

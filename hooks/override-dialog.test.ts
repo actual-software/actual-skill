@@ -52,7 +52,12 @@ function world(
   const asked: any[] = []
   const submitted: any[] = []
   const overrides: { argv: readonly string[]; prompt: string; stdin: any }[] = []
+  const logs: string[] = []
   const answers = [...(options.answers ?? [])]
+  on('ui.log', (_$: any, e: any) => {
+    logs.push(typeof e === 'string' ? e : (e?.text ?? JSON.stringify(e)))
+    return { value: undefined }
+  })
   on('session.id', () => ({ value: SESSION }))
   on('session.root', () => ({ value: ROOT }))
   on('session.cwd', () => ({ value: ROOT }))
@@ -95,7 +100,7 @@ function world(
     submitted.push(e)
     return { text: e.text }
   })
-  return { asked, overrides, submitted }
+  return { asked, overrides, submitted, logs }
 }
 
 const exitPlan = ($: any) => $.tool.call({ tool: 'ExitPlanMode', plan: 'p', tool_use_id: 'x1' })
@@ -236,6 +241,8 @@ test('the implementation gate asks about the changes, and an override lets the t
   expect(w.asked[0].header).toBe('Code blocked')
   expect(labels(w.asked[0])[0]).toBe('Revise the changes to conform (Recommended)')
   expect(out.block).toBeUndefined()
+  // The user sees which keys were recorded, as on the plan path.
+  expect(w.logs).toEqual(['Overrode a::R-HDR-001, b::R-ADR-001 for this session.'])
 })
 
 test('the implementation gate: revise keeps the turn going with the choice', async ($, on) => {
@@ -264,6 +271,19 @@ test('an override a plugin submitted, or an ordinary prompt, records nothing', a
   await $.prompt.submit({ text: '/actual-cli:override all', wait: false, origin: { kind: 'plugin', name: 'other' } } as any)
   await $.prompt.submit({ text: 'how does an override work?', wait: false, origin: { kind: 'composer' } } as any)
   expect(w.overrides).toEqual([])
+})
+
+test("another plugin's :override is left to that plugin", async ($, on) => {
+  const w = world(on)
+  await $.prompt.submit({ text: '/other-plugin:override something', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.overrides).toEqual([])
+  expect(w.submitted.at(-1).context ?? []).toEqual([])
+})
+
+test('a bare /override is still recorded', async ($, on) => {
+  const w = world(on)
+  await $.prompt.submit({ text: '/override R-AUTH-001', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.overrides.map(o => o.prompt)).toEqual(['/override R-AUTH-001'])
 })
 
 test('a CLI that cannot record a typed override: the agent is told nothing was', async ($, on) => {

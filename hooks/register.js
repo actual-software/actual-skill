@@ -1455,6 +1455,11 @@ export function register(on, options = {}) {
     try {
       const settled = await askAboutDenial($, 'impl', r.block, options);
       if (settled.pass) {
+        // The turn ends with no tool result to carry a note, so only the user
+        // is told, by the same transcript line the plan path writes.
+        if (settled.note) {
+          $.ui.log(settled.note.replace('The user overrode', 'Overrode').replace(' in the override dialog', ' for this session'));
+        }
         const { block: _block, ...rest } = r;
         return rest;
       }
