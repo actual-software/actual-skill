@@ -1871,20 +1871,28 @@ fi
 # runs inside Claude Code and adds no system dependency. The invariant that
 # does apply is narrower: the only processes it may spawn are the `actual` CLI
 # (the brief itself, the once-a-session `rules brief --help` probe for the
-# subcommand, and `session summary` for the count above the prompt) and the one
-# read-only `git` query it needs -- `rev-parse` for the repository root.
+# subcommand, `session summary` for the count above the prompt, and
+# `check-override --claude-hook` to record an override the user chose in the
+# dialog or typed, and to list the denying gate's blocking rules for that
+# dialog) and the one read-only `git` query it needs -- `rev-parse` for the
+# repository root. The check-override argvs are built in override-dialog.js
+# (overrideCall, blockingCall), so that file is pinned too.
 # `claude plugin validate` reports that it calls $.process.run at all; this
 # pins what it runs. Comment lines are stripped first, or the file's own
 # prose about $.process.run would count as a call site.
 MOD_CODE="${WORK}/register.nocomments.js"
 grep -vE '^[[:space:]]*(//|\*|/\*)' "${HOOKS_DIR}/register.js" > "$MOD_CODE"
 SPAWNS=$(grep -c '\$\.process\.run(' "$MOD_CODE" || true)
-ALLOWED=$(grep -cE "'actual', 'rules', 'brief'|'actual', 'session', 'summary'|'git', 'rev-parse'" "$MOD_CODE" || true)
-if [ "$SPAWNS" = "4" ] && [ "$ALLOWED" = "4" ]; then
-  pass "the mod spawns nothing but the actual CLI and git rev-parse"
+ALLOWED=$(grep -cE "'actual', 'rules', 'brief'|'actual', 'session', 'summary'|'git', 'rev-parse'|\\\$\\.process\\.run\\(argv, init\\)" "$MOD_CODE" || true)
+DIALOG_CODE="${WORK}/override-dialog.nocomments.js"
+grep -vE '^[[:space:]]*(//|\*|/\*)' "${HOOKS_DIR}/override-dialog.js" > "$DIALOG_CODE"
+DIALOG_ARGV=$(grep -cE "'actual', 'check-override', '--claude-hook'" "$DIALOG_CODE" || true)
+DIALOG_OTHER=$(grep -cE "\\\$\\.|argv *= *\\[" "$DIALOG_CODE" || true)
+if [ "$SPAWNS" = "6" ] && [ "$ALLOWED" = "6" ] && [ "$DIALOG_ARGV" = "2" ] && [ "$DIALOG_OTHER" = "1" ]; then
+  pass "the mod spawns nothing but the actual CLI (brief, summary, check-override) and git rev-parse"
 else
   fail "the mod spawns an unexpected process" \
-       "process.run sites=$SPAWNS allowed=$ALLOWED"
+       "process.run sites=$SPAWNS allowed=$ALLOWED check-override argv=$DIALOG_ARGV other argv/\$ in override-dialog.js=$DIALOG_OTHER"
 fi
 
 # Both briefing paths must forward --rules-dir, or they land on different

@@ -8,9 +8,10 @@ So a pull request that changes anything under these paths also raises `version`,
 
 - `hooks/`, including `hooks/lib/`, `hooks/hooks.json` and the mod, `hooks/register.js`
 - `skills/`
+- `commands/`
 - `.claude-plugin/`
 
-When the plugin gains another component Claude Code loads, such as a `commands/` directory or a `.mcp.json`, add its path to this list.
+When the plugin gains another component Claude Code loads, such as an `agents/` directory or a `.mcp.json`, add its path to this list.
 
 Everything else can merge without a bump, because none of it changes what runs in a Claude Code session. That covers the tests that sit under `hooks/` (`hooks/tests/` and the `*.test.ts` files), the docs, and the Codex manifest, `.codex-plugin/plugin.json`, which keeps a version of its own.
 
