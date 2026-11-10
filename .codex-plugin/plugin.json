@@ -1,6 +1,6 @@
 {
   "name": "actual-cli",
-  "version": "1.0.1",
+  "version": "1.8.0",
   "description": "Run and troubleshoot the Actual CLI for ADR-powered coding-agent guidance.",
   "author": {
     "name": "Actual AI",
