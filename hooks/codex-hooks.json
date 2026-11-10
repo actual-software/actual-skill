@@ -1,4 +1,75 @@
 {
-  "description": "Actual governance hooks for Codex. Empty for now: declaring this file keeps Codex from falling back to hooks/hooks.json, which is Claude Code's and fails Codex's parser.",
-  "hooks": {}
+  "description": "Actual plan- and implementation-stage ADR governance for Codex: briefs the rules that govern the files the agent reads and patches, checks Plan-mode plans and each turn's diff against the rules committed in .actual/rules/, and shows the session-summary line.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/preflight.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/turn-start.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/rules-brief.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/rules-brief.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/plan-gate.sh",
+            "timeout": 180,
+            "statusMessage": "Checking plan against architecture rules..."
+          },
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/impl-gate.sh",
+            "timeout": 180,
+            "statusMessage": "Checking implementation against architecture rules..."
+          },
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/session-summary.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
 }
