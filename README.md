@@ -59,6 +59,24 @@ Then I'll verify it with `actual --version`.
 <details>
 <summary><strong>Install Actual.ai Skill — Codex</strong></summary>
 
+Add this repository as a plugin marketplace, then install the plugin:
+
+```bash
+codex plugin marketplace add actual-software/actual-skill
+codex plugin add actual-cli@actual-cli-skills
+```
+
+The plugin brings the skill and the governance hooks. Codex runs a plugin's hooks only once you trust them, so open `/hooks` in the CLI (or **Settings → Hooks** in the app), review the plugin's hooks and trust them. Codex records that trust against the plugin's content, so after each update the hooks show as modified and stay off until you review them again.
+
+To update, refresh the marketplace and install the plugin again, which installs the new version:
+
+```bash
+codex plugin marketplace upgrade actual-cli-skills
+codex plugin add actual-cli@actual-cli-skills
+```
+
+This plugin can't be listed in Codex's public plugin directory, because OpenAI doesn't list plugins that carry hooks there ([Build plugins](https://developers.openai.com/plugins/build), "Bundled MCP servers and lifecycle hooks"). If you only want the skill, without governance, install it on its own:
+
 ```
 $skill-installer install the actual skill from actual-software/actual-skill
 ```
@@ -161,7 +179,7 @@ Inside the coding agent your team already uses: Claude Code, Codex, ChatGPT, Cur
 
 ## When does the Actual.ai Skill run?
 
-Whenever an architecture question comes up. Before your agent writes code, it asks your ADRs how your team builds things and gets an answer that cites its sources. In Claude Code, the skill also checks the plan before implementation starts and the changes at the end of every turn.
+Whenever an architecture question comes up. Before your agent writes code, it asks your ADRs how your team builds things and gets an answer that cites its sources. In Claude Code and Codex, the skill also checks the plan before implementation starts and the changes at the end of every turn.
 
 ## How does the Actual.ai Skill work?
 
@@ -175,7 +193,7 @@ When your agent hits an architecture question, the skill asks the Actual advisor
 
 ### Governance
 
-In Claude Code, the skill checks your agent's work against the architecture rules committed in `.actual/rules/`. When your agent leaves plan mode, its plan is checked before you see the approval dialog. At the end of every turn, its changes are checked too. A conflict goes back to the agent with the reason, and the turn continues until it's fixed.
+In Claude Code and Codex, the skill checks your agent's work against the architecture rules committed in `.actual/rules/`. When your agent leaves plan mode, its plan is checked before you see the approval dialog. At the end of every turn, its changes are checked too. A conflict goes back to the agent with the reason, and the turn continues until it's fixed.
 
 A rule file in `.actual/rules/` may open with a YAML header (`adr_id`, a scope with `root` and `paths`, and so on). The header says which part of the repository an ADR governs, and the CLI reads it. The skill never parses it: it counts the files, hands them to the CLI, and relays what the CLI returns. A file with no header is still read in the original format. Reading headers needs `actual` 0.9.0 or later. On an older CLI, in a repository whose rules carry them, the checks and briefing stand down rather than act on the wrong scope, and the session start tells you to upgrade; no hook blocks, but the agent is asked to pause and offer the upgrade. Overrides are unchanged: `<doc-slug>::<rule-id>`.
 
@@ -202,11 +220,26 @@ Governance never gets in the way of unrelated work. Outside a repository with `.
 
 Set `ACTUAL_PLAN_GATE=off` to turn governance off, `ACTUAL_RULES_BRIEF=off` to turn off briefing alone while the checks keep running, or `ACTUAL_RULES_DIR` to use a different rules directory. The briefing limits have their own variables — `ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS` for the per-session cap and `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS` and `_MIN_SCORE` for `actual rules brief`'s own limits — and the same settings appear as labelled rows under `/plugin`. `_MIN_SCORE` is worth knowing about if briefing feels noisy: a rule's score reflects how narrowly its `verify` path is written, so the useful floor differs per repository and there is no good default.
 
-The hooks also stay silent inside the `claude` subprocesses `actual` itself spawns (marked with `ACTUAL_CLI_SUBPROCESS=1`), so the judge's own Stop hook can't rerun `impl-check` and recurse. Failures are silent by design, so if you need to see why briefing isn't appearing, set `ACTUAL_HOOK_DEBUG=1` and run `claude --debug`; it reports the rules directory, the CLI's exit status, why a reply was dropped, and how much context briefing has used. Run `bash hooks/tests/run.sh` to test the hooks locally, and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .` to test the mod; neither needs the network or a CLI install. Governance relies on Claude Code hooks, so it isn't available in Codex, ChatGPT, Cursor, or OpenCode.
+The hooks also stay silent inside the `claude` subprocesses `actual` itself spawns (marked with `ACTUAL_CLI_SUBPROCESS=1`), so the judge's own Stop hook can't rerun `impl-check` and recurse. Failures are silent by design, so if you need to see why briefing isn't appearing, set `ACTUAL_HOOK_DEBUG=1` and run `claude --debug`; it reports the rules directory, the CLI's exit status, why a reply was dropped, and how much context briefing has used. Run `bash hooks/tests/run.sh` to test the hooks locally, and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .` to test the mod; neither needs the network or a CLI install. Governance relies on Claude Code's and Codex's hooks, so it isn't available in ChatGPT, Cursor, or OpenCode.
+
+### Governance in Codex
+
+The Codex plugin runs the same hook scripts against the same CLI, so the rules, verdicts, round limit and overrides are the ones above. What differs follows from what Codex offers a hook:
+
+- **The plan is checked when the Plan-mode turn ends.** Codex has no plan-approval step to hold back, so you see the first draft of the plan, and a conflicting one sends the agent back to revise it in the same turn.
+- **Briefing comes from shell reads and patches.** Codex has no Read tool: the files a read-only shell command names (`cat`, `head`, `sed -n`, `grep`, `rg` and the like) are briefed after it runs, and the files a patch adds or updates are briefed before it applies. The per-session cap is the same 48,000 characters, kept by the CLI.
+- **The session summary is a line at the end of a turn**, shown only when it changes, since Codex has no band above the prompt.
+- **No transcript rows and no `/rules-brief`.** Codex gives a hook no way to write either.
+- **Settings are environment variables only.** Codex has no per-plugin settings, so the `ACTUAL_*` variables above are the only way to set them.
+- **To override a rule, run `actual check-override` from a terminal outside Codex.** It refuses inside the agent's own shell, as it does in Claude Code's.
+- **Each release asks you to trust the hooks again** (see the install steps).
+- **Codex needs `actual` 0.13.0 or later.** On an older CLI the session start offers the upgrade and the checks stand down.
 
 ### Session summary
 
 In Claude Code, a row above the prompt shows what Actual AI has done for your agent this session: how many of your repository's ADRs it added to the agent's context, and how many folders the agent worked in that no ADR covers. It reads `Actual AI: 3 of 12 ADRs added to context · 2 areas with no ADR`, or `Actual AI: no ADR covers the 3 areas you worked in` while no ADR has been added. The CLI writes the row and the plugin shows it as given, and `actual session summary --json` names the folders. It reads `0 of 12` from the start of the session and updates after each of your agent's replies, in the background, so no reply waits on it. After `/clear` it counts the new session. Claude Code's own surveys and other plugins share that band: the row steps aside while a survey is showing, and the `[-]` at its right collapses the band.
+
+In Codex the same line appears at the end of a turn, when it has changed since it was last shown. `ACTUAL_RULES_BRIEF=off` turns it off there along with briefing.
 
 It counts against the same rules directory as briefing, `ACTUAL_RULES_DIR` included, and shows nothing outside a repository with `.actual/rules/`, when the rules hold no decision, or when the CLI is missing or too old to write the row. `ACTUAL_PLAN_GATE=off` leaves it on. The same mod that briefs shell reads draws it, so it needs the same Claude Code: 2.1.287 or later, or 2.1.285 and 2.1.286 with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`. The band appears in the terminal and the desktop app, and not in VS Code or `claude -p`. Its tests run with the mod's: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .`.
 
@@ -225,6 +258,7 @@ See the [Actual CLI docs](https://actual.ai/cli/docs) for getting started and th
 - A supported coding agent: Claude Code, Codex, ChatGPT, Cursor, or OpenCode.
 - Your repository onboarded at [app.actual.ai](https://app.actual.ai), so Actual can generate its ADRs.
 - The `actual` CLI 0.8.0 or later ([actual-software/actual-cli](https://github.com/actual-software/actual-cli)). The skill offers to install it on first use, or you can install it yourself with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`. In Claude Code, each session start in a repository with rules compares the installed version with the one the skill needs and offers to upgrade an older CLI, with the command for however you installed it when the CLI can name it, or both commands when it's too old to. A declined offer doesn't come back as an interruption after a compaction or a resume.
+  - Governance in Codex needs `actual` 0.13.0 or later. Check with `actual plan-check --help`, which names `codex-hook` on a CLI that has it.
   - Rule files with a YAML header need `actual` 0.9.0 or later. Upgrade with `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`. Check with `actual rules brief --help`, which names `adr-header-v2` on a CLI that reads them.
 
 ## License

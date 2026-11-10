@@ -17,6 +17,15 @@
 # permission flow untouched. Only an explicit deny (JSON or exit 2) can block.
 # A conforming plan must not emit permissionDecision:allow -- a gate does not grant
 # approval on the user's behalf. Pass = empty stdout, or JSON with no decision.
+#
+# Codex (ACTUAL_HOOK_HOST=codex) has no ExitPlanMode. Plan mode there ends with a
+# turn whose final message proposes the plan, so this runs on every Stop instead,
+# beside impl-gate.sh, and `actual plan-check --codex-hook` reads the turn's mode
+# and plan from the rollout: a turn that was not in Plan mode prints nothing. A
+# conflicting plan gets Stop's {"decision":"block","reason"}, which sends the
+# agent back to revise it; the user has already seen the first draft by then.
+# impl-gate.sh runs on the same Stop and already reports a missing, unreadable or
+# too-old CLI, so under Codex this script says nothing about those.
 
 set -uo pipefail
 
@@ -30,6 +39,43 @@ payload=$(cat)
 # 2. Explicit opt-out, and a no-op inside actual-cli's own subprocesses (see
 #    inside_actual_subprocess).
 if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
+  exit 0
+fi
+
+# The Codex path: same checks, Stop-shaped output, and silent wherever
+# impl-gate.sh speaks for both gates.
+if is_codex_host; then
+  dir=$(rules_dir)
+  rules_present "$dir" && have_actual || exit 0
+  adr_v2_unsupported "$dir" && exit 0
+  have_codex_hook || exit 0
+
+  stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-plan-gate.XXXXXX") || exit 0
+  trap 'rm -f "$stderr_file"' EXIT
+  repo_root=$(resolve_repo_root)
+  cd "$repo_root" 2>/dev/null || true
+
+  verdict=$(printf '%s' "$payload" | actual plan-check --codex-hook --rules-dir "$dir" 2>"$stderr_file")
+  status=$?
+  case "$status" in
+    0) forward_codex_reply "$verdict" "block notice" ;;
+    2)
+      # A usage error is not a deny (see is_cli_usage_error); anything else on
+      # exit 2 is the CLI's fallback block, whose stderr Codex hands the agent.
+      if is_cli_usage_error "$stderr_file"; then
+        IFS= read -r err_line <"$stderr_file" || true
+        emit_stop_notice \
+          "Actual plan governance did not run (actual plan-check rejected its invocation: ${err_line}); this plan was not checked against .actual/rules/."
+        exit 0
+      fi
+      cat "$stderr_file" >&2
+      exit 2
+      ;;
+    *)
+      emit_stop_notice \
+        "Actual plan governance did not run (actual plan-check exited ${status}); this plan was not checked against .actual/rules/."
+      ;;
+  esac
   exit 0
 fi
 

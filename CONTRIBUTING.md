@@ -2,21 +2,22 @@
 
 ## Bump the plugin version in every user-facing pull request
 
-Claude Code updates an installed plugin only when `version` in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) changes. Auto-update and `claude plugin update` both compare that string with the installed copy, so a change merged without a new version reaches people who install afterwards, and nobody who already has the plugin gets it until a later pull request raises the version. Merging to `main` is the release.
+The plugin ships to two agents, Claude Code and Codex, and each updates an installed copy only when the manifest's `version` changes. Claude Code compares `version` in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) with the installed copy, for auto-update and for `claude plugin update`. Codex reads [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) and installs each version into a cache folder of its own, `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`, so it keeps running the old folder until the version moves. A change merged without a new version reaches people who install afterwards, and nobody who already has the plugin gets it until a later pull request raises the version. Merging to `main` is the release.
 
-So a pull request that changes anything under these paths also raises `version`, in the same pull request:
+The hook scripts are shared, so the two manifests carry one version, and a pull request raises both together; the hook harness fails when they differ. A pull request that changes anything under these paths raises it, in the same pull request:
 
-- `hooks/`, including `hooks/lib/`, `hooks/hooks.json` and the mod, `hooks/register.js`
+- `hooks/`, including `hooks/lib/`, `hooks/hooks.json`, `hooks/codex-hooks.json` and the mod, `hooks/register.js`
 - `skills/`
 - `.claude-plugin/`
+- `.codex-plugin/`
 
-When the plugin gains another component Claude Code loads, such as a `commands/` directory or a `.mcp.json`, add its path to this list.
+When the plugin gains another component either agent loads, such as a `commands/` directory or a `.mcp.json`, add its path to this list.
 
-Everything else can merge without a bump, because none of it changes what runs in a Claude Code session. That covers the tests that sit under `hooks/` (`hooks/tests/` and the `*.test.ts` files), the docs, the Codex manifest, `.codex-plugin/plugin.json`, and the Codex hooks file it names, `hooks/codex-hooks.json`. Claude Code never reads either.
+Everything else can merge without a bump, because none of it changes what runs in a session. That covers the tests that sit under `hooks/` (`hooks/tests/` and the `*.test.ts` files) and the docs.
 
-### The Codex version
+### Every Codex release asks users to trust the hooks again
 
-The Codex manifest keeps a version of its own. Codex installs each version into its own cache folder and doesn't pick up a change until that version moves, so a pull request that changes `.codex-plugin/` or `hooks/codex-hooks.json` raises `version` in `.codex-plugin/plugin.json`. The rules for choosing the number are the same as below.
+Codex runs a plugin's hooks only once the user has trusted them in `/hooks`, and the trust it records covers the plugin's whole content. After an update every hook shows as modified and stays off until the user reviews it again, whatever the release changed. So a release costs Codex users a review: group small changes into one release rather than shipping each on its own, and say in the release notes when hooks changed.
 
 ### Choosing the number
 

@@ -19,7 +19,7 @@ Inline knowledge and operational workflows for the actual CLI. Read this file fi
 
 ## CLI Not Installed
 
-If the `actual` binary is not in PATH, **stop before doing anything else** — all commands, pre-flight checks, and diagnostics require the CLI. Offer to install it rather than just printing the steps: ask using an interactive question tool (e.g. `AskUserQuestion`) so your turn actually pauses for an answer, and don't continue — not even to keep exploring or planning — until the user responds. Mentioning it and continuing anyway isn't the same as asking. If they agree, run the command yourself with the Bash tool; if they decline, leave it at that and resume — installation stays optional, but only once they've actually answered.
+If the `actual` binary is not in PATH, **stop before doing anything else** — all commands, pre-flight checks, and diagnostics require the CLI. Offer to install it rather than just printing the steps: ask so your turn actually pauses for an answer — with an interactive question tool where you have one (e.g. `AskUserQuestion` in Claude Code), or, in Codex, by asking in your reply and ending your turn on the question — and don't continue — not even to keep exploring or planning — until the user responds. Mentioning it and continuing anyway isn't the same as asking. If they agree, run the command yourself in your shell tool; if they decline, leave it at that and resume — installation stays optional, but only once they've actually answered.
 
 Detect with:
 ```bash
@@ -142,11 +142,14 @@ Always inspect `actual advisor --help` before using the newer scope workflow.
 
 > For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
 
-## Plan- and Implementation-Stage Governance (Claude Code hooks)
+## Plan- and Implementation-Stage Governance (Claude Code and Codex hooks)
 
-This plugin ships Claude Code hooks that check an implementation plan, and separately
-the diff an agent actually produces, against the ADR rules committed in the
-repository. They are registered automatically on install — there is no manual setup.
+This plugin ships hooks that check an implementation plan, and separately the diff an
+agent actually produces, against the ADR rules committed in the repository. Claude
+Code registers them from `hooks/hooks.json` automatically on install, with no manual
+setup. Codex registers the same scripts from `hooks/codex-hooks.json` and runs them
+once the user has trusted them in `/hooks`; see "Codex hooks" below for what differs
+there. The table describes Claude Code.
 
 | Hook | Event | What it does |
 |------|-------|--------------|
@@ -179,6 +182,48 @@ on stderr) — a different JSON shape from `PreToolUse`'s
 it was verified against the documented Stop contract specifically, because the two
 hook events are not guaranteed to behave identically. See "Stop hook: `impl-gate.sh`'s
 JSON contract" below for why that distinction matters here in particular.
+
+### Codex hooks
+
+`.codex-plugin/plugin.json` names `hooks/codex-hooks.json`, so Codex never reads
+Claude Code's `hooks/hooks.json` (whose `modules` key its parser rejects). Every
+command there runs a shared script with `ACTUAL_HOOK_HOST=codex`, which
+`hooks/lib/bootstrap.sh` reads to pick the CLI flag (`--codex-hook`), the output
+shapes and the wording; unset, everything behaves as in Claude Code.
+
+| Hook | Event | What differs from Claude Code |
+|------|-------|-------------------------------|
+| `preflight.sh` | `SessionStart` (all five sources) | The same ladder, plus one rung: a CLI without the `codex-hook` capability marker (`actual plan-check --help`, cached per binary like the ADR header v2 probe) gets the upgrade offer, as an interrupt at `startup` and at a pause afterwards, and the Claude Code version minimums are not asked. On `compact` and `clear` it runs `actual rules brief --codex-session-start`, which resets what the session has been briefed, as the mod does in Claude Code. The offers name no Claude Code tool: Codex's default mode has no question tool, so the agent is asked to put the question in its reply and end its turn on it |
+| `turn-start.sh` | `UserPromptSubmit` | `impl-check --codex-hook`; probes for `codex-hook` instead of the `UserPromptSubmit` dispatch |
+| `rules-brief.sh` | `PostToolUse` on `Bash`, `PreToolUse` on `Edit\|Write` | Codex has no Read tool. On `Bash` the CLI briefs the files a read-only command names (`cat`, `head`, `tail`, `sed -n`, `grep`, `rg`, `nl`, `wc` and similar, after a leading `cd`; no output redirection, no command substitution, at most two files). `Edit\|Write` is the alias Codex matches `apply_patch` by, and the CLI briefs the files the patch adds or updates, before it applies. No mod stands this down. The hook passes `--max-session-chars` (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, default 48000) and the other four limits when they are plain numbers, and the CLI enforces the cap and says once when it is spent |
+| `plan-gate.sh` | `Stop` | Codex has no `ExitPlanMode`. The hook runs on every `Stop` and `actual plan-check --codex-hook` reads the turn's mode and plan from the rollout at `transcript_path`: outside Plan mode it prints nothing. A conflicting plan gets `{"decision":"block","reason":…}` and the agent revises it in the same turn, after the user has seen the first draft. Silent on a missing, unreadable or too-old CLI, which `impl-gate.sh` reports on the same `Stop` |
+| `impl-gate.sh` | `Stop` | `impl-check --codex-hook`, which skips a Plan-mode turn. Its reply is already Codex's `Stop` shape, so it is forwarded after the check below rather than re-rendered. On a CLI without `codex-hook` it stands down with a one-line notice |
+| `session-summary.sh` | `Stop` | Codex only. `actual session summary --codex-hook` prints the summary line as `{"systemMessage":…}` when it changed since it was last shown; Codex shows it to the user and never to the model. `ACTUAL_RULES_BRIEF=off` silences it |
+
+There is no `SessionEnd` registration, no transcript row and no `/rules-brief`
+pane: Codex gives a hook no way to write either, and its session-end event is not
+covered yet. Settings are environment variables only, since Codex has no
+per-plugin `userConfig`.
+
+**Codex hook contract.** Codex parses hook output strictly: a key it does not know
+fails the hook run, which is why Claude Code's notice shape, with its nested
+`hookSpecificOutput.systemMessage`, is never sent there. The CLI's `--codex-hook`
+replies are flat, so `forward_codex_reply` in `bootstrap.sh` pins each one whole —
+the exact opening bytes, the exact closing `"}` and a single JSON string between —
+and forwards only `{"decision":"block","reason":"…"}` (the gates) or
+`{"systemMessage":"…"}` (the gates' notices and the summary). A brief keeps Claude
+Code's `{"hookSpecificOutput":{"hookEventName","additionalContext"}}`, which Codex
+accepts. A reply with a `\uXXXX` escape is refused with a notice, as the Claude Code
+gates refuse one; a block with an empty reason blocks with a fixed reason. Exit 2
+still blocks, with stderr as the reason.
+
+Codex runs the three `Stop` hooks at once. Only one gate touches the session's
+governance state on a given turn, because `plan-check` returns before reading it
+outside Plan mode and `impl-check` returns before reading it in Plan mode. A block
+starts a continuation in the same turn, on which every `Stop` hook runs again.
+
+Codex records hook trust against the plugin's whole content, so each release asks
+the user to review the hooks again (see CONTRIBUTING.md).
 
 ### This is an advisory gate, not an enforcement boundary
 
@@ -343,16 +388,16 @@ place that distinction is applied.
 
 | Variable | Effect |
 |----------|--------|
-| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, `turn-start.sh`, `rules-brief.sh`, `session-end.sh` and `preflight.sh`, including its minimum-version check) |
+| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, `turn-start.sh`, `rules-brief.sh`, `session-end.sh`, `session-summary.sh` and `preflight.sh`, including its minimum-version check) |
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). The governance checks and briefing forward the resolved path to the CLI as `--rules-dir`; `session-end.sh` uses it only to check applicability. `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_TURN_START_LOG` | Path of a file `turn-start.sh` appends the CLI's output and exit status to, for diagnosing a turn-start record that is never written, or a `skipped` line when the CLI has no `UserPromptSubmit` dispatch. Unset by default, which keeps the hook fully silent; set, the hook is still silent on stdout and stderr |
 | `ACTUAL_IMPL_CHECK_MAX_ROUNDS` | Override `impl-check --claude-hook`'s round limit (default 3) |
-| `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the mod — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
+| `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the mod, and in Codex the briefing hook and the summary line — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
 | `ACTUAL_CLI_SUBPROCESS=1` | Set by actual-cli on the nested `claude -p` it runs as its conformance judge. Every hook and the mod exit silently when it is set: without it the judge's own `Stop` hook reruns `impl-check` and recurses, and briefing would inject rules into the judge's prompt that it was never asked to weigh |
 | `ACTUAL_HOOK_DEBUG=1` | Report what briefing did, on stderr for the hook and in the transcript plus the model's context for the mod, which also adds a note when it does not brief: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |
-| `ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS` | Characters of rule context briefing may inject in one session before it stops and says so (default 48000). Measured basis: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is ~2.5x an ordinary session. `0` disables briefing where the mod loads; `rules-brief.sh` enforces no cap |
-| `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE` | Forwarded by the mod to `actual rules brief` as `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`, and only when set (`rules-brief.sh` forwards none of them), so the CLI keeps owning its own defaults. `_MIN_SCORE` especially: unset it defers to the repository's `rules_min_score`, and a score measures how narrowly a rule's `verify` glob is written rather than how relevant the rule is, so no cross-repository default is correct |
+| `ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS` | Characters of rule context briefing may inject in one session before it stops and says so (default 48000). Measured basis: 40 governed files against a 425-rule repository injected 18,751 characters with dedup active, so the default is ~2.5x an ordinary session. `0` disables briefing where the mod loads; `rules-brief.sh` enforces no cap under Claude Code, and under Codex passes it to the CLI as `--max-session-chars`, which enforces it |
+| `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE` | Forwarded by the mod to `actual rules brief` as `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`, and only when set (`rules-brief.sh` forwards them only under Codex, and only when each is a plain number), so the CLI keeps owning its own defaults. `_MIN_SCORE` especially: unset it defers to the repository's `rules_min_score`, and a score measures how narrowly a rule's `verify` glob is written rather than how relevant the rule is, so no cross-repository default is correct |
 
 The briefing limits (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, `_LIMIT`,
 `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`) and `debug` also appear as
@@ -506,6 +551,12 @@ CLI older than that subcommand, gets both the npm and Homebrew commands, with a 
 to tell which one installed it, since running the other would leave a second copy on
 `PATH`. A CLI installed some other way gets the actual-releases page.
 
+Under Codex the requirement is the `codex-hook` capability instead, first shipped in
+actual-cli `CODEX_HOOK_MIN_CLI` (0.13.0). `preflight.sh` probes for the marker in
+`actual plan-check --help` rather than comparing versions, so a build that has it
+passes whatever its version reads, and one without it gets the same upgrade offer,
+with the same command selection, while every other Codex hook stands down.
+
 The offer interrupts the task only on a CLI older than `GATES_MIN_CLI_VERSION`, the
 oldest release every check runs in full on, and only when a session starts. On a CLI
 older than 0.7.0, the `Stop` check misses work committed during a turn, because
@@ -610,7 +661,9 @@ bash hooks/tests/run.sh
 
 Runs the full decision matrix (no-op, missing binary, old CLI, pass, deny, crash)
 against recorded hook payloads and a fake CLI, for both `plan-gate.sh` and
-`impl-gate.sh`. No network and no real `actual` install required.
+`impl-gate.sh`, under Claude Code and, from `hooks/tests/codex.sh`, under Codex with
+the envelopes captured from Codex CLI 0.167.0. No network and no real `actual`
+install required.
 
 ## Runner Decision Tree
 
