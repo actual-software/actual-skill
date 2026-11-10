@@ -12,7 +12,11 @@ So a pull request that changes anything under these paths also raises `version`,
 
 When the plugin gains another component Claude Code loads, such as a `commands/` directory or a `.mcp.json`, add its path to this list.
 
-Everything else can merge without a bump, because none of it changes what runs in a Claude Code session. That covers the tests that sit under `hooks/` (`hooks/tests/` and the `*.test.ts` files), the docs, and the Codex manifest, `.codex-plugin/plugin.json`, which keeps a version of its own.
+Everything else can merge without a bump, because none of it changes what runs in a Claude Code session. That covers the tests that sit under `hooks/` (`hooks/tests/` and the `*.test.ts` files), the docs, the Codex manifest, `.codex-plugin/plugin.json`, and the Codex hooks file it names, `hooks/codex-hooks.json`. Claude Code never reads either.
+
+### The Codex version
+
+The Codex manifest keeps a version of its own. Codex installs each version into its own cache folder and doesn't pick up a change until that version moves, so a pull request that changes `.codex-plugin/` or `hooks/codex-hooks.json` raises `version` in `.codex-plugin/plugin.json`. The rules for choosing the number are the same as below.
 
 ### Choosing the number
 

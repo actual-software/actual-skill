@@ -5,6 +5,7 @@ on:
     paths:
       - 'hooks/**'
       - '.claude-plugin/plugin.json'
+      - '.codex-plugin/plugin.json'
       - '.github/workflows/hooks.yml'
 
 permissions:

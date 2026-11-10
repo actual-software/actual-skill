@@ -1857,6 +1857,27 @@ else
   fail "hooks.json UserPromptSubmit registration wrong" "$(jq -c '.hooks.UserPromptSubmit' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
 fi
 
+# Codex reads hooks/hooks.json when its manifest names no hooks file, and its parser
+# accepts only `description` and `hooks` at the top level, so Claude Code's `modules`
+# key makes every Codex session report "failed to parse plugin hooks config". The
+# Codex manifest therefore names a hooks file of its own, held to Codex's shape.
+CODEX_MANIFEST="${HOOKS_DIR}/../.codex-plugin/plugin.json"
+CODEX_HOOKS_REL=$(jq -r '.hooks // empty' "$CODEX_MANIFEST" 2>/dev/null)
+CODEX_HOOKS="${HOOKS_DIR}/../${CODEX_HOOKS_REL#./}"
+if [ -n "$CODEX_HOOKS_REL" ] && [ "$CODEX_HOOKS_REL" != "./hooks/hooks.json" ] && [ -f "$CODEX_HOOKS" ]; then
+  pass "Codex manifest names its own hooks file ($CODEX_HOOKS_REL), not Claude Code's hooks/hooks.json"
+else
+  fail "Codex manifest must name an existing hooks file other than hooks/hooks.json" "hooks=${CODEX_HOOKS_REL:-<unset>}"
+fi
+
+if [ -f "$CODEX_HOOKS" ] \
+   && [ "$(jq -c 'keys - ["description","hooks"]' "$CODEX_HOOKS" 2>/dev/null)" = "[]" ] \
+   && [ "$(jq -r '.hooks | type' "$CODEX_HOOKS" 2>/dev/null)" = "object" ]; then
+  pass "Codex hooks file has only the top-level keys Codex accepts (description, hooks)"
+else
+  fail "Codex hooks file has keys Codex rejects, or no hooks object" "$(jq -c 'keys' "$CODEX_HOOKS" 2>/dev/null)"
+fi
+
 echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
