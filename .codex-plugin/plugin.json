@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "Actual CLI",
     "shortDescription": "Add architecture guidance to coding agents.",
-    "longDescription": "Run, configure, and troubleshoot the Actual CLI to generate tailored ADR guidance for Codex, Claude Code, Cursor, and other coding agents.",
+    "longDescription": "Run, configure, and troubleshoot the Actual CLI to generate tailored ADR guidance for Codex, Claude Code, Cursor, and other coding agents. In a repository with architecture rules in .actual/rules/, its hooks brief the agent on the rules that govern the files it reads and patches, check Plan-mode plans and each turn's changes against those rules, and show which ADRs the session used.",
     "developerName": "Actual AI",
     "category": "Developer Tools",
     "capabilities": [

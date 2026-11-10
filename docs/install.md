@@ -40,9 +40,29 @@ The `actual` CLI is not installed. Should I install it with:
 Then I'll verify it with `actual --version`.
 ```
 
+## Codex plugin
+
+Add this repository as a plugin marketplace, then install the plugin:
+
+```bash
+codex plugin marketplace add actual-software/actual-skill
+codex plugin add actual-cli@actual-cli-skills
+```
+
+The plugin brings the skill and the governance hooks. Codex runs a plugin's hooks only once you trust them, so open `/hooks` in the CLI (or **Settings → Hooks** in the app), review the plugin's hooks and trust them. Codex records that trust against the plugin's content, so after each update the hooks show as modified and stay off until you review them again.
+
+To update, refresh the marketplace and install the plugin again, which installs the new version:
+
+```bash
+codex plugin marketplace upgrade actual-cli-skills
+codex plugin add actual-cli@actual-cli-skills
+```
+
+This plugin can't be listed in Codex's public plugin directory, because OpenAI doesn't list plugins that carry hooks there ([Build plugins](https://developers.openai.com/plugins/build), "Bundled MCP servers and lifecycle hooks"). If you only want the skill, without governance, install it on its own as below.
+
 ## Skill only
 
-These install the `actual` skill without the checks, briefing or overrides, which need the Claude Code plugin's hooks.
+These install the `actual` skill without the checks, briefing or overrides, which need the plugin's hooks in Claude Code or Codex.
 
 ### skills.sh (any agent)
 
@@ -126,7 +146,8 @@ Then restart Claude Code, or run `/reload-plugins` in a session that's already o
 
 ## Requirements
 
-- Claude Code, for the checks, briefing and overrides. The skill alone also runs in Codex, ChatGPT, Cursor and OpenCode.
+- Claude Code or Codex, for the checks, briefing and overrides. The skill alone also runs in ChatGPT, Cursor and OpenCode.
 - Architecture rules in `.actual/rules/`, written by hand or merged from the sync pull request [app.actual.ai](https://app.actual.ai) opens. The plugin stays silent in a repository without them.
 - The `actual` CLI 0.8.0 or later ([actual-software/actual-cli](https://github.com/actual-software/actual-cli)). The skill offers to install it on first use, or you can install it yourself with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`. In Claude Code, each session start in a repository with rules compares the installed version with the one the skill needs and offers to upgrade an older CLI, with the command for however you installed it when the CLI can name it, or both commands when it's too old to. A declined offer doesn't come back as an interruption after a compaction or a resume.
+  - Governance in Codex needs `actual` 0.13.0 or later. Check with `actual plan-check --help`, which names `codex-hook` on a CLI that has it.
   - Rule files with a YAML header need `actual` 0.9.0 or later. Upgrade with `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`. Check with `actual rules brief --help`, which names `adr-header-v2` on a CLI that reads them.

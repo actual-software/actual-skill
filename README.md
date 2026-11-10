@@ -18,7 +18,7 @@
   <a href="https://github.com/actual-software/actual-skill/stargazers"><img src="https://img.shields.io/github/stars/actual-software/actual-skill?style=flat" alt="Stars"></a>
 </p>
 
-In Claude Code, the plugin checks your coding agent's work against the architecture rules committed in `.actual/rules/`: its plan before you see the approval dialog, and its changes at the end of every turn. A conflict goes back to the agent with the reason. As the agent reads a file, it's briefed on the rules that govern it, and you can override a denied rule from the session. The [actual CLI](https://github.com/actual-software/actual-cli) does the checking, and the plugin's `actual` skill runs and troubleshoots it for your agent.
+In Claude Code, the plugin checks your coding agent's work against the architecture rules committed in `.actual/rules/`: its plan before you see the approval dialog, and its changes at the end of every turn. A conflict goes back to the agent with the reason. As the agent reads a file, it's briefed on the rules that govern it, and you can override a denied rule from the session. The [actual CLI](https://github.com/actual-software/actual-cli) does the checking, and the plugin's `actual` skill runs and troubleshoots it for your agent. The same checks and briefing run in Codex, with [a few differences](docs/reference.md#governance-in-codex).
 
 ## Getting started
 
@@ -54,7 +54,7 @@ In Claude Code, the plugin checks your coding agent's work against the architect
 
 From then on, every plan and every turn in that repository is checked against those rules.
 
-`npx skills add actual-software/actual-skill` installs the skill alone, without the checks, in Claude Code or another agent.
+To install the plugin in Codex, see [Codex plugin](docs/install.md#codex-plugin). `npx skills add actual-software/actual-skill` installs the skill alone, without the checks, in Claude Code or another agent.
 
 ## Use
 
