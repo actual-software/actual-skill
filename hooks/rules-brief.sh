@@ -29,30 +29,21 @@
 # crash -- all exit 0 with no output. The only thing ever forwarded is a
 # hookSpecificOutput.additionalContext reply for the event this hook was called
 # for; any other shape, above all one carrying a permissionDecision, is dropped.
+#
+# Codex (ACTUAL_HOOK_HOST=codex) has no Read tool and no mod. Its registrations
+# in hooks/codex-hooks.json are PostToolUse on Bash, where the CLI briefs the
+# files a read-only shell command names (`cat`, `sed -n`, `rg` ...), and
+# PreToolUse on Edit|Write, the aliases Codex matches apply_patch by, where it
+# briefs the files the patch adds or updates. The reply shape is the same. With
+# no mod to cap a session's briefing, this script passes the cap to the CLI
+# (ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS, default 48000), together with the
+# tuning variables the mod would otherwise have forwarded.
 
 set -uo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/bootstrap.sh
 . "${SCRIPT_DIR}/lib/bootstrap.sh"
-
-# Whether the span between the prefix and the closing "}} is one JSON string.
-# C locale, as the guards in bootstrap.sh run: the two substitutions walk the
-# whole brief, and under a UTF-8 locale on bash 3.2 that cost about 0.18s of CPU
-# at 3.5KB and 0.32s at 4.2KB, against 0.02-0.03s here, inside a 2-second
-# timeout. The result is the same either way: UTF-8 continuation bytes never
-# equal a backslash or a quote.
-is_single_json_string() {
-  local LC_ALL=C
-  local body=${1#"$2"}
-  body=${body%\"\}\}}
-  body=${body//\\\\/}
-  body=${body//\\\"/}
-  case "$body" in
-    *'"'*) return 1 ;;
-  esac
-  return 0
-}
 
 # Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
@@ -66,9 +57,13 @@ payload=$(cat)
 # PostToolUse: a top-level field on the event it passes down. It cannot be
 # forged by content: inside tool_response every quote is escaped, so an
 # unescaped `"key":true` can only be structure.
-case "$payload" in
-  *'"actual_rules_brief_by_mod":true'*) exit 0 ;;
-esac
+# Codex has no mod, so neither signal applies there: an inherited
+# ACTUAL_SKILL_MOD_SESSION belongs to an enclosing Claude Code session.
+if ! is_codex_host; then
+  case "$payload" in
+    *'"actual_rules_brief_by_mod":true'*) exit 0 ;;
+  esac
+fi
 
 # The event this hook was called for, which the reply must name. Read from the
 # envelope rather than assumed, since one script serves both registrations;
@@ -89,7 +84,7 @@ esac
 # inherits the variable under a session id of its own. The id is the first
 # top-level session_id, and a content-spelled one cannot match: inside a
 # string its quotes are escaped.
-if [ "$event" = PreToolUse ] && [ -n "${ACTUAL_SKILL_MOD_SESSION:-}" ]; then
+if [ "$event" = PreToolUse ] && [ -n "${ACTUAL_SKILL_MOD_SESSION:-}" ] && ! is_codex_host; then
   sid_re='"session_id": ?"([^"\\]+)"'
   if [[ $payload =~ $sid_re ]] && [ "${BASH_REMATCH[1]}" = "$ACTUAL_SKILL_MOD_SESSION" ]; then
     exit 0
@@ -134,6 +129,12 @@ if adr_v2_unsupported "$dir"; then
   exit 0
 fi
 
+# Codex: a CLI without --codex-hook would reject it on every shell call. The
+# probe's answer is cached, so this spawns nothing after the first call.
+if is_codex_host && ! have_codex_hook; then
+  exit 0
+fi
+
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-rules-brief.XXXXXX") || exit 0
 trap 'rm -f "$stderr_file"' EXIT
 
@@ -145,7 +146,24 @@ cd "$repo_root" 2>/dev/null || true
 # inside it matched against repository-relative globs, ones outside it refused
 # as not under the root. `$repo_root` is resolved above, before the cd, by the
 # same `resolve_repo_root` the gates use, so both paths name one root.
-reply=$(printf '%s' "$payload" | actual rules brief --claude-hook --repo "$repo_root" --rules-dir "$dir" 2>"$stderr_file")
+# Codex's flags. Each tuning variable is passed on only when it is a plain
+# number, so a typo cannot make the CLI reject the call and silence every brief.
+# The session cap defaults to the mod's 48000; 0 turns briefing off.
+codex_flags=()
+if is_codex_host; then
+  cap=${ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS:-48000}
+  is_count "$cap" || cap=48000
+  codex_flags=(--max-session-chars "$cap")
+  is_count "${ACTUAL_RULES_BRIEF_LIMIT:-}" && codex_flags+=(--limit "$ACTUAL_RULES_BRIEF_LIMIT")
+  is_count "${ACTUAL_RULES_BRIEF_RULES_PER_DECISION:-}" \
+    && codex_flags+=(--rules-per-decision "$ACTUAL_RULES_BRIEF_RULES_PER_DECISION")
+  is_count "${ACTUAL_RULES_BRIEF_MAX_CHARS:-}" && codex_flags+=(--max-chars "$ACTUAL_RULES_BRIEF_MAX_CHARS")
+  is_score "${ACTUAL_RULES_BRIEF_MIN_SCORE:-}" && codex_flags+=(--min-score "$ACTUAL_RULES_BRIEF_MIN_SCORE")
+fi
+
+# "${codex_flags[@]}" on an empty array is an unbound-variable error under
+# `set -u` on bash 3.2, hence the ${...+...} form.
+reply=$(printf '%s' "$payload" | actual rules brief "$(hook_flag)" ${codex_flags[@]+"${codex_flags[@]}"} --repo "$repo_root" --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 
 # Silence is the whole contract here: on stdout a brief that never arrives
@@ -201,7 +219,7 @@ if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
    && ! has_permission_decision "$trimmed" \
    && ! has_unicode_escape "$trimmed" \
    && ! has_duplicate_permission_decision "$trimmed"; then
-  if ! is_single_json_string "$trimmed" "$prefix"; then
+  if ! is_single_json_string "$trimmed" "$prefix" 3; then
     [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
       printf 'actual-rules-brief: dropped (content is not a single JSON string)\n' >&2
     exit 0

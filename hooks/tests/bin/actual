@@ -48,6 +48,11 @@
 #   no-adr-v2    a 0.8.x CLI: every subcommand exists, but `rules brief --help`
 #                does not name the adr-header-v2 capability marker (every other
 #                mode does, as a current CLI)
+#   no-codex-hook  a 0.12.x CLI: every subcommand exists, but `plan-check --help`
+#                does not name the codex-hook capability marker and every
+#                --codex-hook call is rejected the way clap rejects an unknown flag
+#                (every other mode has the marker, as a current CLI).
+#                ACTUAL_TEST_CODEX=old does the same alongside any other mode.
 #   crash        the subcommand panics
 #   garbage      the subcommand exits 0 but prints non-JSON
 #   cannot-run   the CLI does not run at all, like npm's launcher with its
@@ -71,6 +76,21 @@
 # allowlisted object and then append more, ending on a nested object so the
 # reply still starts and ends with the allowlisted bytes. Matching only those
 # opening and closing bytes forwards all three.
+#
+# Codex (--codex-hook). plan-check and impl-check answer in Codex's flat shapes:
+# deny is {"decision":"block","reason":...}, notice is {"systemMessage":...},
+# and allow is silence. The codex-* modes are the replies the plugin must not
+# forward as they are:
+#   codex-extra-key     a block followed by another string-valued key, so it
+#                       still ends in "}
+#   codex-escaped       a block whose reason carries a \uXXXX escape
+#   codex-empty-reason  a block with an empty reason
+#   codex-claude-shape  Claude Code's nested deny
+# `rules brief --codex-hook` shares the brief modes above (the payload names
+# the file in its command), and `rules brief --codex-session-start` records its
+# argv and stdin and prints nothing. `session summary --codex-hook` prints the
+# line as {"systemMessage":...}; ACTUAL_TEST_SUMMARY varies it: none prints
+# nothing, extra adds a decision, plain prints the bare line, crash panics.
 #
 # It also records the envelope it received to $ACTUAL_TEST_CAPTURE, and the
 # remaining argv to $ACTUAL_TEST_CAPTURE.argv, so tests can assert stdin and
@@ -161,7 +181,37 @@ if [ "${1:-}" = "version" ]; then
   exit 0
 fi
 
+# A CLI that predates --codex-hook rejects it, wherever it appears.
+codex_old=0
+{ [ "$mode" = "no-codex-hook" ] || [ "${ACTUAL_TEST_CODEX:-}" = "old" ]; } && codex_old=1
+for arg in "$@"; do
+  case "$arg" in
+    --codex-hook|--codex-session-start)
+      if [ "$codex_old" -eq 1 ]; then
+        echo "error: unexpected argument '${arg}' found" >&2
+        exit 2
+      fi ;;
+  esac
+done
+
 subcommand="${1:-}"
+# `actual session summary`, Codex's Stop line.
+if [ "$subcommand" = "session" ] && [ "${2:-}" = "summary" ]; then
+  shift 2
+  if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
+    printf '%s\n' "$@" > "${ACTUAL_TEST_CAPTURE}.summary.argv"
+  fi
+  cat >/dev/null
+  line='Actual AI: 1 of 1 ADRs added to context'
+  case "${ACTUAL_TEST_SUMMARY:-line}" in
+    none) ;;
+    extra) printf '{"systemMessage":"%s","decision":"block","reason":"r"}\n' "$line" ;;
+    plain) printf '%s\n' "$line" ;;
+    crash) echo "thread 'main' panicked at src/cli/commands/session_summary.rs:1" >&2; exit 101 ;;
+    *) printf '{"systemMessage":"%s"}\n' "$line" ;;
+  esac
+  exit 0
+fi
 # `actual rules brief` is the one two-word subcommand: handled on its own below.
 if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
   shift 2
@@ -179,7 +229,19 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
     exit 0
   fi
   has_claude_hook=0
-  for arg in "$@"; do [ "$arg" = "--claude-hook" ] && has_claude_hook=1; done
+  for arg in "$@"; do
+    case "$arg" in
+      --claude-hook|--codex-hook) has_claude_hook=1 ;;
+      --codex-session-start)
+        if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
+          printf '%s\n' "$@" > "${ACTUAL_TEST_CAPTURE}.session-start.argv"
+          cat > "${ACTUAL_TEST_CAPTURE}.session-start"
+        else
+          cat >/dev/null
+        fi
+        exit 0 ;;
+    esac
+  done
   if [ "$has_claude_hook" -eq 0 ]; then
     echo "error: missing --claude-hook" >&2
     exit 2
@@ -193,7 +255,8 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
   fi
   # Governed files live under /src/persistence/; everything else is silence.
   governed=0
-  case "$payload" in *'/src/persistence/'*) governed=1 ;; esac
+  # A Codex shell read names the file relative to the session's cwd.
+  case "$payload" in *'/src/persistence/'*|*' src/persistence/'*) governed=1 ;; esac
   ctx='R-001 MUST: all persistence goes through the repository layer.'
   event=PostToolUse
   other=PreToolUse
@@ -286,6 +349,7 @@ if [ "${1:-}" = "--help" ]; then
   if [ "$subcommand" = "impl-check" ] && [ "$mode" != "no-turn-start" ]; then
     echo "An envelope whose hook_event_name is UserPromptSubmit checks nothing and prints nothing."
   fi
+  [ "$codex_old" -eq 0 ] && echo "      --codex-hook  Read a Codex hook envelope. Capability marker: codex-hook"
   exit 0
 fi
 
@@ -293,11 +357,12 @@ fi
 # fake CLI would still return a verdict and hook tests would pass even if
 # plan-gate.sh dropped --claude-hook.
 has_claude_hook=0
+codex=0
 for arg in "$@"; do
-  if [ "$arg" = "--claude-hook" ]; then
-    has_claude_hook=1
-    break
-  fi
+  case "$arg" in
+    --claude-hook) has_claude_hook=1 ;;
+    --codex-hook) has_claude_hook=1 codex=1 ;;
+  esac
 done
 if [ "$has_claude_hook" -eq 0 ]; then
   echo "error: missing --claude-hook" >&2
@@ -313,8 +378,20 @@ if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
   printf '%s' "$payload" > "$ACTUAL_TEST_CAPTURE"
 fi
 
+if [ "$codex" -eq 1 ]; then
+  reason='R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler.'
+  case "$mode" in
+    deny) printf '{"decision":"block","reason":"%s"}\n' "$reason"; exit 0 ;;
+    notice) printf '{"systemMessage":"Partial coverage: 60 of 118 rules checked for this plan."}\n'; exit 0 ;;
+    codex-extra-key) printf '{"decision":"block","reason":"%s","continue":"false"}\n' "$reason"; exit 0 ;;
+    codex-escaped) printf '{"decision":"block","reason":"R-001 MUST: caf\\u00e9."}\n'; exit 0 ;;
+    codex-empty-reason) printf '{"decision":"block","reason":""}\n'; exit 0 ;;
+    codex-claude-shape) mode=deny ;;
+  esac
+fi
+
 case "$mode" in
-  allow|no-plan-check|no-impl-check|no-turn-start|no-adr-v2)
+  allow|no-plan-check|no-impl-check|no-turn-start|no-adr-v2|no-codex-hook)
     # Conforming plan: silent on permissionDecision so the user's dialog stays.
     exit 0
     ;;

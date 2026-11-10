@@ -2,7 +2,8 @@
 # bootstrap.sh - Shared preflight helpers for the actual plan-stage governance hooks.
 #
 # Sourced by plan-gate.sh, impl-gate.sh, rules-brief.sh, preflight.sh,
-# turn-start.sh and session-end.sh. The only write is the capability cache under
+# turn-start.sh, session-end.sh and session-summary.sh, under Claude Code and
+# under Codex (see "Host" below). The only write is the capability cache under
 # ~/.cache/actual-skill (see have_adr_v2).
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
@@ -17,6 +18,36 @@
 # a tool call. Errors are handled explicitly at each call site instead.
 
 set -uo pipefail
+
+# --- Host: Claude Code or Codex ---
+#
+# The same scripts serve both agents. hooks/hooks.json (Claude Code) runs them
+# as they are; hooks/codex-hooks.json (Codex) runs every one with
+# ACTUAL_HOOK_HOST=codex. Unset, or any other value, is Claude Code, so nothing
+# about the Claude Code path depends on this variable being set. What differs
+# under Codex, all of it decided by the helpers below:
+#
+#   - the CLI flag is --codex-hook, and the CLI shapes every reply for Codex,
+#     whose parser rejects any key it does not know;
+#   - the plan gate runs on Stop rather than on ExitPlanMode, which Codex lacks,
+#     and the CLI reads the turn's mode from the rollout (plan-gate.sh);
+#   - there is no CLAUDE_PROJECT_DIR (resolve_repo_root);
+#   - a notice is a bare systemMessage (emit_pretooluse_notice);
+#   - the text that asks the agent to offer an install names no Claude Code
+#     tool (codex_phrasing);
+#   - the CLI must name the codex-hook capability marker (have_codex_hook).
+is_codex_host() {
+  [ "${ACTUAL_HOOK_HOST:-}" = "codex" ]
+}
+
+# The flag that tells the CLI which hook contract to speak.
+hook_flag() {
+  if is_codex_host; then
+    printf '%s' --codex-hook
+  else
+    printf '%s' --claude-hook
+  fi
+}
 
 # --- Repo and rules discovery ---
 
@@ -60,11 +91,21 @@ is_within() {
 # the active checkout under cwd wins. All of this reads cwd rather than the hook
 # envelope's `cwd` field, which would mean parsing JSON; Claude Code runs the hook
 # from that directory, so the two agree.
+#
+# Codex sets no CLAUDE_PROJECT_DIR. It runs each hook from the session's working
+# directory, the folder Codex was started in, which is the same signal: a
+# subproject Codex was started in is deeper than the git toplevel and wins. A
+# CLAUDE_PROJECT_DIR inherited from an enclosing Claude Code session names that
+# session's project, not this one, so it is ignored there.
 resolve_repo_root() {
   local project_dir here git_root
 
-  project_dir=$(canonical_dir "${CLAUDE_PROJECT_DIR:-}") || project_dir=""
   here=$(pwd -P 2>/dev/null) || here="$PWD"
+  if is_codex_host; then
+    project_dir=$(canonical_dir "$here") || project_dir=""
+  else
+    project_dir=$(canonical_dir "${CLAUDE_PROJECT_DIR:-}") || project_dir=""
+  fi
 
   git_root=$(git rev-parse --show-toplevel 2>/dev/null) || git_root=""
   if [ -n "$git_root" ]; then
@@ -314,6 +355,9 @@ ADR_V2_MIN_CLI=0.9.0
 # passes it at every SessionStart and turn-start at every prompt, which bounds a
 # stale entry to one turn, and only a definite answer is stored. A cache that cannot be read or written is
 # a miss, never an error: the probe runs and the hook proceeds.
+#
+# The same cache holds the Codex capability (have_codex_hook), under a name of its
+# own: $1 is that name, adr-v2 when omitted.
 adr_v2_cache_file() {
   local base="${ACTUAL_HOOK_CACHE_DIR:-}" bin
   if [ -z "$base" ]; then
@@ -326,15 +370,23 @@ adr_v2_cache_file() {
   case "$bin" in /*) ;; *) bin="$PWD/${bin#./}" ;; esac
   # `_` -> `_u`, `/` -> `_s`: unambiguous, so distinct paths never share a key.
   bin=${bin//_/_u}
-  printf '%s/adr-v2-%s' "$base" "${bin//\//_s}"
+  printf '%s/%s-%s' "$base" "${1:-adr-v2}" "${bin//\//_s}"
 }
 
 # $1 = refresh skips the read and rewrites the entry. Returns 0 when the CLI names
 # the marker, 1 when it does not or cannot be asked.
 have_adr_v2() {
-  local file bin help verdict
-  file=$(adr_v2_cache_file) || file=""
-  if [ -n "$file" ] && [ "${1:-}" != refresh ]; then
+  have_cli_marker adr-v2 adr-header-v2 "${1:-}" rules brief --help
+}
+
+# The cached capability probe behind have_adr_v2 and have_codex_hook. $1 names the
+# cache entry, $2 is the marker to find, $3 is refresh or empty, and the rest is
+# the `actual` invocation whose output documents the marker.
+have_cli_marker() {
+  local name="$1" marker="$2" mode="$3" file bin help verdict
+  shift 3
+  file=$(adr_v2_cache_file "$name") || file=""
+  if [ -n "$file" ] && [ "$mode" != refresh ]; then
     bin=$(command -v actual)
     if [ -f "$file" ] && [ "$file" -nt "$bin" ]; then
       verdict=
@@ -347,9 +399,9 @@ have_adr_v2() {
   fi
   # No entry, or not a usable one. A failed spawn says nothing about the CLI, so
   # it is not stored.
-  help=$(actual rules brief --help 2>/dev/null) || return 1
+  help=$(actual "$@" 2>/dev/null) || return 1
   case "$help" in
-    *adr-header-v2*) verdict=supported ;;
+    *"$marker"*) verdict=supported ;;
     *) verdict=unsupported ;;
   esac
   if [ -n "$file" ]; then
@@ -413,6 +465,20 @@ rules_have_v2_header() {
 # v1 repository never spawns the probe.
 adr_v2_unsupported() {
   rules_have_v2_header "$1" && ! have_adr_v2 "${2:-}"
+}
+
+# The first CLI release that speaks Codex's hook contract (`--codex-hook` on
+# plan-check, impl-check, rules brief and session summary). Raise it with the
+# README's Codex requirement.
+CODEX_HOOK_MIN_CLI=0.13.0
+
+# True when the installed CLI has `--codex-hook`. Like have_adr_v2 this reads the
+# capability marker the help documents (`Capability marker: codex-hook`), not a
+# version, and caches the answer per binary. Every Codex hook needs it: an older
+# CLI rejects the flag, so preflight offers the upgrade and the gates stand down.
+# $1 = refresh, as for have_adr_v2.
+have_codex_hook() {
+  have_cli_marker codex-hook codex-hook "${1:-}" plan-check --help
 }
 
 # --- Operator-facing messages ---
@@ -651,6 +717,86 @@ upgrading stays optional.
 EOF
 }
 
+# Codex's counterparts of min_version_interrupt and min_version_reminder, for a
+# CLI without `--codex-hook` (have_codex_hook). Under Codex nothing runs on such
+# a CLI -- not the gates and not briefing -- so it always takes the interrupt
+# when a session starts and the reminder after that. $1 is the installed
+# version, empty when cli_version could not read one.
+codex_min_version_interrupt() {
+  local how
+  how=$(upgrade_instructions)
+  cat <<EOF
+$(codex_min_version_lead "$1")
+
+This is worth interrupting the current task for: mention it in your very next reply,
+regardless of what else is in progress. Offer to upgrade it now rather than just
+describing the steps -- ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer, and do not continue this task --
+exploring, planning, or implementing -- until they respond. Mentioning this and then
+carrying on anyway does not satisfy this; wait for the answer first.
+
+${how}
+
+Then verify with: actual plan-check --help (it should name codex-hook). If they
+decline, don't run anything -- upgrading stays optional -- but only resume the
+original task once they have actually answered either way.
+EOF
+}
+
+codex_min_version_reminder() {
+  local how
+  how=$(upgrade_instructions)
+  cat <<EOF
+$(codex_min_version_lead "$1")
+
+This session is already under way, so this does not need to interrupt the task
+in progress. At a natural pause, such as the end of your next reply, mention it
+once and offer to upgrade, asking with an interactive question tool (e.g.
+AskUserQuestion). If the user already declined it in this session, don't ask again.
+
+${how}
+
+Then verify with: actual plan-check --help (it should name codex-hook). If they
+decline, don't run anything -- upgrading stays optional.
+EOF
+}
+
+codex_min_version_lead() {
+  local installed="${1:-an older release}"
+  cat <<EOF
+Actual governance is configured for this repository (.actual/rules/ is present),
+but the installed \`actual\` CLI (${installed}) predates its Codex support, which
+needs ${CODEX_HOOK_MIN_CLI} or later. Until it is upgraded, no plan or change is
+checked against these rules and rule briefing is off.
+EOF
+}
+
+# One line for the Stop hook, in the manner of adr_v2_standdown_notice.
+codex_standdown_notice() {
+  printf '%s' "Actual governance stood down: the installed \`actual\` CLI predates its Codex support (needs ${CODEX_HOOK_MIN_CLI}+), so this turn was not checked against .actual/rules/. Upgrade with \`npm install -g @actualai/actual@latest\` or \`brew upgrade actual-software/actual/actual\`."
+}
+
+# The agent-facing messages in this file are written for Claude Code, and three
+# of their phrases name what only Claude Code has: an interactive question tool
+# (AskUserQuestion) and a tool named Bash. Codex's default mode has no question
+# tool -- a question is asked by ending the turn on it -- and calls its shell
+# something else. This rewrites those phrases, and only those, for Codex, so the
+# messages keep one source. A message whose wording drifts from these patterns
+# would keep its Claude Code text; the harness checks no Codex output names
+# either tool.
+codex_phrasing() {
+  local s="$1"
+  s=${s//"ask using an interactive question tool (e.g. AskUserQuestion)
+so your turn actually pauses for the user's answer"/"ask the user in your reply and end your
+turn on that question, so it actually pauses for the user's answer"}
+  s=${s//"asking with an interactive question tool (e.g.
+AskUserQuestion)."/"asking the user in your
+reply."}
+  s=${s//", with the Bash tool:"/":"}
+  s=${s//" with the Bash tool:"/":"}
+  printf '%s' "$s"
+}
+
 # How to upgrade, for the messages above. `actual version --json` names the
 # command for the channel that installed this CLI, which it reads from its own
 # path. Without --check it answers from local facts, so a session start never
@@ -719,6 +865,23 @@ stop_impl_upgrade_notice() {
   cat <<'EOF'
 Actual implementation governance did not run: the installed `actual` CLI has no `impl-check` subcommand, so this turn's diff was not checked against .actual/rules/. Upgrade it with `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
 EOF
+}
+
+# --- Settings ---
+
+# True when $1 is a whole number written in plain digits, which is what the CLI's
+# count flags accept. Used to vet ACTUAL_RULES_BRIEF_* before passing it on.
+is_count() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  return 0
+}
+
+# True when $1 is a decimal number, sign optional: what `--min-score` accepts.
+is_score() {
+  local re='^-?[0-9]+(\.[0-9]+)?$'
+  [[ $1 =~ $re ]]
 }
 
 # --- JSON writing ---
@@ -856,16 +1019,92 @@ has_duplicate_permission_decision() {
 #
 # systemMessage is emitted both top level and inside hookSpecificOutput because its
 # documented location has moved between versions; unknown fields are ignored.
+#
+# Codex ignores nothing: an unknown key, the nested systemMessage included, fails
+# the hook run. There the notice is the bare top-level systemMessage, the shape
+# every Codex event accepts, so it serves plan-gate.sh's Stop registration too.
 emit_pretooluse_notice() {
   local msg
   msg=$(json_escape "$1")
+  if is_codex_host; then
+    printf '{"systemMessage":"%s"}\n' "$msg"
+    return 0
+  fi
   printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"PreToolUse","systemMessage":"%s"}}\n' \
     "$msg" "$msg"
 }
 
+# Valid on both hosts as it is. Under Codex the text is rewritten first, since it
+# is the channel the install and upgrade offers reach the agent through.
 emit_sessionstart_context() {
+  local text="$1"
+  is_codex_host && text=$(codex_phrasing "$text")
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
-    "$(json_escape "$1")"
+    "$(json_escape "$text")"
+}
+
+# Whether the span of $1 after the prefix $2, up to a closing suffix of $3
+# characters, is one JSON string: once the escape pairs a decoder would consume
+# are dropped (backslash pairs first, then escaped quotes), no quote is left
+# over, because a leftover quote can only end the string and mean structure
+# follows. C locale, as the guards above run: the substitutions walk the whole
+# reply, and under a UTF-8 locale on bash 3.2 that costs about ten times as much.
+# UTF-8 continuation bytes never equal a backslash or a quote, so the answer is
+# the same.
+is_single_json_string() {
+  local LC_ALL=C
+  local body=${1#"$2"}
+  body=${body:0:$((${#body} - $3))}
+  body=${body//\\\\/}
+  body=${body//\\\"/}
+  case "$body" in
+    *'"'*) return 1 ;;
+  esac
+  return 0
+}
+
+# Forward a Codex-mode reply from the CLI ($1) when it is exactly one of the
+# shapes $2 allows, and print nothing otherwise:
+#
+#   block   {"decision":"block","reason":"..."}   a Stop that sends the agent back
+#   notice  {"systemMessage":"..."}               a line shown to the user
+#
+# The Claude Code gates match a verdict by substrings, because Claude Code's
+# replies carry a nested hookSpecificOutput whose key order they cannot pin.
+# The CLI's Codex replies are flat, so this pins the whole object instead: the
+# exact prefix, the exact suffix, and a single JSON string between them. Any
+# added key, a permissionDecision, a second decision or garbage fails all three.
+# A \uXXXX escape is refused as in the Claude Code gates, and said so: the
+# reply could not be read, so the turn was not checked. Returns 0 when it
+# printed something and 1 when it stayed silent.
+forward_codex_reply() {
+  local reply="$1" allowed="$2" trimmed prefix kind=""
+  trimmed=${reply#"${reply%%[![:space:]]*}"}
+  trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
+  [ -n "$trimmed" ] || return 1
+
+  case "$trimmed" in
+    '{"decision":"block","reason":"'*'"}') kind=block prefix='{"decision":"block","reason":"' ;;
+    '{"systemMessage":"'*'"}') kind=notice prefix='{"systemMessage":"' ;;
+    *) return 1 ;;
+  esac
+  case " $allowed " in *" $kind "*) ;; *) return 1 ;; esac
+  # The prefix and the closing `"}` must not overlap: `{"systemMessage":"}` is
+  # not a string at all.
+  [ "${#trimmed}" -ge $((${#prefix} + 2)) ] || return 1
+  is_single_json_string "$trimmed" "$prefix" 2 || return 1
+
+  if has_unicode_escape "$trimmed"; then
+    emit_stop_notice "Actual governance received a reply it could not safely interpret (it contained an escaped character sequence); this turn was not checked against .actual/rules/."
+    return 0
+  fi
+  # Codex requires a reason on block; an empty one would fail the hook run and
+  # let the turn end.
+  if [ "$trimmed" = '{"decision":"block","reason":""}' ]; then
+    emit_stop_block "Actual governance blocked this turn, but its reason could not be read. Revise the work so it conforms to .actual/rules/."
+    return 0
+  fi
+  printf '%s\n' "$trimmed"
 }
 
 # --- Stop hook output (impl-gate.sh) ---

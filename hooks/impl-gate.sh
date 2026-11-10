@@ -35,6 +35,13 @@
 # no-op; no `actual` binary, or one too old for `impl-check` -> a notice,
 # never a block; any unexpected condition -> let the turn end normally. Only
 # an explicit deny from `impl-check` can force continuation.
+#
+# Codex (ACTUAL_HOOK_HOST=codex) runs this on the same Stop as plan-gate.sh.
+# `actual impl-check --codex-hook` prints nothing for a Plan-mode turn, which
+# makes no edits, and otherwise replies in Codex's own Stop shape, so its reply
+# is forwarded after an exact-shape check rather than re-rendered. This script
+# is also the one that tells a Codex user the CLI is missing, unreadable or too
+# old; plan-gate.sh stays quiet about those so a turn says it once.
 
 set -uo pipefail
 
@@ -82,6 +89,13 @@ if adr_v2_unsupported "$dir"; then
   exit 0
 fi
 
+# 4c. Codex needs a CLI that speaks its hook contract; an older one rejects
+#     --codex-hook. Same channel and reason as 4b.
+if is_codex_host && ! have_codex_hook; then
+  emit_stop_notice "$(codex_standdown_notice)"
+  exit 0
+fi
+
 # 5. Delegate. `dir` was resolved before the cd, same reasoning as
 #    plan-gate.sh: resolve_repo_root and rules_dir both read cwd.
 stderr_file=$(mktemp "${TMPDIR:-/tmp}/actual-impl-gate.XXXXXX") || exit 0
@@ -90,12 +104,16 @@ trap 'rm -f "$stderr_file"' EXIT
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 
-verdict=$(printf '%s' "$payload" | actual impl-check --claude-hook --rules-dir "$dir" 2>"$stderr_file")
+verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 
 case "$status" in
   0)
-    render_stop_verdict "$verdict"
+    if is_codex_host; then
+      forward_codex_reply "$verdict" "block notice"
+    else
+      render_stop_verdict "$verdict"
+    fi
     exit 0
     ;;
   2)

@@ -21,6 +21,9 @@
 # prompt, and denials nobody sees that spend the Stop check's per-rule budget.
 # So the hook probes for the dispatch first (have_turn_start) and does nothing
 # without it.
+#
+# Codex (ACTUAL_HOOK_HOST=codex) sends the same event with the same two fields
+# the CLI reads, so the only differences are the flag and the probe.
 
 set -uo pipefail
 
@@ -50,8 +53,18 @@ if adr_v2_unsupported "$dir" refresh; then
   exit 0
 fi
 
+# Codex needs the codex-hook capability instead, which post-dates the dispatch.
+# Its probe is cached; impl-gate.sh tells the user when it is missing.
+if is_codex_host; then
+  if ! have_codex_hook; then
+    if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
+      printf 'turn-start: skipped, actual plan-check --help does not name codex-hook\n' \
+        2>/dev/null >>"$ACTUAL_TURN_START_LOG"
+    fi
+    exit 0
+  fi
 # The ACTUAL_TURN_START_LOG trace described below records this skip too.
-if ! have_turn_start; then
+elif ! have_turn_start; then
   if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
     printf 'turn-start: skipped, actual impl-check --help does not name UserPromptSubmit\n' \
       2>/dev/null >>"$ACTUAL_TURN_START_LOG"
@@ -73,10 +86,10 @@ cd "$repo_root" 2>/dev/null || true
 # diagnosed. Nothing reaches stdout or stderr either way.
 if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
   {
-    printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" 2>&1
+    printf '%s' "$payload" 2>/dev/null | actual impl-check "$(hook_flag)" --rules-dir "$dir" 2>&1
     printf 'turn-start: exit=%s rules-dir=%s\n' "${PIPESTATUS[1]}" "$dir"
   } 2>/dev/null >>"$ACTUAL_TURN_START_LOG"
 else
-  printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" >/dev/null 2>&1
+  printf '%s' "$payload" 2>/dev/null | actual impl-check "$(hook_flag)" --rules-dir "$dir" >/dev/null 2>&1
 fi
 exit 0
