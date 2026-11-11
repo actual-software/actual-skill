@@ -69,6 +69,7 @@ run_hook() {
   [ -n "${KEEP_CACHE:-}" ] || rm -rf "${WORK}/cache"
   ( cd "$workdir" || exit 1
     env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
+        -u ACTUAL_UNATTENDED -u CLAUDE_PLUGIN_OPTION_UNATTENDED \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
@@ -83,12 +84,15 @@ run_hook() {
 # test a condition that cannot occur, not a missing CLI.
 run_hook_no_cli() {
   local script="$1" payload="$2" project_dir="$3"
+  shift 3
   local status workdir="$PWD"
   [ -d "$project_dir" ] && workdir="$project_dir"
   ( cd "$workdir" || exit 1
     env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
+        -u ACTUAL_UNATTENDED -u CLAUDE_PLUGIN_OPTION_UNATTENDED \
         PATH="${WORK}/empty-bin:/usr/bin:/bin" \
         CLAUDE_PROJECT_DIR="$project_dir" \
+        "$@" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
   printf '%s' "$status"
@@ -104,6 +108,7 @@ run_hook_cwd() {
   [ -n "${KEEP_CACHE:-}" ] || rm -rf "${WORK}/cache"
   ( cd "$workdir" || exit 1
     env -u ACTUAL_RULES_DIR -u ACTUAL_PLAN_GATE -u ACTUAL_CLI_SUBPROCESS -u ACTUAL_SKILL_MOD_SESSION \
+        -u ACTUAL_UNATTENDED -u CLAUDE_PLUGIN_OPTION_UNATTENDED \
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
@@ -420,6 +425,161 @@ if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -e "${WORK}/subprocess-captu
 else
   fail "subprocess guard did not disable the plan-gate" "status=$st stdout=$(cat "${WORK}/out") argv=$(cat "${WORK}/subprocess-capture.argv" 2>/dev/null)"
 fi
+
+echo
+echo "=== plan-approval: PermissionRequest on ExitPlanMode ==="
+
+# What the hook approved: allow, deny, or none for no output. The test that
+# reads it also compares updatedInput with the request's tool_input.
+approval() {
+  if [ ! -s "${WORK}/out" ]; then
+    printf 'none'
+    return
+  fi
+  jq -r 'if .hookSpecificOutput.hookEventName == "PermissionRequest" then (.hookSpecificOutput.decision.behavior // "none") else "wrong-event" end' \
+    < "${WORK}/out" 2>/dev/null || printf 'unparseable'
+}
+
+# True when the answer's updatedInput is the request's own tool_input, member for
+# member, and the answer carries nothing else in its decision.
+echoes_tool_input() {
+  [ "$(jq -S -c '.hookSpecificOutput.decision.updatedInput' < "${WORK}/out")" = "$(jq -S -c '.tool_input' < "$1")" ] \
+    && [ "$(jq -c '.hookSpecificOutput.decision | keys' < "${WORK}/out")" = '["behavior","updatedInput"]' ]
+}
+
+silent() {
+  [ "$1" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]
+}
+
+APPROVAL="${HOOKS_DIR}/plan-approval.sh"
+for shape in plan plan-suggestions bash; do
+  for repo in "$REPO_WITH_RULES" "$REPO_NO_RULES"; do
+    st=$(run_hook "$APPROVAL" "${RESOLVED}/permissionrequest-${shape}.json" "$repo")
+    if silent "$st"; then
+      pass "permissionrequest-${shape} in $(basename "$repo"): off by default, silent"
+    else
+      fail "permissionrequest-${shape} in $(basename "$repo"): expected silence with the switch unset" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+    fi
+  done
+done
+
+for shape in plan plan-suggestions; do
+  req="${RESOLVED}/permissionrequest-${shape}.json"
+  for repo in "$REPO_WITH_RULES" "$REPO_NO_RULES"; do
+    st=$(run_hook "$APPROVAL" "$req" "$repo" ACTUAL_UNATTENDED=on)
+    if [ "$st" = "0" ] && [ "$(approval)" = "allow" ] && echoes_tool_input "$req" && [ ! -s "${WORK}/err" ]; then
+      pass "permissionrequest-${shape} in $(basename "$repo"): ACTUAL_UNATTENDED=on approves with tool_input echoed"
+    else
+      fail "permissionrequest-${shape} in $(basename "$repo"): expected allow with the echo" "status=$st approval=$(approval) stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+    fi
+  done
+
+  st=$(run_hook_no_cli "$APPROVAL" "$req" "$REPO_WITH_RULES" ACTUAL_UNATTENDED=on)
+  if [ "$st" = "0" ] && [ "$(approval)" = "allow" ] && echoes_tool_input "$req"; then
+    pass "permissionrequest-${shape}: approves with no CLI on PATH, as the gate fails open"
+  else
+    fail "permissionrequest-${shape}: expected allow without a CLI" "status=$st approval=$(approval) stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+req="${RESOLVED}/permissionrequest-plan.json"
+run_hook "$APPROVAL" "$req" "$REPO_WITH_RULES" ACTUAL_UNATTENDED=on >/dev/null
+if [ "$(jq -c 'keys' < "${WORK}/out" 2>/dev/null)" = '["hookSpecificOutput"]' ]; then
+  pass "an approval carries the decision and nothing else"
+else
+  fail "approval carries more than the decision" "stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "$APPROVAL" "$req" "$REPO_WITH_RULES" CLAUDE_PLUGIN_OPTION_UNATTENDED=true)
+if [ "$st" = "0" ] && [ "$(approval)" = "allow" ] && echoes_tool_input "$req"; then
+  pass "the /plugin row (CLAUDE_PLUGIN_OPTION_UNATTENDED=true) turns it on"
+else
+  fail "the /plugin row did not turn it on" "status=$st approval=$(approval) stdout=$(cat "${WORK}/out")"
+fi
+
+for case_env in "CLAUDE_PLUGIN_OPTION_UNATTENDED=false" "ACTUAL_UNATTENDED=off CLAUDE_PLUGIN_OPTION_UNATTENDED=true" \
+                "ACTUAL_UNATTENDED=1" "ACTUAL_UNATTENDED=on ACTUAL_PLAN_GATE=off" "ACTUAL_UNATTENDED=on ACTUAL_CLI_SUBPROCESS=1"; do
+  # shellcheck disable=SC2086 # one env assignment per word
+  st=$(run_hook "$APPROVAL" "$req" "$REPO_WITH_RULES" $case_env)
+  if silent "$st"; then
+    pass "${case_env}: silent, the dialog stays"
+  else
+    fail "${case_env}: expected silence" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+  fi
+done
+
+st=$(run_hook "$APPROVAL" "${RESOLVED}/permissionrequest-bash.json" "$REPO_WITH_RULES" ACTUAL_UNATTENDED=on)
+if silent "$st"; then
+  pass "a Bash permission request is never approved, even with the switch on"
+else
+  fail "plan-approval.sh answered a request for another tool" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# Requests it cannot copy tool_input out of leave the dialog in place.
+jq -c '.tool_input = "not an object"' "$req" > "${WORK}/pr-string-input.json"
+jq -c 'del(.tool_input)' "$req" > "${WORK}/pr-no-input.json"
+jq -c '.tool_name = "exitplanmode"' "$req" > "${WORK}/pr-other-name.json"
+head -c 300 "$req" > "${WORK}/pr-truncated.json"
+printf 'not json at all' > "${WORK}/pr-garbage.json"
+for bad in string-input no-input other-name truncated garbage; do
+  st=$(run_hook "$APPROVAL" "${WORK}/pr-${bad}.json" "$REPO_WITH_RULES" ACTUAL_UNATTENDED=on)
+  if silent "$st"; then
+    pass "pr-${bad}: no approval, fails safe to the dialog"
+  else
+    fail "pr-${bad}: expected silence" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+  fi
+done
+
+# A long plan with dense quotes and escapes comes back intact. The scan splits
+# on quotes once; a byte-at-a-time walk took 25 s at 64 KB on bash 3.2.
+jq -c --arg line 'Call fetch("feed"), wait {"retry": "5s"} on C:\\tmp\\ and \u00e9 ✓' \
+  '.tool_input.plan = ([range(0; 3000)] | map($line) | join("\n"))' "$req" > "${WORK}/pr-long.json"
+started=$SECONDS
+st=$(run_hook "$APPROVAL" "${WORK}/pr-long.json" "$REPO_WITH_RULES" ACTUAL_UNATTENDED=on)
+took=$((SECONDS - started))
+if [ "$st" = "0" ] && [ "$(approval)" = "allow" ] && echoes_tool_input "${WORK}/pr-long.json"; then
+  pass "a $(wc -c < "${WORK}/pr-long.json" | tr -d ' ')-byte request is echoed exactly (${took}s)"
+else
+  fail "long plan not echoed exactly" "status=$st approval=$(approval) took=${took}s"
+fi
+
+# The switch never weakens the plan gate: a conflicting plan is still denied at
+# PreToolUse, before any permission request, and a passing one gets no allow there.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-inline.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny ACTUAL_UNATTENDED=on)
+if [ "$st" = "0" ] && [ "$(decision)" = "deny" ]; then
+  pass "ACTUAL_UNATTENDED=on: plan-gate.sh still denies a conflicting plan"
+else
+  fail "ACTUAL_UNATTENDED=on changed the plan gate's deny" "status=$st decision=$(decision)"
+fi
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-inline.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow ACTUAL_UNATTENDED=on)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ]; then
+  pass "ACTUAL_UNATTENDED=on: plan-gate.sh still drops an allow verdict"
+else
+  fail "ACTUAL_UNATTENDED=on let plan-gate.sh forward an allow" "status=$st decision=$(decision)"
+fi
+
+if [ "$(jq -r '.hooks.PermissionRequest[0].matcher' "${HOOKS_DIR}/hooks.json")" = "ExitPlanMode" ] \
+   && [ "$(jq -r '.hooks.PermissionRequest[0].hooks[0].command' "${HOOKS_DIR}/hooks.json")" = '"${CLAUDE_PLUGIN_ROOT}"/hooks/plan-approval.sh' ] \
+   && [ "$(jq -r '.hooks.PermissionRequest | length' "${HOOKS_DIR}/hooks.json")" = "1" ]; then
+  pass "hooks.json registers PermissionRequest -> plan-approval.sh, on ExitPlanMode alone"
+else
+  fail "hooks.json PermissionRequest registration wrong" "$(jq -c '.hooks.PermissionRequest' "${HOOKS_DIR}/hooks.json" 2>/dev/null)"
+fi
+
+if [ "$(jq -c '.userConfig.unattended | {type, default}' "${HOOKS_DIR}/../.claude-plugin/plugin.json")" = '{"type":"boolean","default":false}' ]; then
+  pass "plugin.json declares the unattended row, off by default"
+else
+  fail "plugin.json unattended row missing or not off by default" "$(jq -c '.userConfig.unattended' "${HOOKS_DIR}/../.claude-plugin/plugin.json" 2>/dev/null)"
+fi
+
+# The same dependency rule as the shipped hooks in "dependency hygiene" below.
+if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' "$APPROVAL" \
+     | grep -vE '^[0-9]+:[[:space:]]*#' > "${WORK}/deps" 2>/dev/null; then
+  fail "plan-approval.sh references a JSON/runtime dependency" "$(cat "${WORK}/deps")"
+else
+  pass "plan-approval.sh references no jq/python/node"
+fi
+if [ -x "$APPROVAL" ]; then pass "plan-approval.sh is executable"; else fail "plan-approval.sh is not executable" ""; fi
 
 echo
 echo "=== impl-gate: no committed rules ==="

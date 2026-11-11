@@ -1412,11 +1412,23 @@ async function runOverride($, ctx, prompt, via, gate) {
 // `overrideDialog` userConfig row or ACTUAL_OVERRIDE_DIALOG turns it off, env
 // winning as for every other setting. Off, the agent reads the denial as the
 // CLI wrote it and revises on its own; a typed /actual-cli:override still works.
+// Unattended mode turns it off whatever those say, since nobody is there to
+// answer it.
 async function overrideDialogOn($, options) {
+  if (await unattendedOn($, options)) return false;
   const env = await $.env.get('ACTUAL_OVERRIDE_DIALOG');
   if (env === 'off') return false;
   if (env === 'on') return true;
   return options.overrideDialog !== false;
+}
+
+// Unattended mode, as plan-approval.sh reads it: ACTUAL_UNATTENDED=on or =off,
+// or the `unattended` userConfig row when the variable is unset. Off by default.
+async function unattendedOn($, options) {
+  const env = await $.env.get('ACTUAL_UNATTENDED');
+  if (env === 'on') return true;
+  if (env === 'off') return false;
+  return options.unattended === true;
 }
 
 // Asks the user about a gate's denial and records what they chose; see
