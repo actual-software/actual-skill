@@ -1,16 +1,8 @@
 # Install the Actual.ai Skill
 
-## skills.sh (any agent)
+## Claude Code plugin
 
-```bash
-npx skills add actual-software/actual-skill
-```
-
-This installs the `actual` skill into the agents you pick. It doesn't add the Claude Code hooks; install the plugin below for those.
-
-## Claude Code
-
-Run each step as its own copy/paste.
+The plugin brings the plan and change checks, rule briefing and in-session overrides, along with the `actual` skill. Run each step as its own copy/paste.
 
 Step 1 — add this repo as a marketplace:
 
@@ -48,7 +40,19 @@ The `actual` CLI is not installed. Should I install it with:
 Then I'll verify it with `actual --version`.
 ```
 
-## Codex
+## Skill only
+
+These install the `actual` skill without the checks, briefing or overrides, which need the Claude Code plugin's hooks.
+
+### skills.sh (any agent)
+
+```bash
+npx skills add actual-software/actual-skill
+```
+
+This installs the `actual` skill into the agents you pick.
+
+### Codex
 
 ```
 $skill-installer install the actual skill from actual-software/actual-skill
@@ -68,7 +72,7 @@ Then I'll verify it with `actual --version`.
 
 In Codex, you can also call the skill directly by starting the prompt with `$actual`.
 
-## OpenCode, Cursor or manual
+### OpenCode, Cursor or manual
 
 Clone and symlink to your global skills directory:
 
@@ -122,7 +126,7 @@ Then restart Claude Code, or run `/reload-plugins` in a session that's already o
 
 ## Requirements
 
-- A supported coding agent: Claude Code, Codex, ChatGPT, Cursor, or OpenCode.
-- Your repository onboarded at [app.actual.ai](https://app.actual.ai), so Actual can generate its ADRs.
+- Claude Code, for the checks, briefing and overrides. The skill alone also runs in Codex, ChatGPT, Cursor and OpenCode.
+- Architecture rules in `.actual/rules/`, written by hand or merged from the sync pull request [app.actual.ai](https://app.actual.ai) opens. The plugin stays silent in a repository without them.
 - The `actual` CLI 0.8.0 or later ([actual-software/actual-cli](https://github.com/actual-software/actual-cli)). The skill offers to install it on first use, or you can install it yourself with `npm install -g @actualai/actual` or `brew install actual-software/actual/actual`. In Claude Code, each session start in a repository with rules compares the installed version with the one the skill needs and offers to upgrade an older CLI, with the command for however you installed it when the CLI can name it, or both commands when it's too old to. A declined offer doesn't come back as an interruption after a compaction or a resume.
   - Rule files with a YAML header need `actual` 0.9.0 or later. Upgrade with `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`. Check with `actual rules brief --help`, which names `adr-header-v2` on a CLI that reads them.
