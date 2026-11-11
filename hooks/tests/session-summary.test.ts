@@ -41,6 +41,9 @@ function world(
     env?: Record<string, string>
     beneath?: string
     preflight?: object
+    // What `actual rules brief` gives each governed read or write, in turn,
+    // the last one repeating: '' is nothing new for the file.
+    briefs?: string[]
   },
 ) {
   const clock = mock.clock(on)
@@ -58,15 +61,26 @@ function world(
     const names = options.rules ?? ['R-001.md', 'R-002.md']
     return { value: names.map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }
   })
+  const briefs = options.briefs ?? ['']
   on('process.run', ($, e) => {
     spawns.push(e)
     if (e.argv[0] === 'git') return ran(`${ROOT}\n`)
+    if (e.argv[1] === 'rules') {
+      // The probe for the subcommand names the ADR header v2 marker, as 0.9.0 does.
+      if (e.argv.includes('--help')) return ran('Usage: actual rules brief\nCapability marker: adr-header-v2\n')
+      const brief = briefs.length > 1 ? briefs.shift()! : briefs[0]!
+      return ran(brief ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: brief } }) : '')
+    }
     summaries.push(e)
     return options.answers.length > 1 ? options.answers.shift()! : options.answers[0]!
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.complete', () => ({ text: '' }))
+  on('fs.exists', () => ({ value: true }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('tool.call', () => ({ ref: 1, result: { stdout: 'OUT', stderr: '' }, text: 'OUT', isReadOnly: true }))
   on('classic.SessionStart', () => options.preflight ?? { value: {} })
   on('ui.render', ($, e) => {
     if (e.component === 'AbovePrompt') renders += 1
@@ -152,6 +166,76 @@ test('redraws the band only when the line changes', async ($, on) => {
   expect(w.summaries.length).toBe(3)
   // Mounted, then 0 of 12, then 1 of 12: the unchanged second reading draws nothing.
   expect(w.renders()).toBe(3)
+  await band.unmount()
+})
+
+// A plan is a single turn, so a count read only at turn end stayed where it was
+// until the plan was approved. Each tool reaches the brief by its own path.
+const GOVERNED = `${CWD}/billing.ts`
+const CALLS = [
+  { tool: 'Read', file_path: GOVERNED },
+  { tool: 'Bash', command: 'cat billing.ts' },
+  { tool: 'Write', file_path: GOVERNED, content: 'export {}' },
+]
+const BRIEF = '## Persistence\n- R-001 MUST: all persistence goes through the repository layer.'
+
+for (const call of CALLS) {
+  test(`rises within the turn when a ${call.tool} briefs a new ADR`, async ($, on) => {
+    const w = world(on, { answers: [counts(0, 12), counts(1, 12)], briefs: [BRIEF] })
+    const band = await mountBand($)
+    await $.session.start(start)
+    await w.clock.settle()
+    const before = await band.read()
+    await $.tool.call({ ...call, tool_use_id: `${call.tool}-1` })
+    await w.clock.settle()
+    expect([before, await band.read()]).toEqual([
+      'Actual AI: 0 of 12 ADRs added to context',
+      'Actual AI: 1 of 12 ADRs added to context',
+    ])
+    expect(w.summaries.length).toBe(2)
+    await band.unmount()
+  })
+}
+
+test('makes no call for a read that briefs nothing new', async ($, on) => {
+  const w = world(on, { answers: [counts(1, 12)], briefs: [''] })
+  await $.session.start(start)
+  await w.clock.settle()
+  await $.tool.call({ tool: 'Read', file_path: GOVERNED, tool_use_id: 'quiet-1' })
+  await w.clock.settle()
+  expect(w.summaries.length).toBe(1)
+})
+
+test('counts the brief the session budget withheld, which the CLI recorded', async ($, on) => {
+  const w = world(on, {
+    answers: [counts(0, 12), counts(1, 12)],
+    briefs: [BRIEF],
+    env: { ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS: '10' },
+  })
+  const band = await mountBand($)
+  await $.session.start(start)
+  await w.clock.settle()
+  await $.tool.call({ tool: 'Read', file_path: GOVERNED, tool_use_id: 'over-1' })
+  await w.clock.settle()
+  expect(await band.read()).toBe('Actual AI: 1 of 12 ADRs added to context')
+  await band.unmount()
+})
+
+test("a brief's refresh that lands after the turn's own leaves the newer line", async ($, on) => {
+  let slow: (a: Answer) => void = () => {}
+  const w = world(on, {
+    answers: [counts(0, 12), new Promise<Answer>(resolve => (slow = resolve)), counts(2, 12)],
+    briefs: [BRIEF],
+  })
+  const band = await mountBand($)
+  await $.session.start(start)
+  await w.clock.settle()
+  await $.tool.call({ tool: 'Read', file_path: GOVERNED, tool_use_id: 'slow-1' })
+  await $.turn.complete(turn('t1'))
+  await w.clock.settle()
+  slow(counts(1, 12))
+  await w.clock.settle()
+  expect(await band.read()).toBe('Actual AI: 2 of 12 ADRs added to context')
   await band.unmount()
 })
 

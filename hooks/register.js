@@ -1104,6 +1104,10 @@ async function deliverBrief($, e, result, paths, ctx) {
     spend(sessionId, appended.length);
   }
 
+  // The CLI recorded every brief it returned, the withheld one included, so the
+  // count can have moved. A plan is a single turn, so turn.complete is too late.
+  if (briefedFiles.length || exhausted) void refreshCount($);
+
   if (appended) {
     // One record for the call, merging what each file contributed.
     recordOutcome(sessionId, e.tool_use_id, {
@@ -1285,8 +1289,9 @@ function paneRows(elements, sessionId) {
 // AI: 3 of 12 ADRs added to context · 2 areas with no ADR", drawn exactly as
 // the CLI gives it in the band above the prompt, so the model never reads it.
 //
-// Read in the background at session start, after each main-loop turn, and on
-// /clear, compaction, resume and fork. Nothing waits on the CLI, and a call
+// Read in the background at session start, after each read or write that
+// briefs something, after each main-loop turn, and on /clear, compaction,
+// resume and fork. Nothing waits on the CLI, and a call
 // that fails or outlasts SPAWN_TIMEOUT_MS keeps the line already shown.
 
 // Per session: the line its band shows, and the refresh that set it. An
