@@ -1,18 +1,6 @@
 # Actual.ai Skill reference
 
-## Agents and repositories
-
-Inside the coding agent your team already uses: Claude Code, Codex, ChatGPT, Cursor, or OpenCode. It works in any repository with architecture rules committed in `.actual/rules/`, and stays silent in repositories without them.
-
-It runs whenever an architecture question comes up. Before your agent writes code, it asks your ADRs how your team builds things and gets an answer that cites its sources. In Claude Code, the skill also checks the plan before implementation starts and the changes at the end of every turn.
-
-## ADR-backed context
-
-The skill runs `actual adr-bot`, which reads your repository, fetches your team's ADRs from Actual AI, and writes guidance tailored to your codebase into the file your agent reads: `CLAUDE.md`, `AGENTS.md`, or Cursor rules. Your agent starts every session already knowing how your team builds things.
-
-## Architecture answers
-
-When your agent hits an architecture question, the skill asks the Actual advisor. The advisor answers from your organization's ADRs and cites its sources, so you can trace every recommendation back to a decision your team made.
+The plugin works in Claude Code, in any repository with architecture rules committed in `.actual/rules/`, and stays silent in repositories without them.
 
 ## Governance
 
@@ -34,7 +22,7 @@ actual-cli: ▌ NO CHANGE  briefed earlier  tokens.ts
 ```
 
 - **A governed file that briefs nothing says why**, rather than leaving you to guess: nothing new for it, the budget spent, or the CLI could not answer.
-- **A read of files nothing governs reports nothing, once the CLI says so.** Most files in a repository are ungoverned, and a line on each would bury the reads that matter. Until that ships in the CLI (actual-cli#867), such a read logs a "briefed earlier, or ungoverned" row instead.
+- **A read of files nothing governs reports nothing, once the CLI says so.** Most files in a repository are ungoverned, and a line on each would bury the reads that matter.
 - **`/rules-brief` lists the session**, in the order it happened, those quiet reads included, with the reason beside each one: the last 40 of at most 200 records.
 
 None of this governs: it never touches the Stop verdict, which is the implementation gate's. None of it costs your agent context either, because the model never reads these lines — they are not counted against the cap above. It does need a terminal or the desktop app: nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session, though briefing itself still runs there.
@@ -59,8 +47,8 @@ Once briefing reaches its per-session cap, the count can include the ADRs of the
 
 ## Troubleshooting
 
-When something fails, the skill diagnoses it for you. It knows every error the CLI can return, all five runners (`claude-cli`, `anthropic-api`, `openai-api`, `codex-cli`, `cursor-cli`), and all three output formats, so it can find the cause and retry without you reading logs.
+When something fails, the skill diagnoses it for you. It knows every error the CLI can return and all five runners (`claude-cli`, `anthropic-api`, `openai-api`, `codex-cli`, `cursor-cli`), so it can find the cause and retry without you reading logs.
 
 ## Documentation
 
-See the [Actual CLI docs](https://actual.ai/cli/docs) for getting started and the full command reference. Point your agent at [docs.md](https://actual.ai/cli/docs.md) for the same docs in Markdown.
+See the [Actual CLI docs](https://actual.ai/cli/docs) for getting started and the command reference. Point your agent at [docs.md](https://actual.ai/cli/docs.md) for the same docs in Markdown.
