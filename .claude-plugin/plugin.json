@@ -1,7 +1,7 @@
 {
   "name": "actual-cli",
   "description": "Checks your coding agent's plans before approval and its changes at the end of every turn against the ADR rules committed in .actual/rules/, briefs it on the rules for each file it reads, and lets you override a denied rule from the session. Also drafts new ADRs with you, and runs and troubleshoots the actual CLI, including adr-bot and the advisor on request",
-  "version": "1.7.3",
+  "version": "1.8.0",
   "author": {
     "name": "actual-software"
   },
