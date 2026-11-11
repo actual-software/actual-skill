@@ -1,6 +1,6 @@
 {
   "name": "actual-cli",
-  "description": "Feature-complete companion for the actual CLI \u2014 runs and troubleshoots sync, status, auth, config, runners, and models across all 5 runners and 3 output formats, and gates both implementation plans and the diffs agents produce against the ADR rules committed in .actual/rules/",
+  "description": "Checks your coding agent's plans before approval and its changes at the end of every turn against the ADR rules committed in .actual/rules/, briefs it on the rules for each file it reads, and lets you override a denied rule from the session. Also runs and troubleshoots the actual CLI, including adr-bot and the advisor on request",
   "version": "1.7.2",
   "author": {
     "name": "actual-software"
@@ -12,9 +12,10 @@
     "actual",
     "cli",
     "adr",
-    "claude-md",
-    "agents-md",
-    "cursor-rules"
+    "architecture",
+    "governance",
+    "plan-check",
+    "impl-check"
   ],
   "userConfig": {
     "maxSessionChars": {
