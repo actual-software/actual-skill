@@ -38,7 +38,17 @@ In Claude Code, the plugin checks your coding agent's work against the architect
 
    [Homebrew and other install options](docs/install.md).
 
-3. Add your architecture rules under `.actual/rules/`. Write them by hand, or merge the sync pull request [app.actual.ai](https://app.actual.ai) opens, which writes your team's accepted decisions there.
+3. Add your architecture rules as Markdown files under `.actual/rules/`. Merge the sync pull request [app.actual.ai](https://app.actual.ai) opens, which writes your team's accepted decisions there, or write them by hand:
+
+   ```markdown
+   # Use the repository layer for database access
+
+   ### Rules
+
+   - **R-DB-001** MUST: Code outside `src/db/` reaches the database only through `src/db/`.
+   ```
+
+   `actual rules ls` shows whether each file parses.
 
 4. Optionally, run `actual login` to sign in to Actual AI. The checks and `actual rules` work without it.
 
