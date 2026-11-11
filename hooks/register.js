@@ -1104,6 +1104,13 @@ async function deliverBrief($, e, result, paths, ctx) {
     spend(sessionId, appended.length);
   }
 
+  // The CLI recorded every brief it returned, the withheld one included, so the
+  // count can have moved. A plan is a single turn, so turn.complete is too late.
+  // It also records an ungoverned file's folder, which can move the areas
+  // clause; most reads are ungoverned, so those refreshes are coalesced.
+  if (briefedFiles.length || exhausted) void refreshCount($);
+  else if ([...reasons.values()].includes('ungoverned')) refreshAreas($, sessionId);
+
   if (appended) {
     // One record for the call, merging what each file contributed.
     recordOutcome(sessionId, e.tool_use_id, {
@@ -1285,8 +1292,9 @@ function paneRows(elements, sessionId) {
 // AI: 3 of 12 ADRs added to context · 2 areas with no ADR", drawn exactly as
 // the CLI gives it in the band above the prompt, so the model never reads it.
 //
-// Read in the background at session start, after each main-loop turn, and on
-// /clear, compaction, resume and fork. Nothing waits on the CLI, and a call
+// Read in the background at session start, after each read or write that
+// briefs something or reaches an ungoverned file, after each main-loop turn,
+// and on /clear, compaction, resume and fork. Nothing waits on the CLI, and a call
 // that fails or outlasts SPAWN_TIMEOUT_MS keeps the line already shown.
 
 // Per session: the line its band shows, and the refresh that set it. An
@@ -1319,7 +1327,7 @@ async function sessionSummary($, sessionId, rulesDir, repoRoot) {
 // one leaves the newer line, and the band is asked to redraw only when its
 // line changes, because a render answer is cached until
 // $.ui.invalidate.
-async function refreshCount($) {
+async function refreshCount($, onSpawn) {
   const ticket = ++countRefreshes;
   try {
     if ((await $.env.get('ACTUAL_CLI_SUBPROCESS')) === '1') return;
@@ -1329,6 +1337,7 @@ async function refreshCount($) {
     let text;
     if (rulesDir) {
       const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+      onSpawn?.();
       const summary = await sessionSummary($, sessionId, rulesDir, repoRoot);
       if (!summary) return;
       text = summary.line || undefined;
@@ -1341,6 +1350,31 @@ async function refreshCount($) {
     // A spawn that rejected (no CLI, past the timeout) or output that did not
     // parse: the band keeps what it showed.
   }
+}
+
+// Per session: the refresh ungoverned reads asked for. A read that asks before
+// its CLI call starts is counted by that call; one that asks after queues a
+// single rerun, so a burst costs one spawn, or two when it straddles one.
+const areaRefreshes = new Map();
+
+function refreshAreas($, sessionId) {
+  const queued = areaRefreshes.get(sessionId);
+  if (queued) {
+    if (queued.spawned) queued.again = true;
+    return;
+  }
+  const state = { spawned: false, again: false };
+  areaRefreshes.set(sessionId, state);
+  void (async () => {
+    try {
+      do {
+        state.spawned = state.again = false;
+        await refreshCount($, () => (state.spawned = true));
+      } while (state.again);
+    } finally {
+      areaRefreshes.delete(sessionId);
+    }
+  })();
 }
 
 // The note of an override the user chose in the plan gate's dialog, by session,
