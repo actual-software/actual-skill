@@ -1,0 +1,8 @@
+interface:
+  display_name: "Draft ADRs"
+  short_description: "Draft ADRs, write the ones you pick with the actual CLI, then save them to Actual AI"
+  default_prompt: "Use $adr-draft to draft ADRs about this topic, the work in this session, or the last N commits if I give a number, then let me pick which to write."
+  brand_color: "#06E58B"
+
+policy:
+  allow_implicit_invocation: true
