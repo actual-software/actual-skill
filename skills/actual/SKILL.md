@@ -667,7 +667,7 @@ The CLI auto-selects a runner from the model name:
 
 ## adr-bot and the Advisor (on request)
 
-Run `actual adr-bot` only when the user asks for it, or for ADR guidance written into `CLAUDE.md`, `AGENTS.md` or Cursor rules, and `actual advisor` only when the user asks for the Advisor. Neither is part of governance. Their full reference is in the actual-cli docs: @@SECONDARY_DOC_URL@@. The adr-bot workflow follows in Non-Interactive Environments, Sync Quick Reference and Operational Workflow: Running Sync, with its files in Output Formats.
+Run `actual adr-bot` only when the user asks for it, or for ADR guidance written into `CLAUDE.md`, `AGENTS.md` or Cursor rules, and `actual advisor` only when the user asks for the Advisor. Neither is part of governance. Their full reference is in the actual-cli docs: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md. The adr-bot workflow follows in Non-Interactive Environments, Sync Quick Reference and Operational Workflow: Running Sync, with its files in Output Formats.
 
 **Endpoint config** — `advisor` reads `--api-url <url>`, then `ACTUAL_API_URL`, then defaults to `https://api-service.api.prod.actual.ai`.
 
@@ -903,4 +903,4 @@ For anything not covered by this skill or its reference files, fetch the CLI doc
 
 - **Full docs (Markdown)**: https://cli.actual.ai/docs.md — the command reference for the checks, `rules`, `check-override` and sign-in, with flags, runners, config keys, and troubleshooting
 - **LLM summary**: https://cli.actual.ai/llms.txt — concise machine-readable overview
-- **adr-bot and the Advisor**: @@SECONDARY_DOC_URL@@ — their full reference
+- **adr-bot and the Advisor**: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md — their full reference

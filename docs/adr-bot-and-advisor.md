@@ -1,6 +1,6 @@
 # adr-bot and the Advisor
 
-The skill also runs two other CLI commands, `actual adr-bot` and `actual advisor`, when you ask for them by name. Neither is part of governance, and neither runs on its own.@@SECONDARY_DOC_SENTENCE@@
+The skill also runs two other CLI commands, `actual adr-bot` and `actual advisor`, when you ask for them. Neither is part of governance, and neither runs on its own. Their full reference, flags included, is in the actual-cli repository: [adr-bot and the Advisor](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md).
 
 ## ADR-backed context
 
