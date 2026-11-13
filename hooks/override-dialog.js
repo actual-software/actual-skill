@@ -87,7 +87,7 @@ const REASONS = [
 
 export const REASON_QUESTION = {
   question:
-    'If the block is right and you\'re going ahead anyway, choose Other and type "accepted". Otherwise, why override?',
+    'If the block is right and you\'re going ahead anyway, choose Other and type "accepted"; anything else typed there may be sent to your organization\'s admins (actual 0.14.0 or later), with secrets removed. Otherwise, why override?',
   header: 'Why override',
   options: REASONS.map(([label]) => label),
 };
