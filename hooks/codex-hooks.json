@@ -1,0 +1,4 @@
+{
+  "description": "Actual governance hooks for Codex. Empty for now: declaring this file keeps Codex from falling back to hooks/hooks.json, which is Claude Code's and fails Codex's parser.",
+  "hooks": {}
+}
