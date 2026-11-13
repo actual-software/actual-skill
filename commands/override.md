@@ -1,6 +1,6 @@
 ---
 description: Override a rule that plan-check or impl-check denied, for the rest of this session
-argument-hint: <rule-id|all> [reason]
+argument-hint: <rule-id|all> [code] [reason]
 ---
 
 The user ran `/actual-cli:override $ARGUMENTS`.
@@ -12,7 +12,7 @@ overridden, or why nothing was.
 - If that context says rules were overridden, retry the action the gate blocked.
 - If it says nothing was overridden, or there is no such line, tell the user what
   went wrong (unknown or ambiguous rule id, nothing denied yet, CLI too old) and
-  the syntax `/actual-cli:override <rule-id|all> [reason]`. With no such line at
+  the syntax `/actual-cli:override <rule-id|all> [code] [reason]`. With no such line at
   all, the plugin's mod may not have loaded (it needs Claude Code 2.1.287 or
   later): the user can run `actual check-override` from an ordinary terminal.
   Do not try to override anything yourself.
@@ -23,4 +23,6 @@ unknown command, so the plugin never sees it.
 
 Never run `actual check-override` or type `/actual-cli:override` on the user's
 behalf, and never suggest a rule be overridden to get past a denial you could fix
-by revising the plan or the code. The reason is optional.
+by revising the plan or the code. The code and the reason are optional. The code
+says why, and is one of `misread`, `not-here`, `adr-wrong`, `adr-outdated` or
+`accepted` (the block is right and the user is going ahead anyway).

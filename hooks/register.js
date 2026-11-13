@@ -88,6 +88,8 @@ import {
   parseBlocking,
   denialQuestion,
   readAnswer,
+  REASON_QUESTION,
+  readReason,
   overridePrompt,
   overrideCall,
   parseOverrideRun,
@@ -1419,7 +1421,8 @@ async function overrideDialogOn($, options) {
 
 // Asks the user about a gate's denial and records what they chose; see
 // override-dialog.js. Resolves to `{ pass, note }` or `{ text }`, and to the
-// denial untouched on any failure, a dismissed dialog, or the dialog turned off.
+// denial untouched on any failure, either question dismissed, or the dialog
+// turned off.
 async function askAboutDenial($, gate, reason, options) {
   if (!(await overrideDialogOn($, options))) return { text: reason };
   if (!offersOverride(reason)) return { text: reason };
@@ -1443,9 +1446,15 @@ async function askAboutDenial($, gate, reason, options) {
   }
   const read = readAnswer(q, answer);
   if (!read.targets) return { text: read.text };
+  let why;
+  try {
+    why = readReason(await $.ui.ask(REASON_QUESTION.question, { header: REASON_QUESTION.header, options: REASON_QUESTION.options }));
+  } catch {
+    return { text: reason };
+  }
   const answers = [];
   for (const target of read.targets) {
-    answers.push(await runOverride($, ctx, overridePrompt(target), 'dialog', gate));
+    answers.push(await runOverride($, ctx, overridePrompt(target, why), 'dialog', gate));
   }
   return overrideOutcome(q, read.targets, answers);
 }

@@ -6,7 +6,7 @@
 // answers (the AskUserQuestion call $.ui.ask makes), and the CLI.
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { denialQuestion, readAnswer, overrideOutcome } from './override-dialog.js'
+import { denialQuestion, readAnswer, overrideOutcome, readReason, overridePrompt, REASON_QUESTION } from './override-dialog.js'
 
 const ROOT = '/repo'
 const RULES = '/repo/.actual/rules'
@@ -156,24 +156,97 @@ test('override all: recorded through the dialog, and the plan goes on to its app
   const w = world(on, {
     planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']),
     blocking: ['a::R-AUTH-001', 'b::R-SRB-001'],
-    answers: ['Override all 2 rules'],
+    answers: ['Override all 2 rules', 'This ADR is wrong'],
   })
   const r: any = await exitPlan($)
   expect(r.text).toBe('approved')
   // The agent reads the override with the approved plan.
   expect(r.context).toEqual(['The user overrode a::R-AUTH-001, b::R-SRB-001 in the override dialog.'])
-  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override all'])
+  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override all adr-wrong'])
   // Scoped to the denying gate, so `all` is what the dialog listed.
   expect(w.overrides[0].argv).toEqual(['actual', 'check-override', '--claude-hook', '--rules-dir', RULES, '--via', 'dialog', '--gate', 'plan'])
-  expect(w.overrides[0].stdin).toEqual({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: '/actual-cli:override all' })
+  expect(w.overrides[0].stdin).toEqual({ hook_event_name: 'UserPromptSubmit', session_id: SESSION, prompt: '/actual-cli:override all adr-wrong' })
 })
 
 test('one rule: "Override <id>" and no choice step', async ($, on) => {
-  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['Override R-AUTH-001'] })
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['Override R-AUTH-001', 'The check misread my change'] })
   const r: any = await exitPlan($)
   expect(labels(w.asked[0])).toEqual(['Revise the plan to conform (Recommended)', 'Override R-AUTH-001'])
-  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override all'])
+  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override all misread'])
   expect(r.text).toBe('approved')
+})
+
+// ── why: the second question after "Override" ───────────────────────────────
+
+test('after Override, the dialog asks why with four codes and names typing "accepted"', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['Override R-AUTH-001', null] })
+  await exitPlan($)
+  expect(w.asked.length).toBe(2)
+  expect(w.asked[1].header).toBe('Why override')
+  expect(w.asked[1].question).toBe(
+    'If the block is right and you\'re going ahead anyway, choose Other and type "accepted"; anything else typed there may be sent to your organization\'s admins (actual 0.14.0 or later), with anything that looks like a secret removed, so don\'t type one. Otherwise, why override?',
+  )
+  expect(labels(w.asked[1])).toEqual([
+    'The check misread my change',
+    "This ADR doesn't apply here",
+    'This ADR is wrong',
+    'This ADR is out of date',
+  ])
+})
+
+for (const [label, code] of [
+  ['The check misread my change', 'misread'],
+  ["This ADR doesn't apply here", 'not-here'],
+  ['This ADR is wrong', 'adr-wrong'],
+  ['This ADR is out of date', 'adr-outdated'],
+]) {
+  test(`why "${label}" records the override with ${code} after the target`, async ($, on) => {
+    const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['Override R-AUTH-001', label] })
+    const r: any = await exitPlan($)
+    expect(w.overrides.map(o => o.prompt)).toEqual([`/actual-cli:override all ${code}`])
+    expect(r.text).toBe('approved')
+  })
+}
+
+test('"accepted" typed under Other is sent as typed', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['Override R-AUTH-001', 'accepted'] })
+  const r: any = await exitPlan($)
+  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override all accepted'])
+  expect(r.text).toBe('approved')
+})
+
+test('other words typed under Other follow the target unchanged', async ($, on) => {
+  const typed = 'demo token, not a real secret\nsee the README'
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['Override R-AUTH-001', typed] })
+  await exitPlan($)
+  expect(w.overrides.map(o => o.prompt)).toEqual([`/actual-cli:override all ${typed}`])
+})
+
+test('dismissing why overrides nothing and leaves the denial as the CLI wrote it', async ($, on) => {
+  const deny = denyText(['R-AUTH-001', 'R-SRB-001'])
+  const w = world(on, { planDeny: () => deny, blocking: keys('R-AUTH-001', 'R-SRB-001'), answers: ['Override all 2 rules', null] })
+  const r: any = await exitPlan($)
+  expect(r.text).toBe(deny)
+  expect(w.overrides).toEqual([])
+})
+
+test('revising asks no second question', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: ['Revise the plan to conform (Recommended)'] })
+  await exitPlan($)
+  expect(w.asked.length).toBe(1)
+})
+
+test('the implementation gate asks why too, and sends the code with --gate impl', async ($, on) => {
+  const w = world(on, {
+    stopBlock: () => denyText(['R-HDR-001'], 'A revised change is re-checked automatically.'),
+    blocking: keys('R-HDR-001'),
+    answers: ['Override R-HDR-001', "This ADR doesn't apply here"],
+  })
+  const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(w.asked[1].header).toBe('Why override')
+  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override all not-here'])
+  expect(w.overrides[0].argv.slice(-2)).toEqual(['--gate', 'impl'])
+  expect(out.block).toBeUndefined()
 })
 
 test('an answer typed under Other reaches the agent as the user\'s words', async ($, on) => {
@@ -194,7 +267,7 @@ test('a CLI that records nothing keeps the plan blocked and says why', async ($,
   world(on, {
     planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']),
     blocking: keys('R-AUTH-001', 'R-SRB-001'),
-    answers: ['Override all 2 rules'],
+    answers: ['Override all 2 rules', 'This ADR is out of date'],
     cli: () => ({ exitCode: 2, stdout: '' }),
   })
   const r: any = await exitPlan($)
@@ -246,7 +319,7 @@ test('an override that leaves a listed rule unrecorded keeps the plan blocked', 
   world(on, {
     planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']),
     blocking: keys('R-AUTH-001', 'R-SRB-001'),
-    answers: ['Override all 2 rules'],
+    answers: ['Override all 2 rules', 'This ADR is out of date'],
     cli: () => ({ exitCode: 0, stdout: recorded(keys('R-AUTH-001')) }),
   })
   const r: any = await exitPlan($)
@@ -296,7 +369,7 @@ test('the implementation gate asks about the changes, and an override lets the t
   const w = world(on, {
     stopBlock: () => denyText(['R-HDR-001', 'R-ADR-001'], 'A revised change is re-checked automatically.'),
     blocking: ['a::R-HDR-001', 'b::R-ADR-001'],
-    answers: ['Override all 2 rules'],
+    answers: ['Override all 2 rules', 'This ADR is out of date'],
   })
   const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
   expect(w.listed[0].argv).toContain('impl')
@@ -369,4 +442,16 @@ test('overrideOutcome: "all" that recorded the listed keys passes with a note', 
   expect(readAnswer(q, 'Choose rules to override').text).toContain('The user answered the override dialog')
   const failed = overrideOutcome(q, ['R-A'], [JSON.parse(nothing('no rule matching R-A'))])
   expect(failed.text).toContain('Not recorded: no rule matching R-A')
+})
+
+test('readReason and overridePrompt: a code for a choice, typed text unchanged, nothing for blank', () => {
+  expect(REASON_QUESTION.options.map(readReason)).toEqual(['misread', 'not-here', 'adr-wrong', 'adr-outdated'])
+  expect(REASON_QUESTION.header.length).toBeLessThanOrEqual(12)
+  expect(REASON_QUESTION.question.endsWith('?')).toBe(true)
+  expect(readReason('accepted')).toBe('accepted')
+  expect(readReason('  in a hurry ')).toBe('  in a hurry ')
+  expect(readReason('   ')).toBe('')
+  expect(overridePrompt('all', 'adr-wrong')).toBe('/actual-cli:override all adr-wrong')
+  expect(overridePrompt('all', '')).toBe('/actual-cli:override all')
+  expect(overridePrompt('all')).toBe('/actual-cli:override all')
 })

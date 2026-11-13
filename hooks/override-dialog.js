@@ -17,10 +17,12 @@
 // was listed, and never a rule only the other gate is denying.
 //
 // "Revise" hands the agent the denial with the user's choice and no override
-// commands in it. An override is recorded at once and, when it covers every
-// blocking rule, the call goes on: ExitPlanMode reaches its approval, or the turn
-// ends. Anything typed under "Other" reaches the agent as the user's answer.
-// Dismissed, or where no dialog can be shown (`claude -p`), the denial is left
+// commands in it. "Override" asks a second question, why, and then records the
+// override with the reason code (or the words typed under "Other") after the
+// target. When it covers every blocking rule, the call goes on: ExitPlanMode
+// reaches its approval, or the turn ends. Anything typed under "Other" in the
+// first question reaches the agent as the user's answer. Either question
+// dismissed, or where no dialog can be shown (`claude -p`), the denial is left
 // exactly as the CLI wrote it.
 //
 // Why the mod asks rather than the agent. The agent's own AskUserQuestion would
@@ -71,6 +73,34 @@ const GATE = {
     rest: 'Revise the changes for the rules still blocking.',
   },
 };
+
+// The "why" question after "Override". `$.ui.ask` takes at most four choices,
+// so the fifth code, `accepted`, is typed under "Other"; the CLI reads a
+// leading code word from the text after the target, and an older CLI keeps the
+// whole text as the local reason.
+const REASONS = [
+  ['The check misread my change', 'misread'],
+  ["This ADR doesn't apply here", 'not-here'],
+  ['This ADR is wrong', 'adr-wrong'],
+  ['This ADR is out of date', 'adr-outdated'],
+];
+
+export const REASON_QUESTION = {
+  question:
+    'If the block is right and you\'re going ahead anyway, choose Other and type "accepted"; anything else typed there may be sent to your organization\'s admins (actual 0.14.0 or later), with anything that looks like a secret removed, so don\'t type one. Otherwise, why override?',
+  header: 'Why override',
+  options: REASONS.map(([label]) => label),
+};
+
+/**
+ * What goes after the target for the "why" answer: the code for a choice, or
+ * the words typed under "Other" unchanged. Empty when nothing was typed.
+ */
+export function readReason(answer) {
+  const chosen = REASONS.find(([label]) => label === answer);
+  if (chosen) return chosen[1];
+  return typeof answer === 'string' && answer.trim() ? answer : '';
+}
 
 const TOO_OLD =
   'The user typed an override, but the installed actual CLI could not record it from the session (it may be too old). Nothing was overridden. Tell them to update the CLI, or to run `actual check-override` from an ordinary terminal. Do not run it yourself.';
@@ -163,9 +193,12 @@ export function readAnswer(q, answer) {
   };
 }
 
-/** The prompt check-override reads for one dialog target, `all` or a bare id. */
-export function overridePrompt(target) {
-  return `${OVERRIDE_COMMAND} ${target}`;
+/**
+ * The prompt check-override reads for one dialog target, `all` or a bare id,
+ * with the "why" answer from `readReason` after it when there is one.
+ */
+export function overridePrompt(target, reason = '') {
+  return reason ? `${OVERRIDE_COMMAND} ${target} ${reason}` : `${OVERRIDE_COMMAND} ${target}`;
 }
 
 /**
