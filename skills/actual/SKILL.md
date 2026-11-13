@@ -586,8 +586,9 @@ repo.
   (`adr-outdated`). The user types `accepted` under Other when the block is
   right and they are going ahead anyway; anything else typed there is kept as
   the reason, which actual 0.14.0 or later stores with the code `other` and
-  may send to Actual with secrets removed. Dismissing either question
-  overrides nothing. The answers go to the mod, not to the agent.
+  may send to Actual with anything that looks like a secret removed, so the
+  user shouldn't type one there. Dismissing either question overrides
+  nothing. The answers go to the mod, not to the agent.
   What reaches the agent says what the user chose:
   - **"The user chose to revise …"**: revise the plan or the code to satisfy
     every rule in the denial. Do not suggest an override.

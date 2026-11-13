@@ -184,7 +184,7 @@ test('after Override, the dialog asks why with four codes and names typing "acce
   expect(w.asked.length).toBe(2)
   expect(w.asked[1].header).toBe('Why override')
   expect(w.asked[1].question).toBe(
-    'If the block is right and you\'re going ahead anyway, choose Other and type "accepted"; anything else typed there may be sent to your organization\'s admins (actual 0.14.0 or later), with secrets removed. Otherwise, why override?',
+    'If the block is right and you\'re going ahead anyway, choose Other and type "accepted"; anything else typed there may be sent to your organization\'s admins (actual 0.14.0 or later), with anything that looks like a secret removed, so don\'t type one. Otherwise, why override?',
   )
   expect(labels(w.asked[1])).toEqual([
     'The check misread my change',
