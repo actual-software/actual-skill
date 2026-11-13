@@ -64,7 +64,7 @@ The checks run on their own. You can also ask your agent:
 - "Check my uncommitted changes against our architecture rules."
 - "Diagnose why Actual is failing."
 
-When a check denies, Claude Code asks whether to revise or override; `/actual-cli:override <rule-id> [reason]` overrides from the prompt at any time. The [reference](docs/reference.md) covers the checks, overrides, rule briefing, settings and troubleshooting. The skill still runs adr-bot and the Advisor when you ask for them: [adr-bot and the Advisor](docs/adr-bot-and-advisor.md).
+When a check denies, Claude Code asks whether to revise or override; `/actual-cli:override <rule-id|all> [code] [reason]` overrides from the prompt at any time. The [reference](docs/reference.md) covers the checks, overrides, rule briefing, settings and troubleshooting. The skill still runs adr-bot and the Advisor when you ask for them: [adr-bot and the Advisor](docs/adr-bot-and-advisor.md).
 
 ## License
 
