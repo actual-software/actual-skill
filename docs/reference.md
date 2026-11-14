@@ -45,6 +45,16 @@ It counts against the same rules directory as briefing, `ACTUAL_RULES_DIR` inclu
 
 Once briefing reaches its per-session cap, the count can include the ADRs of the one brief that didn't fit: the CLI records each brief before the mod checks it against the cap, and the mod holds that one back.
 
+## Drafting ADRs
+
+The `adr-draft` skill drafts ADRs with you: from a decision or an area of the code you name, from the work in the current session, or from the last few commits. In Claude Code, `/actual-cli:adr-draft <topic>` runs it directly, and in Codex, `$adr-draft`. Your agent reads the ADRs the repository already has, drafts up to three, and shows them in full before anything is written. You pick which to write, and whether each is accepted, so its rules govern the checks at once, or a draft, which no check reads until it's published.
+
+The [actual CLI](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) writes each one you pick as a decision in `docs/adr/` and its rule file in `.actual/rules/`, under the file names Actual AI's sync uses. `actual adr check` then checks their format and lists likely duplicates among the repository's ADRs and, once you're signed in, your decisions in Actual AI.
+
+Saving to Actual AI needs `actual login`, which you run yourself because it opens a browser. Your agent then offers `actual adr create --file` for each new ADR, and you choose which to save. From an agent's shell the CLI saves each one as a draft in Actual AI and marks the local files draft too, so it governs again once it's published (`actual adr publish <id>`, or in the web app) and the sync pull request rewrites its files. Your agent saves one as accepted only when you ask it to.
+
+Drafting needs a CLI with the `actual adr` commands. On an older one, `actual adr --help` reports an unrecognized subcommand, and the skill offers the upgrade.
+
 ## Troubleshooting
 
 When something fails, the skill diagnoses it for you. It knows every error the CLI can return and all five runners (`claude-cli`, `anthropic-api`, `openai-api`, `codex-cli`, `cursor-cli`), so it can find the cause and retry without you reading logs.
