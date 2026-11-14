@@ -1,0 +1,17 @@
+name: Bug report
+description: Something in the skill or its Claude Code hooks doesn't work.
+labels: [bug]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you ran or asked, what you expected, and what you got instead. Paste any error output.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Your coding agent, the plugin version, and the output of `actual --version`.
+      placeholder: Claude Code 2.1.305, plugin 1.4.2, actual 0.8.0

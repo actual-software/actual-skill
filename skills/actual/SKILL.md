@@ -1,16 +1,19 @@
 ---
 name: actual
 description: >-
-  Feature-complete companion for the actual CLI, an ADR-powered
-  CLAUDE.md/AGENTS.md generator. Runs and troubleshoots actual adr-bot,
-  status, auth, config, runners, and models, plus the Actual AI platform
-  surface: login, logout, whoami, and advisor (org-scoped architecture
-  Q&A). Covers all 5 runners (claude-cli, anthropic-api, openai-api,
-  codex-cli, cursor-cli), all model patterns, all 3 output formats
-  (claude-md, agents-md, cursor-rules), and all error types. Use when
-  working with the actual CLI, running actual adr-bot, signing in to
-  Actual AI, asking the advisor, configuring runners or models,
-  troubleshooting errors, or managing output files.
+  Companion for the actual CLI's architecture governance. Runs and
+  troubleshoots plan-check and impl-check, which check a plan or a diff
+  against the ADR rules committed in .actual/rules/ (in Claude Code this
+  plugin runs them on every plan and every turn), the rules commands that
+  show which rules govern a file or a plan (rules ls, select, brief and
+  index), check-override, the human-only way to clear a denied rule, and
+  signing in with login, whoami and logout. Use when checking a plan or
+  changes against the repository's architecture rules, finding the rules
+  for a file, explaining a denial or how to override it, signing in to
+  Actual AI, installing or upgrading the CLI, configuring runners or
+  models, or troubleshooting the CLI and its hooks. Runs actual adr-bot
+  (CLAUDE.md, AGENTS.md and Cursor rules written from ADRs) and the
+  advisor (org-scoped architecture Q&A) only when the user asks for them.
 ---
 
 # actual CLI Companion
@@ -36,7 +39,7 @@ Install options (try in this order):
 
 For one-off use without installing globally:
 ```bash
-npx @actualai/actual adr-bot [flags]
+npx @actualai/actual <command> [flags]
 ```
 
 After installing (or after the user declines and installs it themselves), verify: `actual --version`
@@ -51,30 +54,33 @@ release.
 
 | Command | Purpose | Key Flags |
 |---------|---------|-----------|
-| `actual adr-bot` | Analyze repo, fetch ADRs, tailor, write output | `--dry-run [--full]`, `--force`, `--no-tailor`, `--project PATH`, `--model`, `--runner`, `--verbose`, `--reset-rejections`, `--max-budget-usd`, `--no-tui`, `--output-format`, `--show-errors` |
-| `actual status` | Check output file state | `--verbose` |
+| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
+| `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes plus untracked, non-ignored files) against the commit the turn started from when a `UserPromptSubmit` call recorded one, otherwise against `HEAD`. Direct mode also accepts `--diff-file` or piped stdin, and diffs the working tree against `HEAD` when neither is given. Never emit `permissionDecision: "allow"` |
+| `actual rules ls` | List the rule documents under `.actual/rules/`, and flag any that fail to parse | `[PATH]` (repository root, default the current directory), `--json` |
+| `actual rules select` | Select the rule documents that govern a plan, or a path with no plan | `[PLAN]...`, `--file <path>` (repeatable), `--repo <path>`, `--limit` (default 10), `--min-score`, `--by-adr` |
+| `actual rules brief` | The rules governing one file, as briefing delivers them | `--file <path>`, `--repo <path>`, `--rules-dir <dir>`, `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`; `--claude-hook` is the hooks' mode |
+| `actual rules index` | Build or refresh the scope index the checks and `rules select` prefilter with | `[PATH]`, `--rebuild`, `--clear`, `--json` |
+| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user picks an override in the dialog a denial raises, or types `/actual-cli:override <rule-id\|all> [code] [reason]` (a bare `/override` is an unknown command in Claude Code); the plugin's mod records either through `--claude-hook`, which refuses any process carrying `CLAUDECODE`, as every agent command does. The agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` required through v0.12.0, optional in later builds (verify with `actual check-override --help`); `--reason-code <code>` (0.14.0 or later) sets the code, one of `misread`, `not-here`, `adr-wrong`, `adr-outdated` or `accepted`, and a `--reason` without it is stored as `other`; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual login` | Sign in to Actual AI (browser OAuth) | `--org <id>`, `--api-url <url>`, `--no-browser` |
+| `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
+| `actual logout` | Sign out of Actual AI and clear local credentials | (none) |
+| `actual status` | Check the state of the files `adr-bot` writes | `--verbose` |
 | `actual auth` | Check the runner (coding-agent) auth status | (none) |
 | `actual config show` | Display current config | (none) |
 | `actual config set <key> <value>` | Set a config value | (none) |
 | `actual config path` | Print config file path | (none) |
 | `actual runners` | List available runners | (none) |
 | `actual models` | List known models by runner | (none) |
-| `actual login` | Sign in to Actual AI (browser OAuth) | `--org <id>`, `--api-url <url>`, `--no-browser` |
-| `actual logout` | Sign out of Actual AI and clear local credentials | (none) |
-| `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
-| `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
-| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
-| `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart (AK-755) | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes plus untracked, non-ignored files) against the commit the turn started from when a `UserPromptSubmit` call recorded one, otherwise against `HEAD`. Direct mode also accepts `--diff-file` or piped stdin, and diffs the working tree against `HEAD` when neither is given. Never emit `permissionDecision: "allow"` |
-| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user picks an override in the dialog a denial raises, or types `/actual-cli:override <rule-id\|all> [code] [reason]` (a bare `/override` is an unknown command in Claude Code); the plugin's mod records either through `--claude-hook`, which refuses any process carrying `CLAUDECODE`, as every agent command does. The agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` required through v0.12.0, optional in later builds (verify with `actual check-override --help`); `--reason-code <code>` (0.14.0 or later) sets the code, one of `misread`, `not-here`, `adr-wrong`, `adr-outdated` or `accepted`, and a `--reason` without it is stored as `other`; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual adr-bot` | On request only: analyze repo, fetch ADRs, tailor, write `CLAUDE.md`, `AGENTS.md` or Cursor rules | `--dry-run [--full]`, `--force`, `--no-tailor`, `--project PATH`, `--model`, `--runner`, `--verbose`, `--reset-rejections`, `--max-budget-usd`, `--no-tui`, `--output-format`, `--show-errors` |
+| `actual advisor "<query>"` | On request only: ask the Advisor an architecture question (needs `login`) | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 
-## Platform Identity & Advisor
+## Sign-in
 
-These commands talk to the **Actual AI platform** (your account/org) and are **separate from `actual auth`** — `actual auth` only checks the local coding-agent/runner (claude/codex/cursor) that `adr-bot` drives. `login`/`logout`/`whoami` manage your Actual AI platform identity; `advisor` asks organization- or repository-scoped architecture questions against it. (The runner/model sections below pertain to `adr-bot`, not to these.)
+These commands manage your **Actual AI platform** identity (your account/org) and are **separate from `actual auth`** — `actual auth` only checks the local coding-agent/runner (claude/codex/cursor) that the checks' judge and `adr-bot` drive. `plan-check`, `impl-check` and `rules` run signed out; `advisor` needs a sign-in. (The runner/model sections below pertain to the checks' judge and `adr-bot`, not to these.)
 
 **Endpoint config** — production works without an override.
 - `login` reads `--api-url <url>`, then `ACTUAL_AUTH_URL`, then defaults to `https://app.actual.ai`.
-- `advisor` reads `--api-url <url>`, then `ACTUAL_API_URL`, then defaults to `https://api-service.api.prod.actual.ai`.
 - OAuth `client_id`/scopes default to `actual-cli` and `openid profile offline_access adr:query adr:review` (override via `ACTUAL_OAUTH_CLIENT_ID` / `ACTUAL_OAUTH_SCOPES`).
 
 ### login — interactive; hand off to the human
@@ -108,39 +114,7 @@ actual logout
 
 Best-effort server-side token revoke, then always clears local credentials. Safe and non-interactive.
 
-### advisor — non-interactive, async query
-
-`actual advisor "<question>"` asks an architecture question. It is **agent-friendly** (no TTY required): it starts an async job, polls to completion, and prints a plain-text summary followed by the related ADRs. Progress ("advisor thinking…") goes to stderr; the answer goes to stdout.
-
-```bash
-actual advisor "How should I handle database access in a new service?"
-
-# point at a local/staging endpoint — one export steers it; --api-url overrides
-ACTUAL_API_URL=https://your-advisor-endpoint actual advisor "…"
-
-# released v0.2.0: scope by connected-repository UUID
-actual advisor "…" --repo <repo-uuid>
-
-# newer builds only; verify these flags with `actual advisor --help`
-actual advisor "…" --repo actual-software/actual-cli
-actual advisor --show-scope
-actual advisor --repo none
-actual advisor --repo auto
-```
-
-Requires a valid signed-in session — `NotLoggedIn` (exit `2`) means run `login` first. The advisor transparently refreshes an expired token before the call. Output is human-readable text today (no `--json` flag yet).
-
-Scope behavior is version-dependent:
-
-- Released v0.2.0 accepts only a connected-repository UUID; omitting `--repo`
-  uses organization scope.
-- Newer builds may accept a name or `owner/name`, remember a per-working-tree
-  scope, auto-detect from `origin`, and expose `--show-scope`, `--repo none`,
-  and `--repo auto`.
-
-Always inspect `actual advisor --help` before using the newer scope workflow.
-
-> For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
+> For the full OAuth flow, scopes and multi-org selection, see `references/platform-advisor.md`.
 
 ## Plan- and Implementation-Stage Governance (Claude Code hooks)
 
@@ -691,6 +665,46 @@ The CLI auto-selects a runner from the model name:
 
 > For deep runner details (install steps, compatibility, special behaviors), see `references/runner-guide.md`.
 
+## adr-bot and the Advisor (on request)
+
+Run `actual adr-bot` only when the user asks for it, or for ADR guidance written into `CLAUDE.md`, `AGENTS.md` or Cursor rules, and `actual advisor` only when the user asks for the Advisor. Neither is part of governance. Their full reference is in the actual-cli docs: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md. The adr-bot workflow follows in Non-Interactive Environments, Sync Quick Reference and Operational Workflow: Running Sync, with its files in Output Formats.
+
+**Endpoint config** — `advisor` reads `--api-url <url>`, then `ACTUAL_API_URL`, then defaults to `https://api-service.api.prod.actual.ai`.
+
+### advisor — non-interactive, async query
+
+`actual advisor "<question>"` asks an architecture question. It is **agent-friendly** (no TTY required): it starts an async job, polls to completion, and prints a plain-text summary followed by the related ADRs. Progress ("advisor thinking…") goes to stderr; the answer goes to stdout.
+
+```bash
+actual advisor "How should I handle database access in a new service?"
+
+# point at a local/staging endpoint — one export steers it; --api-url overrides
+ACTUAL_API_URL=https://your-advisor-endpoint actual advisor "…"
+
+# released v0.2.0: scope by connected-repository UUID
+actual advisor "…" --repo <repo-uuid>
+
+# newer builds only; verify these flags with `actual advisor --help`
+actual advisor "…" --repo actual-software/actual-cli
+actual advisor --show-scope
+actual advisor --repo none
+actual advisor --repo auto
+```
+
+Requires a valid signed-in session — `NotLoggedIn` (exit `2`) means run `login` first. The advisor transparently refreshes an expired token before the call. Output is human-readable text today (no `--json` flag yet).
+
+Scope behavior is version-dependent:
+
+- Released v0.2.0 accepts only a connected-repository UUID; omitting `--repo`
+  uses organization scope.
+- Newer builds may accept a name or `owner/name`, remember a per-working-tree
+  scope, auto-detect from `origin`, and expose `--show-scope`, `--repo none`,
+  and `--repo auto`.
+
+Always inspect `actual advisor --help` before using the newer scope workflow.
+
+> For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
+
 ## Non-Interactive Environments
 
 This skill runs inside coding agents (Claude Code, Codex, Cursor) where the Bash tool does **not** provide a TTY. The CLI's TUI prompts and confirmation dialogs will fail with `TerminalIOError` unless disabled.
@@ -885,7 +899,8 @@ Load these only when you need deeper detail on a specific topic:
 
 ## Additional Resources
 
-For anything not covered by this skill or its reference files, fetch the full CLI documentation:
+For anything not covered by this skill or its reference files, fetch the CLI documentation:
 
-- **Full docs (Markdown)**: https://cli.actual.ai/docs.md — complete command reference, all flags, runners, output formats, config keys, and troubleshooting
+- **Full docs (Markdown)**: https://cli.actual.ai/docs.md — the command reference for the checks, `rules`, `check-override` and sign-in, with flags, runners, config keys, and troubleshooting
 - **LLM summary**: https://cli.actual.ai/llms.txt — concise machine-readable overview
+- **adr-bot and the Advisor**: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md — their full reference
