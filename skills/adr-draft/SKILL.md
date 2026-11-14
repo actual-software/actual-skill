@@ -101,7 +101,7 @@ Negative:
 Rules each ADR must follow:
 
 1. One `# ` title, on one line.
-2. At least one `## Context` bullet saying why the decision is needed. Actual AI refuses a decision without context.
+2. At least one `## Context` bullet saying why the decision is needed.
 3. A `## Decision` section with at least one numbered policy, `N. LEVEL: statement`, numbered from 1.
 4. LEVEL is exactly one of `MUST`, `MUST_NOT`, `SHOULD`, `SHOULD_NOT` or `MAY`. Nothing else goes between the number and the colon: in `MUST ALWAYS: …` the CLI reads the level as `MUST` and `ALWAYS:` as part of the statement.
 5. One policy per line, each a single directive someone could check against code. Narrative goes in the Context bullets.
@@ -184,10 +184,11 @@ actual adr create --file <decision_file> --json
 
 Push one file per command, and read each result before the next:
 
-- **Exit 0.** `adr_id` is the decision's id in Actual AI and `status` how it was saved. `files.renamed` lists the pair's new names, the ones the sync uses, so the next sync pull request updates these files instead of adding a copy. `local_status_was` appears when the local status changed.
-- **Exit 1.** Nothing was sent: the decision failed a check, or it looks like one the repository already has, and the error names the match. Re-run with `--allow-duplicate` only when the person says to, or when they already chose to keep this ADR after seeing that same match in the check. Show any other match and ask.
+- **Exit 0.** `adr_id` is the decision's id in Actual AI and `status` how it was saved. `files.renamed` lists the pair's new names, the ones the sync uses, so the next sync pull request updates these files instead of adding a copy. `local_status_was` appears when the local status changed. When setting the scope in the file's header or publishing an accepted save failed, the decision stays a saved draft, `status` reads `draft`, and `scope_problem` or `publish_problem` gives the command that finishes the job: show it to the person.
+- **Exit 1.** Nothing was saved: the file didn't parse, Actual AI refused its content and the error lists the reasons, or it looks like one the repository already has and the error names the match. Re-run with `--allow-duplicate` only when the person says to, or when they already chose to keep this ADR after seeing that same match in the check. Show any other match and ask.
 - **Exit 2.** Signed out, no access to the organization, or no connected repository for the checkout's `origin` remote. Hand the sign-in back to the person, or ask which connected repository to use and pass `--repo <name, owner/name or id>`.
 - **Exit 3, saying the decision may have been saved.** Don't run `create` again: a second run can save a second copy. Run `actual adr list --json` and look for the title first.
+- **Any other exit 3.** Actual AI couldn't be reached or answered with an error, and the message says which. Tell the person, and offer to try again later.
 
 Report each pushed ADR's id, its status and its files' new paths, and for a draft, how to publish it.
 
