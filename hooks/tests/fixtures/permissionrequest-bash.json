@@ -1,0 +1,25 @@
+{
+  "session_id": "test-session-bash",
+  "transcript_path": "__FIXTURE_DIR__/transcript-plan-inline.jsonl",
+  "cwd": "__REPO_ROOT__",
+  "permission_mode": "default",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "rm -rf node_modules",
+    "description": "Remove node_modules directory"
+  },
+  "permission_suggestions": [
+    {
+      "type": "addRules",
+      "rules": [
+        {
+          "toolName": "Bash",
+          "ruleContent": "rm -rf node_modules"
+        }
+      ],
+      "behavior": "allow",
+      "destination": "localSettings"
+    }
+  ]
+}
