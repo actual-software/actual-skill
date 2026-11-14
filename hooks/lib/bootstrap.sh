@@ -1026,3 +1026,195 @@ render_stop_verdict() {
     fi
   fi
 }
+
+# --- PermissionRequest output (plan-approval.sh) ---
+
+# True when unattended mode is on: ACTUAL_UNATTENDED=on, or, with the variable
+# unset, the plugin's `unattended` row under /plugin, which Claude Code exports
+# to every hook as CLAUDE_PLUGIN_OPTION_UNATTENDED. The variable wins over the
+# row in both directions, as it does for every other setting. Off by default.
+unattended_on() {
+  case "${ACTUAL_UNATTENDED:-}" in
+    on) return 0 ;;
+    off) return 1 ;;
+  esac
+  [ "${CLAUDE_PLUGIN_OPTION_UNATTENDED:-}" = "true" ]
+}
+
+# Print the raw JSON text of member $2's value in the JSON object $1, and fail
+# when $1 is not an object or has no such member at its top level. Like
+# extract_json_string_field, a quote-aware byte scan rather than a parse: it
+# finds where the value starts and ends and never decodes it, so the text comes
+# back exactly as it appeared, escapes included, and a nested object is still
+# valid JSON. A member name spelled with an escape doesn't match, and a
+# duplicate name returns its first value. Neither occurs in the envelopes Claude
+# Code writes; both fail safe here, as "member not found".
+#
+# A plan can run to hundreds of kilobytes, and bash rereads the whole string for
+# every ${s:i:1} or pattern removal on it, so a byte-at-a-time walk is quadratic.
+# Instead $1 is split once on double quotes, by word splitting, which runs in C.
+# The pieces alternate between structure and string content, except where a
+# quote is escaped: a piece ending in an odd number of backslashes. Only the short
+# structure pieces are walked byte by byte; string content is only checked for
+# the backslashes at its end.
+json_member_value() {
+  local LC_ALL=C IFS='"'
+  local name="$2" glob_was_off=0
+  case $- in *f*) glob_was_off=1 ;; esac
+  set -f
+  local -a p
+  p=($1)
+  [ "$glob_was_off" -eq 1 ] || set +f
+
+  # expect, at the top level: open, key, colon, value, then comma; nested or
+  # literal while a value is being crossed.
+  local n=${#p[@]} k=0 j len c piece bs depth=0 expect=open in_str=0
+  local key="" key_from=0 value_from=0 value_at=0
+  while [ "$k" -lt "$n" ]; do
+    piece=${p[$k]}
+    len=${#piece}
+    if [ "$in_str" -eq 1 ]; then
+      # String content. The quote after it is escaped when the piece ends in an
+      # odd number of backslashes, and then the string goes on.
+      bs=0
+      while [ "$bs" -lt "$len" ] && [ "${piece:$((len - bs - 1)):1}" = '\' ]; do
+        bs=$((bs + 1))
+      done
+      if [ $((bs % 2)) -eq 0 ]; then
+        in_str=0
+        if [ "$depth" -eq 1 ] && [ "$expect" = key ]; then
+          key=$(_json_join_pieces "$key_from" "$k")
+          expect=colon
+        elif [ "$depth" -eq 1 ] && [ "$expect" = value ]; then
+          if [ "$key" = "$name" ]; then
+            printf '"%s"' "$(_json_join_pieces "$value_from" "$k")"
+            return 0
+          fi
+          expect=comma
+        fi
+      fi
+      k=$((k + 1))
+      continue
+    fi
+
+    # Structure between strings: brackets, colons, commas, white space and bare
+    # literals.
+    j=0
+    while [ "$j" -lt "$len" ]; do
+      c=${piece:$j:1}
+      if [ "$expect" = literal ]; then
+        case "$c" in
+          ' '|$'\t'|$'\n'|$'\r'|','|'}'|']')
+            if [ "$key" = "$name" ]; then
+              printf '%s' "${piece:$value_at:$((j - value_at))}"
+              return 0
+            fi
+            expect=comma
+            ;;
+          *) j=$((j + 1)); continue ;;
+        esac
+      fi
+      case "$c" in
+        ' '|$'\t'|$'\n'|$'\r') ;;
+        '{'|'[')
+          if [ "$depth" -eq 0 ]; then
+            [ "$c" = '{' ] && [ "$expect" = open ] || return 1
+            expect=key
+          elif [ "$depth" -eq 1 ]; then
+            [ "$expect" = value ] || return 1
+            value_from=$k value_at=$j expect=nested
+          fi
+          depth=$((depth + 1))
+          ;;
+        '}'|']')
+          if [ "$depth" -eq 1 ]; then
+            # The end of the object, after a member or at an empty one, without
+            # the member.
+            return 1
+          fi
+          depth=$((depth - 1))
+          if [ "$depth" -eq 1 ]; then
+            if [ "$key" = "$name" ]; then
+              _json_print_span "$value_from" "$value_at" "$k" "$j"
+              return 0
+            fi
+            expect=comma
+          fi
+          ;;
+        ':')
+          if [ "$depth" -eq 1 ]; then
+            [ "$expect" = colon ] || return 1
+            expect=value
+          fi
+          ;;
+        ',')
+          if [ "$depth" -eq 1 ]; then
+            [ "$expect" = comma ] || return 1
+            expect=key
+          fi
+          ;;
+        *)
+          if [ "$depth" -eq 1 ]; then
+            [ "$expect" = value ] || return 1
+            value_at=$j expect=literal
+          elif [ "$depth" -eq 0 ]; then
+            return 1
+          fi
+          ;;
+      esac
+      j=$((j + 1))
+    done
+
+    # A quote follows every piece but the last, and opens a string. At the top
+    # level only a key or a value may start there.
+    [ "$k" -lt $((n - 1)) ] || return 1
+    case "$depth:$expect" in
+      1:key) key_from=$((k + 1)) ;;
+      1:value) value_from=$((k + 1)) ;;
+      0:*|1:*) return 1 ;;
+    esac
+    in_str=1
+    k=$((k + 1))
+  done
+  return 1
+}
+
+# The text of pieces $1 through $2 of json_member_value's array, with the
+# quotes between them put back: everything inside one string. One printf per
+# piece, because bash 3.2 turns an empty element of an array slice such as
+# "${p[*]:1:3}" into a \177 byte.
+_json_join_pieces() {
+  local i=$1
+  printf '%s' "${p[$i]}"
+  while [ "$i" -lt "$2" ]; do
+    i=$((i + 1))
+    printf '"%s' "${p[$i]}"
+  done
+}
+
+# The text from byte $2 of piece $1 through byte $4 of piece $3, quotes
+# between pieces put back: one nested value of json_member_value's array.
+_json_print_span() {
+  local i=$1
+  if [ "$1" -eq "$3" ]; then
+    printf '%s' "${p[$1]:$2:$(($4 - $2 + 1))}"
+    return 0
+  fi
+  printf '%s' "${p[$1]:$2}"
+  while [ "$i" -lt $(($3 - 1)) ]; do
+    i=$((i + 1))
+    printf '"%s' "${p[$i]}"
+  done
+  printf '"%s' "${p[$3]:0:$(($4 + 1))}"
+}
+
+# The answer that approves a plan: allow, with updatedInput. Claude Code ignores
+# an allow for ExitPlanMode that has no updatedInput and shows the dialog anyway,
+# and updatedInput replaces the tool's whole input, so $1 is the request's own
+# tool_input, as raw JSON text from json_member_value. It is already valid JSON
+# and must not go through json_escape. Nothing else goes with it: Claude Code
+# 2.1.287 and 2.1.322 show no systemMessage from this event, and the transcript
+# already reads "Allowed by PermissionRequest hook".
+emit_plan_approval() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":%s}}}\n' "$1"
+}

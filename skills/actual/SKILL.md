@@ -126,6 +126,7 @@ repository. They are registered automatically on install — there is no manual 
 |------|-------|--------------|
 | `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight, silent and without running the CLI unless the repository has rules. It reports whether the `actual` CLI is installed, and compares `actual --version` with the minimum the plugin declares (`MIN_CLI_VERSION` in `hooks/lib/bootstrap.sh`). On an older CLI it asks the agent to offer the upgrade: the command `actual version --json` names for the channel that installed it, when it is one of the two commands actual-cli uses, the actual-releases page for a CLI installed some other way, or both the npm and Homebrew commands otherwise. Below `GATES_MIN_CLI_VERSION`, where a check stops running in full, the offer interrupts the task when the session starts (`startup`), and every later SessionStart repeats the news with the offer at a pause, asking the agent not to repeat it after a no. From that floor up it follows the report that governance is active, at a pause. A CLI whose `actual --version` fails runs no check, so it interrupts with the npm and Homebrew reinstall commands instead. The install and reinstall offers interrupt at every SessionStart, and ask the agent not to repeat them after a no. Each CLI call gets `CLI_CALL_TIMEOUT` seconds, and a `--version` that takes longer prompts nothing. When the rule files carry a YAML header (ADR header v2) and the CLI is too old to read it, it reports that instead (see "ADR header v2 rule files"). Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
+| `hooks/plan-approval.sh` | `PermissionRequest` on `ExitPlanMode` | Unattended mode only (`ACTUAL_UNATTENDED=on`, or the `unattended` row under `/plugin`): answers Claude Code's plan dialog with allow and the request's `tool_input` echoed back as `updatedInput`, so an agent nobody is watching is not held there. It runs after `plan-gate.sh`, which has already denied a conflicting plan, and approves in any repository, rules or not. Silent, which leaves the dialog in place, whenever the switch is off or `ACTUAL_PLAN_GATE=off` |
 | `hooks/turn-start.sh` | `UserPromptSubmit` | Marks where each turn starts: runs `actual impl-check --claude-hook`, which on a `UserPromptSubmit` envelope records `HEAD` for the session, so the `Stop` check also covers work the agent commits, or commits and pushes, during the turn. Silent on every path, since this event's stdout is added to the prompt. Without it, the check diffs against `HEAD`. The dispatch needs CLI 0.7.0 or later, and on an older CLI the call would run a full check on every prompt, so the hook first checks that `actual impl-check --help` names `UserPromptSubmit` and does nothing when it doesn't |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes plus untracked, non-ignored files, against the commit `turn-start.sh` recorded when the turn began, or `HEAD` when none was) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
 | `hooks/rules-brief.sh` | `PostToolUse` on `Read`, `PreToolUse` on `Edit\|Write` | Read-time briefing (AK-793) and the write-time reminder (AK-794), for versions of Claude Code that cannot load a mod. Hands the envelope to `actual rules brief --claude-hook` and forwards only an allowlisted `additionalContext` reply naming the event it was called for. Advisory: never denies, never decides, silent on any failure; on `PreToolUse` it names no `permissionDecision`, so the normal permission flow is unchanged. **Where the mod loads it stands down**: the mod passes `classic.PostToolUse` (Read) on with an `actual_rules_brief_by_mod` marker, and for Edit and Write sets `ACTUAL_SKILL_MOD_SESSION` to its session id before the hook runs, which the hook inherits and stands down on when it matches its own `session_id`. The mod writes no files. Edit and Write cannot carry a marker: the tool's arguments are what the permission check judges, and auto mode refuses to judge a Write with a field it does not know. Either way the brief is delivered once, by the path that also has a budget and a record, and every other hook on those events still runs. It has no budget, no session cap and none of the four limits below: it forwards none of them |
@@ -212,6 +213,12 @@ Claude Code 2.1.231 an `allow` does not actually bypass the plan-approval dialog
 Claude Code logs `Hook returned 'allow' for ExitPlanMode, but ask rule/safety check
 requires full permission pipeline` and prompts the user anyway — but that safety
 check is undocumented, so the wrapper drops an `allow` verdict rather than rely on it.
+The plugin's one approval is `plan-approval.sh`'s, given only once the user turns on
+unattended mode. It answers Claude Code's `PermissionRequest` for `ExitPlanMode`, after
+the gate has run, with allow plus `updatedInput` set to the request's own `tool_input`:
+the form Claude Code's hooks guide documents for this dialog, which ignores an allow
+without `updatedInput`. Measured on 2.1.287 and 2.1.322, it approves with no dialog and
+the session returns to the permission mode it had before planning.
 
 ### ADR header v2 rule files
 
@@ -318,12 +325,13 @@ place that distinction is applied.
 
 | Variable | Effect |
 |----------|--------|
-| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, `turn-start.sh`, `rules-brief.sh`, `session-end.sh` and `preflight.sh`, including its minimum-version check) |
+| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `plan-approval.sh`, `impl-gate.sh`, `turn-start.sh`, `rules-brief.sh`, `session-end.sh` and `preflight.sh`, including its minimum-version check) |
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). The governance checks and briefing forward the resolved path to the CLI as `--rules-dir`; `session-end.sh` uses it only to check applicability. `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_TURN_START_LOG` | Path of a file `turn-start.sh` appends the CLI's output and exit status to, for diagnosing a turn-start record that is never written, or a `skipped` line when the CLI has no `UserPromptSubmit` dispatch. Unset by default, which keeps the hook fully silent; set, the hook is still silent on stdout and stderr |
 | `ACTUAL_IMPL_CHECK_MAX_ROUNDS` | Override `impl-check --claude-hook`'s round limit (default 3) |
-| `ACTUAL_OVERRIDE_DIALOG=off` | Stop the mod asking the user how to handle a `plan-check` or `impl-check` denial: the agent reads the denial as the CLI wrote it and revises on its own. A typed `/actual-cli:override` still works. On by default; `=on` forces it on over the `overrideDialog` row |
+| `ACTUAL_OVERRIDE_DIALOG=off` | Stop the mod asking the user how to handle a `plan-check` or `impl-check` denial: the agent reads the denial as the CLI wrote it and revises on its own. A typed `/actual-cli:override` still works. On by default; `=on` forces it on over the `overrideDialog` row, except in unattended mode, which always turns it off |
+| `ACTUAL_UNATTENDED=on` | Unattended mode, for an agent nobody is watching: `plan-approval.sh` approves every plan that reaches Claude Code's plan dialog, which is a plan `plan-gate.sh` passed or could not check, in any repository; the mod's denial dialog is off whatever `ACTUAL_OVERRIDE_DIALOG` says. Off by default; `=off` forces it off over the `unattended` row. Never set it where a person reviews plans |
 | `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the mod — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
 | `ACTUAL_CLI_SUBPROCESS=1` | Set by actual-cli on the nested `claude -p` it runs as its conformance judge. Every hook and the mod exit silently when it is set: without it the judge's own `Stop` hook reruns `impl-check` and recurses, and briefing would inject rules into the judge's prompt that it was never asked to weigh |
 | `ACTUAL_HOOK_DEBUG=1` | Report what briefing did, on stderr for the hook and in the transcript plus the model's context for the mod, which also adds a note when it does not brief: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |
@@ -332,9 +340,11 @@ place that distinction is applied.
 
 The briefing limits (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, `_LIMIT`,
 `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`), `ACTUAL_OVERRIDE_DIALOG`
-(as `overrideDialog`) and `debug` also appear as
-labelled `userConfig` rows under `/plugin`; the other variables have none, and
-all of them are read by the mod only. An environment variable wins over its
+(as `overrideDialog`), `ACTUAL_UNATTENDED` (as `unattended`) and `debug` also
+appear as labelled `userConfig` rows under `/plugin`; the other variables have
+none. The mod reads all of the rows, and `plan-approval.sh` also reads
+`unattended`, from the `CLAUDE_PLUGIN_OPTION_UNATTENDED` that Claude Code
+exports to every hook once the row has a value. An environment variable wins over its
 row: the row is the durable preference, the variable is the override for one
 session. The exception is `debug`, which is ORed with `ACTUAL_HOOK_DEBUG`
 rather than overridden by it.
@@ -624,8 +634,8 @@ bash hooks/tests/run.sh
 ```
 
 Runs the full decision matrix (no-op, missing binary, old CLI, pass, deny, crash)
-against recorded hook payloads and a fake CLI, for both `plan-gate.sh` and
-`impl-gate.sh`. No network and no real `actual` install required.
+against recorded hook payloads and a fake CLI, for `plan-gate.sh`, `plan-approval.sh`
+and `impl-gate.sh`. No network and no real `actual` install required.
 
 ## Runner Decision Tree
 
