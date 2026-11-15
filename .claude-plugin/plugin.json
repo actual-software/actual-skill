@@ -55,6 +55,12 @@
       "title": "Governance: ask how to handle a denial",
       "default": true,
       "description": "When plan-check or impl-check denies, ask in a dialog whether to revise or override the blocking rules. Turn off to let the agent revise on its own without asking; /actual-cli:override still works. ACTUAL_OVERRIDE_DIALOG=off or =on wins over this setting."
+    },
+    "unattended": {
+      "type": "boolean",
+      "title": "Governance: approve plans for an unattended agent",
+      "default": false,
+      "description": "Answer Claude Code's plan dialog for the agent, so a session nobody is watching never waits on it. The plan check still runs first: a conflicting plan is denied and revised, and only a plan it passes (or could not check) is approved. Also turns off the denial dialog, whatever the row above says. Approves in any repository while on. ACTUAL_UNATTENDED=on or =off wins over this setting."
     }
   }
 }

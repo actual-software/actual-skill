@@ -365,6 +365,35 @@ test('ACTUAL_OVERRIDE_DIALOG=on asks, as the default does', async ($, on) => {
   expect(w.asked.length).toBe(1)
 })
 
+test('ACTUAL_UNATTENDED=on: no dialog at either gate, even with ACTUAL_OVERRIDE_DIALOG=on', async ($, on) => {
+  const deny = denyText(['R-AUTH-001'])
+  const block = denyText(['R-HDR-001'], 'A revised change is re-checked automatically.')
+  const w = world(on, {
+    planDeny: () => deny,
+    stopBlock: () => block,
+    blocking: keys('R-AUTH-001'),
+    env: { ACTUAL_UNATTENDED: 'on', ACTUAL_OVERRIDE_DIALOG: 'on' },
+  })
+  const r: any = await exitPlan($)
+  expect(r.text).toBe(deny)
+  const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(out.block).toBe(block)
+  expect(w.asked).toEqual([])
+  expect(w.overrides).toEqual([])
+})
+
+test('ACTUAL_UNATTENDED=on leaves a typed override working', async ($, on) => {
+  const w = world(on, { env: { ACTUAL_UNATTENDED: 'on' } })
+  await $.prompt.submit({ text: '/actual-cli:override R-AUTH-001', wait: false, origin: { kind: 'composer' } } as any)
+  expect(w.overrides.map(o => o.prompt)).toEqual(['/actual-cli:override R-AUTH-001'])
+})
+
+test('ACTUAL_UNATTENDED=off asks, as the default does', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: [null], env: { ACTUAL_UNATTENDED: 'off' } })
+  await exitPlan($)
+  expect(w.asked.length).toBe(1)
+})
+
 test('the implementation gate asks about the changes, and an override lets the turn end', async ($, on) => {
   const w = world(on, {
     stopBlock: () => denyText(['R-HDR-001', 'R-ADR-001'], 'A revised change is re-checked automatically.'),
