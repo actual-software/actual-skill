@@ -26,9 +26,9 @@ command -v actual && actual adr --help
 ```
 
 - **No `actual` on `PATH`.** Offer to install it (`npm install -g @actualai/actual`, or `brew install actual-software/actual/actual`) with an interactive question tool such as `AskUserQuestion`, and wait for the answer before going on.
-- **`actual adr --help` fails.** The CLI predates the ADR commands: it answers `unrecognized subcommand 'adr'` and suggests `adr-bot`, a different command that writes agent guidance files. Offer the upgrade the same way: `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
+- **`actual adr --help` fails.** The CLI predates the ADR commands, which arrived in 0.14.0: it answers `unrecognized subcommand 'adr'` and suggests `adr-bot`, a different command that writes agent guidance files. Offer the upgrade the same way: `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
 
-Without a CLI that has `actual adr` you can still draft ADRs and show them, but write nothing: only the CLI writes them in the layout the checks read.
+Without a CLI that has `actual adr` (0.14.0 or later) you can still draft ADRs and show them, but write nothing: only the CLI writes them in the layout the checks read.
 
 ## Scope
 

@@ -132,7 +132,7 @@ Best-effort server-side token revoke, then always clears local credentials. Safe
 
 ## ADR commands
 
-`actual adr` writes and checks ADRs in the repository and manages the organization's decisions in Actual AI. `new` and `check` work on local files with no sign-in. The other ten need `login`, and exit `2` with `Fix: actual login` when nobody is signed in. Every command takes `--json` and prints its result as JSON on stdout, with errors on stderr. CLIs released before these commands don't have them, so check `actual adr --help` first. To draft a new ADR from the code or a conversation, use the plugin's `adr-draft` skill, which runs `new`, `check` and `create` with the user choosing at each step.
+`actual adr` writes and checks ADRs in the repository and manages the organization's decisions in Actual AI. `new` and `check` work on local files with no sign-in. The other ten need `login`, and exit `2` with `Fix: actual login` when nobody is signed in. Every command takes `--json` and prints its result as JSON on stdout, with errors on stderr. They arrived in 0.14.0, and an older CLI doesn't have them, so check `actual adr --help` first. To draft a new ADR from the code or a conversation, use the plugin's `adr-draft` skill, which runs `new`, `check` and `create` with the user choosing at each step.
 
 ### adr new — local; no sign-in
 
