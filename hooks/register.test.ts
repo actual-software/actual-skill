@@ -178,6 +178,10 @@ function harness(
     if (e.argv?.[0] === 'git') {
       return { value: { exitCode: 0, stdout: `${opts.gitRoot ?? opts.root ?? '/repo'}\n`, stderr: '' } };
     }
+    // Nor is the count a brief refreshes once it has briefed something.
+    if (e.argv?.[1] === 'session') {
+      return { value: { exitCode: 0, stdout: '{"line":null}', stderr: '' } };
+    }
     runs.push(e);
     if (opts.rejectBrief?.(++briefSpawns)) throw new Error('timed out');
     const cli = typeof opts.cli === 'function' ? opts.cli() : opts.cli;
@@ -738,11 +742,14 @@ test('moving into a worktree after the session starts briefs from the worktree',
   await clock.settle();
   dir = '/repo/.claude/worktrees/x';
   await fire.tool.call({ tool: 'Bash', command: 'cat src/a.ts' });
+  await clock.settle();
 
-  // The count did read first, against the checkout the session started in.
+  // The count did read first, against the checkout the session started in, and
+  // the brief's own refresh counts against the worktree it was filed under.
   const summaries = spawns.filter((s: any) => s.argv[1] === 'session');
-  expect(summaries.length).toBe(1);
+  expect(summaries.length).toBe(2);
   expect(summaries[0].argv).toContain('/repo/.actual/rules');
+  expect(summaries[1].argv).toContain('/repo/.claude/worktrees/x/.actual/rules');
   const briefs = spawns.filter((s: any) => s.argv[1] === 'rules' && !s.argv.includes('--help'));
   expect(briefs.length).toBe(1);
   expect(briefs[0].argv).toEqual([

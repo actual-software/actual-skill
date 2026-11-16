@@ -79,6 +79,25 @@
 // work. The Bash write path stays unbriefed: a shell write names its file
 // inside an arbitrary command string, and the Stop gate covers it.
 
+// The dialog a gate's denial raises, and the recording of a typed override, live
+// in their own file; a plugin loads one hooks module, so the hooks that use
+// them are registered here.
+import {
+  offersOverride,
+  blockingCall,
+  parseBlocking,
+  denialQuestion,
+  readAnswer,
+  REASON_QUESTION,
+  readReason,
+  overridePrompt,
+  overrideCall,
+  parseOverrideRun,
+  overrideOutcome,
+  isTypedOverride,
+  typedOverrideLine,
+} from './override-dialog.js';
+
 // --- Path extraction ---------------------------------------------------
 //
 // What this has to get right, measured against the 35 Bash calls of one real
@@ -1087,6 +1106,13 @@ async function deliverBrief($, e, result, paths, ctx) {
     spend(sessionId, appended.length);
   }
 
+  // The CLI recorded every brief it returned, the withheld one included, so the
+  // count can have moved. A plan is a single turn, so turn.complete is too late.
+  // It also records an ungoverned file's folder, which can move the areas
+  // clause; most reads are ungoverned, so those refreshes are coalesced.
+  if (briefedFiles.length || exhausted) void refreshCount($);
+  else if ([...reasons.values()].includes('ungoverned')) refreshAreas($, sessionId);
+
   if (appended) {
     // One record for the call, merging what each file contributed.
     recordOutcome(sessionId, e.tool_use_id, {
@@ -1268,8 +1294,9 @@ function paneRows(elements, sessionId) {
 // AI: 3 of 12 ADRs added to context · 2 areas with no ADR", drawn exactly as
 // the CLI gives it in the band above the prompt, so the model never reads it.
 //
-// Read in the background at session start, after each main-loop turn, and on
-// /clear, compaction, resume and fork. Nothing waits on the CLI, and a call
+// Read in the background at session start, after each read or write that
+// briefs something or reaches an ungoverned file, after each main-loop turn,
+// and on /clear, compaction, resume and fork. Nothing waits on the CLI, and a call
 // that fails or outlasts SPAWN_TIMEOUT_MS keeps the line already shown.
 
 // Per session: the line its band shows, and the refresh that set it. An
@@ -1302,7 +1329,7 @@ async function sessionSummary($, sessionId, rulesDir, repoRoot) {
 // one leaves the newer line, and the band is asked to redraw only when its
 // line changes, because a render answer is cached until
 // $.ui.invalidate.
-async function refreshCount($) {
+async function refreshCount($, onSpawn) {
   const ticket = ++countRefreshes;
   try {
     if ((await $.env.get('ACTUAL_CLI_SUBPROCESS')) === '1') return;
@@ -1312,6 +1339,7 @@ async function refreshCount($) {
     let text;
     if (rulesDir) {
       const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+      onSpawn?.();
       const summary = await sessionSummary($, sessionId, rulesDir, repoRoot);
       if (!summary) return;
       text = summary.line || undefined;
@@ -1326,7 +1354,204 @@ async function refreshCount($) {
   }
 }
 
+// Per session: the refresh ungoverned reads asked for. A read that asks before
+// its CLI call starts is counted by that call; one that asks after queues a
+// single rerun, so a burst costs one spawn, or two when it straddles one.
+const areaRefreshes = new Map();
+
+function refreshAreas($, sessionId) {
+  const queued = areaRefreshes.get(sessionId);
+  if (queued) {
+    if (queued.spawned) queued.again = true;
+    return;
+  }
+  const state = { spawned: false, again: false };
+  areaRefreshes.set(sessionId, state);
+  void (async () => {
+    try {
+      do {
+        state.spawned = state.again = false;
+        await refreshCount($, () => (state.spawned = true));
+      } while (state.again);
+    } finally {
+      areaRefreshes.delete(sessionId);
+    }
+  })();
+}
+
+// The note of an override the user chose in the plan gate's dialog, by session,
+// until the ExitPlanMode call it let through returns and can carry it.
+const overrideNotes = new Map();
+
+// What the override dialog needs to record against the gates' own context: the
+// session, and the rules directory and repository root they checked against.
+// Null where governance is off or nothing is governed, as for the gates.
+async function overrideContext($) {
+  if ((await $.env.get('ACTUAL_CLI_SUBPROCESS')) === '1') return null;
+  if ((await $.env.get('ACTUAL_PLAN_GATE')) === 'off') return null;
+  const [cwd, sessionId] = await Promise.all([$.session.cwd(), $.session.id()]);
+  if (!sessionId) return null;
+  const rulesDir = await governedRulesDir($, sessionId, cwd);
+  if (!rulesDir) return null;
+  const repoRoot = await resolveRepoRoot($, sessionId, cwd);
+  return { sessionId, cwd, repoRoot, rulesDir };
+}
+
+// One `check-override --claude-hook` through the mod's own spawn, which the CLI
+// accepts and an agent's shell it refuses. Null when it recorded nothing.
+async function runOverride($, ctx, prompt, via, gate) {
+  try {
+    const { argv, init } = overrideCall(ctx, prompt, via, gate);
+    return parseOverrideRun(await $.process.run(argv, init));
+  } catch {
+    return null;
+  }
+}
+
+// Whether a denial raises the override dialog. On by default; the
+// `overrideDialog` userConfig row or ACTUAL_OVERRIDE_DIALOG turns it off, env
+// winning as for every other setting. Off, the agent reads the denial as the
+// CLI wrote it and revises on its own; a typed /actual-cli:override still works.
+// Unattended mode turns it off whatever those say, since nobody is there to
+// answer it.
+async function overrideDialogOn($, options) {
+  if (await unattendedOn($, options)) return false;
+  const env = await $.env.get('ACTUAL_OVERRIDE_DIALOG');
+  if (env === 'off') return false;
+  if (env === 'on') return true;
+  return options.overrideDialog !== false;
+}
+
+// Unattended mode, as plan-approval.sh reads it: ACTUAL_UNATTENDED=on or =off,
+// or the `unattended` userConfig row when the variable is unset. Off by default.
+async function unattendedOn($, options) {
+  const env = await $.env.get('ACTUAL_UNATTENDED');
+  if (env === 'on') return true;
+  if (env === 'off') return false;
+  return options.unattended === true;
+}
+
+// Asks the user about a gate's denial and records what they chose; see
+// override-dialog.js. Resolves to `{ pass, note }` or `{ text }`, and to the
+// denial untouched on any failure, either question dismissed, or the dialog
+// turned off.
+async function askAboutDenial($, gate, reason, options) {
+  if (!(await overrideDialogOn($, options))) return { text: reason };
+  if (!offersOverride(reason)) return { text: reason };
+  const ctx = await overrideContext($);
+  if (!ctx) return { text: reason };
+  // The rules to list come from the CLI's session state, not the deny text.
+  let keys = null;
+  try {
+    const { argv, init } = blockingCall(ctx, gate);
+    keys = parseBlocking(await $.process.run(argv, init));
+  } catch {
+    keys = null;
+  }
+  const q = denialQuestion(gate, reason, keys);
+  if (!q) return { text: reason };
+  let answer;
+  try {
+    answer = await $.ui.ask(q.question, { header: q.header, options: q.options });
+  } catch {
+    return { text: reason };
+  }
+  const read = readAnswer(q, answer);
+  if (!read.targets) return { text: read.text };
+  let why;
+  try {
+    why = readReason(await $.ui.ask(REASON_QUESTION.question, { header: REASON_QUESTION.header, options: REASON_QUESTION.options }));
+  } catch {
+    return { text: reason };
+  }
+  const answers = [];
+  for (const target of read.targets) {
+    answers.push(await runOverride($, ctx, overridePrompt(target, why), 'dialog', gate));
+  }
+  return overrideOutcome(q, read.targets, answers);
+}
+
 export function register(on, options = {}) {
+  // The plan gate is plan-gate.sh on PreToolUse:ExitPlanMode, and its answer is
+  // what next resolves to: a deny raises the override dialog
+  // (override-dialog.js). Every failure there leaves the answer as it was.
+  on('classic.PreToolUse', { tool: 'ExitPlanMode' }, async ($, e, next) => {
+    const r = await next(e);
+    if (typeof r?.deny !== 'string') return r;
+    try {
+      const settled = await askAboutDenial($, 'plan', r.deny, options);
+      if (settled.pass) {
+        // Every blocking rule overridden: the call goes on to the plan's
+        // approval. The agent is told by the tool.call hook below, since a
+        // PreToolUse answer's additionalContext did not reach the model once
+        // the call went on to the approval (probed on 2.1.287); the user by a
+        // transcript line.
+        if (settled.note) {
+          overrideNotes.set(await $.session.id(), settled.note);
+          $.ui.log(settled.note.replace('The user overrode', 'Overrode').replace(' in the override dialog', ' for this session'));
+        }
+        const { deny: _deny, ...rest } = r;
+        return rest;
+      }
+      return settled.text === r.deny ? r : { ...r, deny: settled.text };
+    } catch {
+      return r;
+    }
+  });
+
+  // Hands the agent the note of a dialog override with the plan's approval:
+  // a tool result's context is what the model reads after it.
+  on('tool.call', { tool: 'ExitPlanMode' }, async ($, e, next) => {
+    const r = await next(e);
+    try {
+      const sessionId = await $.session.id();
+      const note = overrideNotes.get(sessionId);
+      if (!note) return r;
+      overrideNotes.delete(sessionId);
+      if (r?.deny !== undefined || r?.isError || r?.result === undefined) return r;
+      return { ...r, context: [...(r.context ?? []), note] };
+    } catch {
+      return r;
+    }
+  });
+
+  // The implementation gate is impl-gate.sh on Stop; a block is its denial.
+  on('classic.Stop', async ($, e, next) => {
+    const r = await next(e);
+    if (typeof r?.block !== 'string') return r;
+    try {
+      const settled = await askAboutDenial($, 'impl', r.block, options);
+      if (settled.pass) {
+        // The turn ends with no tool result to carry a note, so only the user
+        // is told, by the same transcript line the plan path writes.
+        if (settled.note) {
+          $.ui.log(settled.note.replace('The user overrode', 'Overrode').replace(' in the override dialog', ' for this session'));
+        }
+        const { block: _block, ...rest } = r;
+        return rest;
+      }
+      return settled.text === r.block ? r : { ...r, block: settled.text };
+    } catch {
+      return r;
+    }
+  });
+
+  // A typed /actual-cli:override is recorded here, not by a settings hook: the
+  // CLI refuses to record one from anything carrying CLAUDECODE, which a
+  // settings hook does, as an agent's shell does. What the CLI says goes to the
+  // agent with the prompt, where commands/override.md tells it what to do.
+  on('prompt.submit', async ($, e, next) => {
+    if (!isTypedOverride(e)) return next(e);
+    try {
+      const ctx = await overrideContext($);
+      if (!ctx) return next(e);
+      const line = typedOverrideLine(await runOverride($, ctx, e.text, 'prompt'));
+      return next({ ...e, context: [...(e.context ?? []), line] });
+    } catch {
+      return next(e);
+    }
+  });
+
   on('session.start', async ($, e, next) => {
     // The count's first reading belongs here: at startup classic.SessionStart
     // fires before the session binds.

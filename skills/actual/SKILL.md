@@ -1,16 +1,19 @@
 ---
 name: actual
 description: >-
-  Feature-complete companion for the actual CLI, an ADR-powered
-  CLAUDE.md/AGENTS.md generator. Runs and troubleshoots actual adr-bot,
-  status, auth, config, runners, and models, plus the Actual AI platform
-  surface: login, logout, whoami, and advisor (org-scoped architecture
-  Q&A). Covers all 5 runners (claude-cli, anthropic-api, openai-api,
-  codex-cli, cursor-cli), all model patterns, all 3 output formats
-  (claude-md, agents-md, cursor-rules), and all error types. Use when
-  working with the actual CLI, running actual adr-bot, signing in to
-  Actual AI, asking the advisor, configuring runners or models,
-  troubleshooting errors, or managing output files.
+  Companion for the actual CLI's architecture governance. Runs and
+  troubleshoots plan-check and impl-check, which check a plan or a diff
+  against the ADR rules committed in .actual/rules/ (in Claude Code this
+  plugin runs them on every plan and every turn), the rules commands that
+  show which rules govern a file or a plan (rules ls, select, brief and
+  index), check-override, the human-only way to clear a denied rule, and
+  signing in with login, whoami and logout. Use when checking a plan or
+  changes against the repository's architecture rules, finding the rules
+  for a file, explaining a denial or how to override it, signing in to
+  Actual AI, installing or upgrading the CLI, configuring runners or
+  models, or troubleshooting the CLI and its hooks. Runs actual adr-bot
+  (CLAUDE.md, AGENTS.md and Cursor rules written from ADRs) and the
+  advisor (org-scoped architecture Q&A) only when the user asks for them.
 ---
 
 # actual CLI Companion
@@ -36,7 +39,7 @@ Install options (try in this order):
 
 For one-off use without installing globally:
 ```bash
-npx @actualai/actual adr-bot [flags]
+npx @actualai/actual <command> [flags]
 ```
 
 After installing (or after the user declines and installs it themselves), verify: `actual --version`
@@ -51,30 +54,33 @@ release.
 
 | Command | Purpose | Key Flags |
 |---------|---------|-----------|
-| `actual adr-bot` | Analyze repo, fetch ADRs, tailor, write output | `--dry-run [--full]`, `--force`, `--no-tailor`, `--project PATH`, `--model`, `--runner`, `--verbose`, `--reset-rejections`, `--max-budget-usd`, `--no-tui`, `--output-format`, `--show-errors` |
-| `actual status` | Check output file state | `--verbose` |
+| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
+| `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes plus untracked, non-ignored files) against the commit the turn started from when a `UserPromptSubmit` call recorded one, otherwise against `HEAD`. Direct mode also accepts `--diff-file` or piped stdin, and diffs the working tree against `HEAD` when neither is given. Never emit `permissionDecision: "allow"` |
+| `actual rules ls` | List the rule documents under `.actual/rules/`, and flag any that fail to parse | `[PATH]` (repository root, default the current directory), `--json` |
+| `actual rules select` | Select the rule documents that govern a plan, or a path with no plan | `[PLAN]...`, `--file <path>` (repeatable), `--repo <path>`, `--limit` (default 10), `--min-score`, `--by-adr` |
+| `actual rules brief` | The rules governing one file, as briefing delivers them | `--file <path>`, `--repo <path>`, `--rules-dir <dir>`, `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`; `--claude-hook` is the hooks' mode |
+| `actual rules index` | Build or refresh the scope index the checks and `rules select` prefilter with | `[PATH]`, `--rebuild`, `--clear`, `--json` |
+| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user picks an override in the dialog a denial raises, or types `/actual-cli:override <rule-id\|all> [code] [reason]` (a bare `/override` is an unknown command in Claude Code); the plugin's mod records either through `--claude-hook`, which refuses any process carrying `CLAUDECODE`, as every agent command does. The agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` required through v0.12.0, optional in later builds (verify with `actual check-override --help`); `--reason-code <code>` (0.14.0 or later) sets the code, one of `misread`, `not-here`, `adr-wrong`, `adr-outdated` or `accepted`, and a `--reason` without it is stored as `other`; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual login` | Sign in to Actual AI (browser OAuth) | `--org <id>`, `--api-url <url>`, `--no-browser` |
+| `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
+| `actual logout` | Sign out of Actual AI and clear local credentials | (none) |
+| `actual status` | Check the state of the files `adr-bot` writes | `--verbose` |
 | `actual auth` | Check the runner (coding-agent) auth status | (none) |
 | `actual config show` | Display current config | (none) |
 | `actual config set <key> <value>` | Set a config value | (none) |
 | `actual config path` | Print config file path | (none) |
 | `actual runners` | List available runners | (none) |
 | `actual models` | List known models by runner | (none) |
-| `actual login` | Sign in to Actual AI (browser OAuth) | `--org <id>`, `--api-url <url>`, `--no-browser` |
-| `actual logout` | Sign out of Actual AI and clear local credentials | (none) |
-| `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
-| `actual advisor "<query>"` | Ask the Advisor an architecture question | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 | `actual cache clear` | Clear local analysis and tailoring caches | (none) |
-| `actual plan-check` | Check an implementation plan against the rules in `.actual/rules/` | `--claude-hook`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual plan-check --help`). Resolve plan text in the order below; never emit `permissionDecision: "allow"` |
-| `actual impl-check` | Check a working-tree diff against the rules in `.actual/rules/` — plan-check's implementation-stage counterpart (AK-755) | `--claude-hook`, `--diff-file <path>`, `--rules-dir <dir>`, `--max-rounds` (newer builds only; verify with `actual impl-check --help`). `--claude-hook` always resolves the working-tree diff (tracked changes plus untracked, non-ignored files) against the commit the turn started from when a `UserPromptSubmit` call recorded one, otherwise against `HEAD`. Direct mode also accepts `--diff-file` or piped stdin, and diffs the working tree against `HEAD` when neither is given. Never emit `permissionDecision: "allow"` |
-| `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session (refuses to run non-interactively; never invoked by the agent). `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable), `--reason "<text>"` — all required; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual adr-bot` | On request only: analyze repo, fetch ADRs, tailor, write `CLAUDE.md`, `AGENTS.md` or Cursor rules | `--dry-run [--full]`, `--force`, `--no-tailor`, `--project PATH`, `--model`, `--runner`, `--verbose`, `--reset-rejections`, `--max-budget-usd`, `--no-tui`, `--output-format`, `--show-errors` |
+| `actual advisor "<query>"` | On request only: ask the Advisor an architecture question (needs `login`) | Released v0.2.0: `--org <uuid>`, `--repo <uuid>`, `--api-url <url>`; newer builds may add named/automatic scope |
 
-## Platform Identity & Advisor
+## Sign-in
 
-These commands talk to the **Actual AI platform** (your account/org) and are **separate from `actual auth`** — `actual auth` only checks the local coding-agent/runner (claude/codex/cursor) that `adr-bot` drives. `login`/`logout`/`whoami` manage your Actual AI platform identity; `advisor` asks organization- or repository-scoped architecture questions against it. (The runner/model sections below pertain to `adr-bot`, not to these.)
+These commands manage your **Actual AI platform** identity (your account/org) and are **separate from `actual auth`** — `actual auth` only checks the local coding-agent/runner (claude/codex/cursor) that the checks' judge and `adr-bot` drive. `plan-check`, `impl-check` and `rules` run signed out; `advisor` needs a sign-in. (The runner/model sections below pertain to the checks' judge and `adr-bot`, not to these.)
 
 **Endpoint config** — production works without an override.
 - `login` reads `--api-url <url>`, then `ACTUAL_AUTH_URL`, then defaults to `https://app.actual.ai`.
-- `advisor` reads `--api-url <url>`, then `ACTUAL_API_URL`, then defaults to `https://api-service.api.prod.actual.ai`.
 - OAuth `client_id`/scopes default to `actual-cli` and `openid profile offline_access adr:query adr:review` (override via `ACTUAL_OAUTH_CLIENT_ID` / `ACTUAL_OAUTH_SCOPES`).
 
 ### login — interactive; hand off to the human
@@ -108,39 +114,7 @@ actual logout
 
 Best-effort server-side token revoke, then always clears local credentials. Safe and non-interactive.
 
-### advisor — non-interactive, async query
-
-`actual advisor "<question>"` asks an architecture question. It is **agent-friendly** (no TTY required): it starts an async job, polls to completion, and prints a plain-text summary followed by the related ADRs. Progress ("advisor thinking…") goes to stderr; the answer goes to stdout.
-
-```bash
-actual advisor "How should I handle database access in a new service?"
-
-# point at a local/staging endpoint — one export steers it; --api-url overrides
-ACTUAL_API_URL=https://your-advisor-endpoint actual advisor "…"
-
-# released v0.2.0: scope by connected-repository UUID
-actual advisor "…" --repo <repo-uuid>
-
-# newer builds only; verify these flags with `actual advisor --help`
-actual advisor "…" --repo actual-software/actual-cli
-actual advisor --show-scope
-actual advisor --repo none
-actual advisor --repo auto
-```
-
-Requires a valid signed-in session — `NotLoggedIn` (exit `2`) means run `login` first. The advisor transparently refreshes an expired token before the call. Output is human-readable text today (no `--json` flag yet).
-
-Scope behavior is version-dependent:
-
-- Released v0.2.0 accepts only a connected-repository UUID; omitting `--repo`
-  uses organization scope.
-- Newer builds may accept a name or `owner/name`, remember a per-working-tree
-  scope, auto-detect from `origin`, and expose `--show-scope`, `--repo none`,
-  and `--repo auto`.
-
-Always inspect `actual advisor --help` before using the newer scope workflow.
-
-> For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
+> For the full OAuth flow, scopes and multi-org selection, see `references/platform-advisor.md`.
 
 ## Plan- and Implementation-Stage Governance (Claude Code hooks)
 
@@ -152,13 +126,14 @@ repository. They are registered automatically on install — there is no manual 
 |------|-------|--------------|
 | `hooks/preflight.sh` | `SessionStart` (`startup`, `resume`, `clear`, `compact`, `fork`) | Bootstrap preflight, silent and without running the CLI unless the repository has rules. It reports whether the `actual` CLI is installed, and compares `actual --version` with the minimum the plugin declares (`MIN_CLI_VERSION` in `hooks/lib/bootstrap.sh`). On an older CLI it asks the agent to offer the upgrade: the command `actual version --json` names for the channel that installed it, when it is one of the two commands actual-cli uses, the actual-releases page for a CLI installed some other way, or both the npm and Homebrew commands otherwise. Below `GATES_MIN_CLI_VERSION`, where a check stops running in full, the offer interrupts the task when the session starts (`startup`), and every later SessionStart repeats the news with the offer at a pause, asking the agent not to repeat it after a no. From that floor up it follows the report that governance is active, at a pause. A CLI whose `actual --version` fails runs no check, so it interrupts with the npm and Homebrew reinstall commands instead. The install and reinstall offers interrupt at every SessionStart, and ask the agent not to repeat them after a no. Each CLI call gets `CLI_CALL_TIMEOUT` seconds, and a `--version` that takes longer prompts nothing. When the rule files carry a YAML header (ADR header v2) and the CLI is too old to read it, it reports that instead (see "ADR header v2 rule files"). Re-runs after compact so the reminder survives summarization |
 | `hooks/plan-gate.sh` | `PreToolUse` on `ExitPlanMode` | The plan/implementation boundary. Hands the plan to `actual plan-check` and blocks a non-conforming plan |
+| `hooks/plan-approval.sh` | `PermissionRequest` on `ExitPlanMode` | Unattended mode only (`ACTUAL_UNATTENDED=on`, or the `unattended` row under `/plugin`): answers Claude Code's plan dialog with allow and the request's `tool_input` echoed back as `updatedInput`, so an agent nobody is watching is not held there. It runs after `plan-gate.sh`, which has already denied a conflicting plan, and approves in any repository, rules or not. Silent, which leaves the dialog in place, whenever the switch is off or `ACTUAL_PLAN_GATE=off` |
 | `hooks/turn-start.sh` | `UserPromptSubmit` | Marks where each turn starts: runs `actual impl-check --claude-hook`, which on a `UserPromptSubmit` envelope records `HEAD` for the session, so the `Stop` check also covers work the agent commits, or commits and pushes, during the turn. Silent on every path, since this event's stdout is added to the prompt. Without it, the check diffs against `HEAD`. The dispatch needs CLI 0.7.0 or later, and on an older CLI the call would run a full check on every prompt, so the hook first checks that `actual impl-check --help` names `UserPromptSubmit` and does nothing when it doesn't |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes plus untracked, non-ignored files, against the commit `turn-start.sh` recorded when the turn began, or `HEAD` when none was) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
 | `hooks/rules-brief.sh` | `PostToolUse` on `Read`, `PreToolUse` on `Edit\|Write` | Read-time briefing (AK-793) and the write-time reminder (AK-794), for versions of Claude Code that cannot load a mod. Hands the envelope to `actual rules brief --claude-hook` and forwards only an allowlisted `additionalContext` reply naming the event it was called for. Advisory: never denies, never decides, silent on any failure; on `PreToolUse` it names no `permissionDecision`, so the normal permission flow is unchanged. **Where the mod loads it stands down**: the mod passes `classic.PostToolUse` (Read) on with an `actual_rules_brief_by_mod` marker, and for Edit and Write sets `ACTUAL_SKILL_MOD_SESSION` to its session id before the hook runs, which the hook inherits and stands down on when it matches its own `session_id`. The mod writes no files. Edit and Write cannot carry a marker: the tool's arguments are what the permission check judges, and auto mode refuses to judge a Write with a field it does not know. Either way the brief is delivered once, by the path that also has a budget and a record, and every other hook on those events still runs. It has no budget, no session cap and none of the four limits below: it forwards none of them |
 | `hooks/session-end.sh` | `SessionEnd` | In a repository with rules, forwards the shutdown envelope to `actual __session-ended`, which records the session id, coarse end reason and last completed hook check's blocking state. Silent and fail-open on every path, including missing or older CLIs. It performs no install, version probe or network wait; the companion CLI release must ship before this hook can report end events. The CLI honors telemetry opt-out. Killed sessions still rely on the inactivity fallback |
 | `hooks/register.js` | Claude mod, `$.ui.log` per read and a `/rules-brief` pane | What briefing did, for the person watching. One line per read names the ADRs and rule counts; a read that briefed nothing says why (nothing new, budget spent, CLI error), from the reason the CLI names on stderr. A read of only ungoverned files reports nothing, since most files are ungoverned. `/rules-brief` lists the session oldest first, because a suppressed row only makes sense after the delivered row it refers to. The model reads none of it, so none of it is charged against the context budget — and nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session |
 | `hooks/register.js` | Claude mod, `tool.call` on `Bash`, `Read`, `Edit` and `Write` | Briefing for both the Read tool and reads that bypass it. Measured across 212 local sessions, 80% of file reads went through `cat`/`head`/`sed -n`/`grep`, which fires no Read hook. Briefs only a Bash command Claude Code reports as `isReadOnly`, in the call's context beside its output. `Edit` and `Write` are briefed as a reminder for a file never read (AK-794): it lands with the tool result, after the write, and a file already briefed by its read adds nothing and reports nothing. Requires Claude Code 2.1.287+, or 2.1.285/2.1.286 with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` |
-| `hooks/register.js` | Claude mod, `session.start`, `turn.complete` (main loop), `classic.SessionStart` (all but `startup`) and `ui.render` on `AbovePrompt` | The band above the prompt, showing the `line` of `actual session summary --session <id> --rules-dir <dir> --json` as given, such as `Actual AI: 3 of 12 ADRs added to context · 2 areas with no ADR` or `Actual AI: no ADR covers the 3 areas you worked in`. Read for the rules directory briefing uses, in the background at session start, after each main-loop turn, and on `/clear`, compaction, resume and fork. The ADR count can include the decisions of the one brief the session budget withheld, which the CLI recorded before the mod held it back. Empty with no rule files, no decision in them, no CLI or one too old to write the line, or `ACTUAL_CLI_SUBPROCESS=1`. Drawn in the terminal and the desktop app, and the model never reads it |
+| `hooks/register.js` | Claude mod, `session.start`, `tool.call` (a `Read`, `Bash`, `Edit` or `Write` that is briefed or reaches an ungoverned file), `turn.complete` (main loop), `classic.SessionStart` (all but `startup`) and `ui.render` on `AbovePrompt` | The band above the prompt, showing the `line` of `actual session summary --session <id> --rules-dir <dir> --json` as given, such as `Actual AI: 3 of 12 ADRs added to context · 2 areas with no ADR` or `Actual AI: no ADR covers the 3 areas you worked in`. Read for the rules directory briefing uses, in the background at session start, after each read or write the mod briefs, after a read or write the CLI reports ungoverned (which can add an area, and a burst of which shares one call), after each main-loop turn, and on `/clear`, compaction, resume and fork. The ADR count can include the decisions of the one brief the session budget withheld, which the CLI recorded before the mod held it back. Empty with no rule files, no decision in them, no CLI or one too old to write the line, or `ACTUAL_CLI_SUBPROCESS=1`. Drawn in the terminal and the desktop app, and the model never reads it |
 
 `PreToolUse` on `ExitPlanMode` fires **after** the plan is written and **before** the
 user's plan-approval dialog, so a blocked plan is revised by the agent rather than
@@ -206,7 +181,8 @@ conditions:
 - **The revision loop's own escape valves are additional, deliberate fail-open
   paths, not enforcement**: the round limit stops blocking a persistently
   unresolved rule specifically so the hook does not get uninstalled, and a human
-  can run `actual check-override` to wave a specific rule through outright.
+  can type `/actual-cli:override` in the session (or run `actual check-override`
+  from a terminal) to wave a specific rule through outright.
   An override recorded against a session clears that rule for both `plan-check` and
   `impl-check` checks of that session — one override, not two independent
   mechanisms. Both round-limit passes and overrides are recorded
@@ -237,6 +213,12 @@ Claude Code 2.1.231 an `allow` does not actually bypass the plan-approval dialog
 Claude Code logs `Hook returned 'allow' for ExitPlanMode, but ask rule/safety check
 requires full permission pipeline` and prompts the user anyway — but that safety
 check is undocumented, so the wrapper drops an `allow` verdict rather than rely on it.
+The plugin's one approval is `plan-approval.sh`'s, given only once the user turns on
+unattended mode. It answers Claude Code's `PermissionRequest` for `ExitPlanMode`, after
+the gate has run, with allow plus `updatedInput` set to the request's own `tool_input`:
+the form Claude Code's hooks guide documents for this dialog, which ignores an allow
+without `updatedInput`. Measured on 2.1.287 and 2.1.322, it approves with no dialog and
+the session returns to the permission mode it had before planning.
 
 ### ADR header v2 rule files
 
@@ -343,11 +325,13 @@ place that distinction is applied.
 
 | Variable | Effect |
 |----------|--------|
-| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `impl-gate.sh`, `turn-start.sh`, `rules-brief.sh`, `session-end.sh` and `preflight.sh`, including its minimum-version check) |
+| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `plan-approval.sh`, `impl-gate.sh`, `turn-start.sh`, `rules-brief.sh`, `session-end.sh` and `preflight.sh`, including its minimum-version check) |
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). The governance checks and briefing forward the resolved path to the CLI as `--rules-dir`; `session-end.sh` uses it only to check applicability. `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_TURN_START_LOG` | Path of a file `turn-start.sh` appends the CLI's output and exit status to, for diagnosing a turn-start record that is never written, or a `skipped` line when the CLI has no `UserPromptSubmit` dispatch. Unset by default, which keeps the hook fully silent; set, the hook is still silent on stdout and stderr |
 | `ACTUAL_IMPL_CHECK_MAX_ROUNDS` | Override `impl-check --claude-hook`'s round limit (default 3) |
+| `ACTUAL_OVERRIDE_DIALOG=off` | Stop the mod asking the user how to handle a `plan-check` or `impl-check` denial: the agent reads the denial as the CLI wrote it and revises on its own. A typed `/actual-cli:override` still works. On by default; `=on` forces it on over the `overrideDialog` row, except in unattended mode, which always turns it off |
+| `ACTUAL_UNATTENDED=on` | Unattended mode, for an agent nobody is watching: `plan-approval.sh` approves every plan that reaches Claude Code's plan dialog, which is a plan `plan-gate.sh` passed or could not check, in any repository; the mod's denial dialog is off whatever `ACTUAL_OVERRIDE_DIALOG` says. Off by default; `=off` forces it off over the `unattended` row. Never set it where a person reviews plans |
 | `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the mod — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
 | `ACTUAL_CLI_SUBPROCESS=1` | Set by actual-cli on the nested `claude -p` it runs as its conformance judge. Every hook and the mod exit silently when it is set: without it the judge's own `Stop` hook reruns `impl-check` and recurses, and briefing would inject rules into the judge's prompt that it was never asked to weigh |
 | `ACTUAL_HOOK_DEBUG=1` | Report what briefing did, on stderr for the hook and in the transcript plus the model's context for the mod, which also adds a note when it does not brief: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |
@@ -355,9 +339,12 @@ place that distinction is applied.
 | `ACTUAL_RULES_BRIEF_LIMIT`, `_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE` | Forwarded by the mod to `actual rules brief` as `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`, and only when set (`rules-brief.sh` forwards none of them), so the CLI keeps owning its own defaults. `_MIN_SCORE` especially: unset it defers to the repository's `rules_min_score`, and a score measures how narrowly a rule's `verify` glob is written rather than how relevant the rule is, so no cross-repository default is correct |
 
 The briefing limits (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, `_LIMIT`,
-`_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`) and `debug` also appear as
-labelled `userConfig` rows under `/plugin`; the other variables have none, and
-all of them are read by the mod only. An environment variable wins over its
+`_RULES_PER_DECISION`, `_MAX_CHARS`, `_MIN_SCORE`), `ACTUAL_OVERRIDE_DIALOG`
+(as `overrideDialog`), `ACTUAL_UNATTENDED` (as `unattended`) and `debug` also
+appear as labelled `userConfig` rows under `/plugin`; the other variables have
+none. The mod reads all of the rows, and `plan-approval.sh` also reads
+`unattended`, from the `CLAUDE_PLUGIN_OPTION_UNATTENDED` that Claude Code
+exports to every hook once the row has a value. An environment variable wins over its
 row: the row is the durable preference, the variable is the override for one
 session. The exception is `debug`, which is ORed with `ACTUAL_HOOK_DEBUG`
 rather than overridden by it.
@@ -572,18 +559,56 @@ repo.
   cannot re-flag it, even if the judge would otherwise be non-deterministic
   about it. Edit the plan at all and the rule is judged fresh; a clearance is
   never a standing pass regardless of what the plan says later.
-- **An explicit, recorded override.** A human — never the agent — runs
-  `actual check-override --session <id> --rule <doc-slug>::<rule-id>
-  --reason "<why>"` directly, from an interactive terminal (it refuses to run
-  non-interactively, since the whole point is that this is a human action).
-  `plan-check-override` still works as a backward-compatible alias. The deny
-  message names the session id but deliberately does not hand back a
-  ready-to-paste invocation — run `actual check-override --help` for the
-  exact flags, and pass `--repo`/`--rules-dir` if you are not standing in the
-  same repo the denial came from. An overridden rule is excluded from judging
-  from then on regardless of plan or diff text — by both commands, since they
-  share session state — and every subsequent round says so in a non-blocking
-  notice — an override is visible, never a silent bypass.
+- **An explicit, recorded override.** A human — never the agent — clears a rule.
+  When a gate denies, the plugin's mod (`hooks/override-dialog.js`, wired in
+  `hooks/register.js`) asks the user in Claude Code's own select dialog:
+  revise to conform (first, and recommended), or override all the blocking
+  rules (single rules are overridden by typing the command). After an
+  override, a second question asks why, and the choice becomes the override's
+  code: the check misread the change (`misread`), the ADR doesn't apply here
+  (`not-here`), the ADR is wrong (`adr-wrong`), or it is out of date
+  (`adr-outdated`). The user types `accepted` under Other when the block is
+  right and they are going ahead anyway; anything else typed there is kept as
+  the reason, which actual 0.14.0 or later stores with the code `other` and
+  may send to Actual with anything that looks like a secret removed, so the
+  user shouldn't type one there. Dismissing either question overrides
+  nothing. The answers go to the mod, not to the agent.
+  What reaches the agent says what the user chose:
+  - **"The user chose to revise …"**: revise the plan or the code to satisfy
+    every rule in the denial. Do not suggest an override.
+  - **"The user overrode … in the override dialog"**: those rules no longer
+    block this session. If others still block, revise for those.
+  - **"The user answered the override dialog: …"**: act on their words.
+  - A denial still naming `/actual-cli:override` means the dialog was dismissed
+    or could not be shown: relay the denial, revise if you can, and tell the
+    user they can type the command.
+
+  The user can also type `/actual-cli:override <rule-id|all> [code] [reason]`
+  as a message at any time. The code is one of the five above, and both it and
+  the reason are optional; a reason that starts with no code is stored as
+  `other`. Always give the user that full
+  name: Claude Code registers plugin commands only under their namespaced
+  name, so a bare `/override` is rejected as an unknown command. The mod
+  records it from the prompt, which Claude Code stamps as typed, and adds a
+  context line naming what was overridden, or why nothing was. Both paths go
+  through `actual check-override --claude-hook`, which refuses any process
+  carrying `CLAUDECODE` — every agent shell command and every settings hook —
+  so only the mod's own spawn records. **If the user asks to override a rule,
+  tell them to pick it in the dialog or type `/actual-cli:override` themselves;
+  never type it or run `actual check-override` on their behalf, and do not
+  suggest an override as a way past a denial you could fix by revising.** The
+  same override can still be
+  issued from an ordinary terminal with `actual check-override --session <id>
+  --rule <doc-slug>::<rule-id> --reason-code <code> --reason "<why>"`
+  (`--reason-code` needs actual 0.14.0 or later, and a `--reason` without it is
+  stored as `other`; `--reason` is required through v0.12.0; it refuses to run non-interactively; `plan-check-override` is a backward-compatible alias;
+  pass `--repo`/`--rules-dir` if you are not in the repo the denial came from).
+  An overridden rule is excluded from judging from then on regardless of plan
+  or diff text — by both commands, since they share session state — and every
+  subsequent round says so in a non-blocking notice — an override is visible,
+  never a silent bypass. Each override is recorded with `source`
+  (`session_dialog`, `session_prompt` or `terminal`) and `gate` (`plan`,
+  `impl`, or `both`).
 - **A round limit, tracked per rule.** After `--max-rounds` (default 3, or
   `ACTUAL_PLAN_CHECK_MAX_ROUNDS` / `ACTUAL_IMPL_CHECK_MAX_ROUNDS` respectively —
   each command's revision loop is budgeted independently) denials of the *same
@@ -609,8 +634,8 @@ bash hooks/tests/run.sh
 ```
 
 Runs the full decision matrix (no-op, missing binary, old CLI, pass, deny, crash)
-against recorded hook payloads and a fake CLI, for both `plan-gate.sh` and
-`impl-gate.sh`. No network and no real `actual` install required.
+against recorded hook payloads and a fake CLI, for `plan-gate.sh`, `plan-approval.sh`
+and `impl-gate.sh`. No network and no real `actual` install required.
 
 ## Runner Decision Tree
 
@@ -649,6 +674,46 @@ The CLI auto-selects a runner from the model name:
 | Unrecognized | Error with suggestions |
 
 > For deep runner details (install steps, compatibility, special behaviors), see `references/runner-guide.md`.
+
+## adr-bot and the Advisor (on request)
+
+Run `actual adr-bot` only when the user asks for it, or for ADR guidance written into `CLAUDE.md`, `AGENTS.md` or Cursor rules, and `actual advisor` only when the user asks for the Advisor. Neither is part of governance. Their full reference is in the actual-cli docs: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md. The adr-bot workflow follows in Non-Interactive Environments, Sync Quick Reference and Operational Workflow: Running Sync, with its files in Output Formats.
+
+**Endpoint config** — `advisor` reads `--api-url <url>`, then `ACTUAL_API_URL`, then defaults to `https://api-service.api.prod.actual.ai`.
+
+### advisor — non-interactive, async query
+
+`actual advisor "<question>"` asks an architecture question. It is **agent-friendly** (no TTY required): it starts an async job, polls to completion, and prints a plain-text summary followed by the related ADRs. Progress ("advisor thinking…") goes to stderr; the answer goes to stdout.
+
+```bash
+actual advisor "How should I handle database access in a new service?"
+
+# point at a local/staging endpoint — one export steers it; --api-url overrides
+ACTUAL_API_URL=https://your-advisor-endpoint actual advisor "…"
+
+# released v0.2.0: scope by connected-repository UUID
+actual advisor "…" --repo <repo-uuid>
+
+# newer builds only; verify these flags with `actual advisor --help`
+actual advisor "…" --repo actual-software/actual-cli
+actual advisor --show-scope
+actual advisor --repo none
+actual advisor --repo auto
+```
+
+Requires a valid signed-in session — `NotLoggedIn` (exit `2`) means run `login` first. The advisor transparently refreshes an expired token before the call. Output is human-readable text today (no `--json` flag yet).
+
+Scope behavior is version-dependent:
+
+- Released v0.2.0 accepts only a connected-repository UUID; omitting `--repo`
+  uses organization scope.
+- Newer builds may accept a name or `owner/name`, remember a per-working-tree
+  scope, auto-detect from `origin`, and expose `--show-scope`, `--repo none`,
+  and `--repo auto`.
+
+Always inspect `actual advisor --help` before using the newer scope workflow.
+
+> For the full OAuth flow, scopes, multi-org selection, the advisor poll model, and org/repo scoping, see `references/platform-advisor.md`.
 
 ## Non-Interactive Environments
 
@@ -844,7 +909,8 @@ Load these only when you need deeper detail on a specific topic:
 
 ## Additional Resources
 
-For anything not covered by this skill or its reference files, fetch the full CLI documentation:
+For anything not covered by this skill or its reference files, fetch the CLI documentation:
 
-- **Full docs (Markdown)**: https://cli.actual.ai/docs.md — complete command reference, all flags, runners, output formats, config keys, and troubleshooting
+- **Full docs (Markdown)**: https://cli.actual.ai/docs.md — the command reference for the checks, `rules`, `check-override` and sign-in, with flags, runners, config keys, and troubleshooting
 - **LLM summary**: https://cli.actual.ai/llms.txt — concise machine-readable overview
+- **adr-bot and the Advisor**: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md — their full reference

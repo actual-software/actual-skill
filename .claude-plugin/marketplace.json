@@ -5,12 +5,12 @@
     "email": "poile@actual.ai"
   },
   "metadata": {
-    "description": "Skills for the actual CLI (ADR-powered CLAUDE.md/AGENTS.md generator)"
+    "description": "Align coding agents with your architecture decisions: the actual CLI's Claude Code plugin"
   },
   "plugins": [
     {
       "name": "actual-cli",
-      "description": "Feature-complete companion for the actual CLI",
+      "description": "Checks plans and changes against the ADR rules in .actual/rules/, briefs the agent on them, and lets you override a denied rule",
       "source": "./"
     }
   ]
