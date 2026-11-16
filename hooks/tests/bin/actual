@@ -346,6 +346,22 @@ case "$mode" in
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler."}}\n'
     exit 0
     ;;
+  ask-pass)
+    # The ADR question on a passing turn: a deny whose whole reason is the question.
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Which of these ADRs did you use this turn? For each, name the file and line it shaped.\n\n- `cross-cutting-persistence-abc123`: Persistence\n\nAnswer with one command, then end your turn:\nactual rules report-use --claude-session test-session-stop-turn --turn 1-0123abcd --repo /repo --claim <adr>=<file>:<line>"}}'
+    exit 0
+    ;;
+  ask-block)
+    # The question after the judge's reason on a blocked turn.
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer.\n\nWhich of these ADRs did you use this turn? For each, name the file and line it shaped."}}'
+    exit 0
+    ;;
+  ask-notice)
+    # The question on a round that would only have shown a notice: the notice
+    # rides beside the deny as a top-level systemMessage.
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Which of these ADRs did you use this turn? For each, name the file and line it shaped."},"systemMessage":"No committed rule under .actual/rules/ applies to this diff."}'
+    exit 0
+    ;;
   deny-spaced)
     printf '{"hookSpecificOutput":{"hookEventName": "PreToolUse","permissionDecision": "deny","permissionDecisionReason": "R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler."}}\n'
     exit 0

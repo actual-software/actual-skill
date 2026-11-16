@@ -971,6 +971,12 @@ emit_stop_block_raw() {
   printf '{"decision":"block","reason":"%s"}\n' "$1"
 }
 
+# emit_stop_block_raw with $2, also already JSON-string-escaped, as the
+# user-facing systemMessage beside the block.
+emit_stop_block_with_notice_raw() {
+  printf '{"decision":"block","reason":"%s","systemMessage":"%s"}\n' "$1" "$2"
+}
+
 # Same shape as emit_stop_block_raw, for a reason this script composed rather
 # than extracted. json_escape runs first so a quote or newline in $1 cannot
 # break the emitted object.
@@ -999,7 +1005,10 @@ emit_stop_notice_raw() {
 # verdict -- see that script's comments for the full rationale -- but ends in
 # a re-render instead of a forward. A recognized deny always blocks: the
 # extracted reason when the scan can read it, otherwise a fixed reason. A deny
-# must not degrade to a notice, which would let the turn end.
+# must not degrade to a notice, which would let the turn end. A deny that also
+# carries a top-level systemMessage (the CLI's ADR question asked on a round
+# that would otherwise have shown only a notice) keeps that notice beside the
+# block, so the user still sees it.
 render_stop_verdict() {
   local verdict="$1" trimmed reason message
 
@@ -1013,7 +1022,13 @@ render_stop_verdict() {
     elif is_deny_decision "$trimmed"; then
       reason=$(extract_json_string_field "$verdict" "permissionDecisionReason") || reason=""
       if [ -n "$reason" ]; then
-        emit_stop_block_raw "$reason"
+        if has_system_message "$trimmed" \
+           && message=$(extract_json_string_field "$verdict" "systemMessage") \
+           && [ -n "$message" ]; then
+          emit_stop_block_with_notice_raw "$reason" "$message"
+        else
+          emit_stop_block_raw "$reason"
+        fi
       else
         # Missing, empty, or not a string. Stop requires a reason on block;
         # an empty one fails schema validation and the turn would end.

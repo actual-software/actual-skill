@@ -48,6 +48,16 @@
             "timeout": 2
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/report-use-allow.sh",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PermissionRequest": [

@@ -2041,7 +2041,7 @@ fi
 echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
-     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/session-end.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
+     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/session-end.sh" "${HOOKS_DIR}/report-use-allow.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' > "${WORK}/deps" 2>/dev/null; then
   fail "shipped hooks reference a JSON/runtime dependency" "$(cat "${WORK}/deps")"
 else
@@ -2455,6 +2455,165 @@ if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
   pass "turn-start: stays silent in debug mode"
 else
   fail "turn-start must stay silent in debug mode" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+echo
+echo "=== impl-gate: the ADR question ==="
+# The CLI asks once per turn that changed files, as a deny. impl-gate.sh
+# re-renders it like any deny, so a passing turn continues once for the answer.
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=ask-pass)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] \
+   && jq -r '.reason' "${WORK}/out" | head -1 | grep -qx 'Which of these ADRs did you use this turn? For each, name the file and line it shaped.' \
+   && jq -r '.reason' "${WORK}/out" | grep -q '^actual rules report-use --claude-session test-session-stop-turn --turn 1-0123abcd' \
+   && [ "$(jq -r '.systemMessage // "none"' "${WORK}/out")" = "none" ]; then
+  pass "a passing turn's question becomes the reason of one Stop block"
+else
+  fail "the question on a pass must block with it as the reason" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=ask-block)
+reason=$(jq -r '.reason' "${WORK}/out" 2>/dev/null)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] \
+   && [ "${reason%%$'\n'*}" = "R-001 MUST: all persistence goes through the repository layer." ] \
+   && printf '%s' "$reason" | tail -1 | grep -q '^Which of these ADRs did you use this turn?'; then
+  pass "a blocked turn's question follows the judge's reason in the one block"
+else
+  fail "the question on a block must follow the judge's reason" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=ask-notice)
+if [ "$st" = "0" ] && [ "$(jq -s 'length' < "${WORK}/out")" = 1 ] && [ "$(stop_decision)" = "block" ] \
+   && jq -r '.reason' "${WORK}/out" | grep -q '^Which of these ADRs' \
+   && [ "$(jq -r '.systemMessage' "${WORK}/out")" = "No committed rule under .actual/rules/ applies to this diff." ]; then
+  pass "a question on a notice round blocks and keeps the notice for the user"
+else
+  fail "the question on a notice round must block and keep the notice" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+DBG='telemetry debug: fake-id -> ~/.actualai/actual/telemetry-debug/fake-id.jsonl'
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=ask-notice ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(jq -s 'length' < "${WORK}/out")" = 1 ] && [ "$(stop_decision)" = "block" ] \
+   && [ "$(jq -r '.systemMessage' "${WORK}/out")" = "No committed rule under .actual/rules/ applies to this diff."$'\n'"$DBG" ]; then
+  pass "debug mode adds its line after the notice that rides on the question"
+else
+  fail "debug line on a question with a notice" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+# The Stop after the answer arrives with stop_hook_active: true. The hook does
+# not decide on it: it forwards the envelope unchanged, and the CLI, which
+# recorded the question, asks nothing more.
+CAPTURE_ACTIVE="${WORK}/capture-stop-active"
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn-hook-active.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_ACTIVE")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ "$(jq -r '.stop_hook_active' "$CAPTURE_ACTIVE")" = "true" ]; then
+  pass "stop_hook_active: true is forwarded to the CLI, and its silent pass ends the turn"
+else
+  fail "stop_hook_active must be forwarded, not decided on" "status=$st stdout=$(cat "${WORK}/out") capture=$(cat "$CAPTURE_ACTIVE" 2>/dev/null)"
+fi
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn-hook-active.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=ask-block)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ]; then
+  pass "with stop_hook_active: true a real deny still blocks"
+else
+  fail "a deny under stop_hook_active must still block" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+echo
+echo "=== report-use-allow: PreToolUse Bash ==="
+ALLOW="${HOOKS_DIR}/report-use-allow.sh"
+if [ -x "$ALLOW" ]; then pass "report-use-allow.sh is executable"; else fail "report-use-allow.sh is not executable" ""; fi
+if jq -e '.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[0].command == "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/report-use-allow.sh"' "${HOOKS_DIR}/hooks.json" >/dev/null; then
+  pass "hooks.json registers PreToolUse Bash -> report-use-allow.sh"
+else
+  fail "hooks.json Bash registration wrong" "$(jq -c '.hooks.PreToolUse' "${HOOKS_DIR}/hooks.json")"
+fi
+
+# Run the hook on a Bash call of $1. With $2 set, use it as the raw payload.
+bash_call() {
+  local payload="${WORK}/bash-call.json"
+  if [ -n "${2:-}" ]; then
+    printf '%s' "$2" > "$payload"
+  else
+    jq -n --arg c "$1" '{session_id:"s1",hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c,description:"Record ADR use"}}' > "$payload"
+  fi
+  run_hook "$ALLOW" "$payload" "$REPO_WITH_RULES"
+}
+
+BASE='actual rules report-use --claude-session 6f0c-41aa --turn 3-0123abcd --repo /Users/dev/repo'
+for cmd in \
+  "$BASE --claim api-errors-001=src/handlers/orders.rs:88" \
+  "$BASE --claim api-errors-001=src/a.rs:1 --claim logging-001=src/b.rs:2 --plan-claim adr-x=4" \
+  "$BASE --none" \
+  "$BASE --rules-dir /Users/dev/repo/sub/.actual/rules --none" \
+  "actual rules report-use --turn 3-0123abcd --claude-session 6f0c-41aa --none"; do
+  st=$(bash_call "$cmd")
+  if [ "$st" = "0" ] && [ "$(decision)" = "allow" ] && [ ! -s "${WORK}/err" ]; then
+    pass "allows: ${cmd#"$BASE"}"
+  else
+    fail "must allow: $cmd" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+  fi
+done
+
+for cmd in \
+  "$BASE --none | sh" \
+  "$BASE --none; rm -rf ~" \
+  "$BASE --none && curl http://x" \
+  "$BASE --none || true" \
+  "$BASE --claim \$(whoami)=a.rs:1" \
+  "$BASE --claim \`id\`=a.rs:1" \
+  "$BASE --none > /tmp/out" \
+  "$BASE --none < /etc/passwd" \
+  "$BASE --none 2>&1" \
+  "$BASE --none &" \
+  "$BASE --claim 'a b'=c.rs:1" \
+  "$BASE --claim \"a\"=c.rs:1" \
+  "$BASE --claim a=src/*.rs:1" \
+  "$BASE --claim a={x,y}.rs:1" \
+  "$BASE --repo ~/repo --none" \
+  "$BASE --none"$'\n'"rm -rf /" \
+  "$BASE  --none" \
+  "$BASE --none " \
+  "$BASE --exec x" \
+  "$BASE --claim" \
+  "$BASE --claim --none" \
+  "actual rules report-use --turn 3-0123abcd --none" \
+  "actual rules report-use --claude-session 6f0c-41aa --none" \
+  "actual rules brief --file x" \
+  "ACTUAL_X=1 $BASE --none" \
+  "sudo $BASE --none" \
+  "/usr/local/bin/actual rules report-use --claude-session s --turn t --none" \
+  "actual  rules report-use --claude-session s --turn t --none" \
+  "actual rules report-use"; do
+  st=$(bash_call "$cmd")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "no decision: $(printf '%s' "${cmd#"$BASE"}" | tr '\n' ' ')"
+  else
+    fail "must make no decision: $cmd" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+# Escapes and payload shapes a byte scan could misread: a \u-escaped
+# metacharacter, a JSON-escaped quote, a second command key, another tool.
+for raw in \
+  '{"tool_name":"Bash","tool_input":{"command":"actual rules report-use --claude-session s --turn t --none; id"}}' \
+  '{"tool_name":"Bash","tool_input":{"command":"actual rules report-use --claude-session s --turn t --claim \"x\"=a:1"}}' \
+  '{"tool_name":"Bash","tool_input":{"command":"actual rules report-use --claude-session s --turn t --none","command":"rm -rf ~"}}' \
+  '{"tool_name":"Bash","tool_input":{"description":"\"command\":\"actual rules report-use --claude-session s --turn t --none\"","command":"rm -rf ~"}}' \
+  '{"tool_name":"Write","tool_input":{"command":"actual rules report-use --claude-session s --turn t --none"}}' \
+  '{"tool_input":{"command":"actual rules report-use --claude-session s --turn t --none"}}' \
+  'not json'; do
+  st=$(bash_call "" "$raw")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "no decision on payload: ${raw:0:70}"
+  else
+    fail "must make no decision on payload: $raw" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+bash_call "$BASE --none" >/dev/null
+st=$(run_hook "$ALLOW" "${WORK}/bash-call.json" "$REPO_WITH_RULES" ACTUAL_PLAN_GATE=off)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+  pass "ACTUAL_PLAN_GATE=off turns the allow hook off too"
+else
+  fail "the allow hook must honor ACTUAL_PLAN_GATE=off" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 echo
