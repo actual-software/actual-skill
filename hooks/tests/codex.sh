@@ -208,16 +208,16 @@ else
 fi
 
 rm -f "$CX_CALLS"
-st=$(run_codex "$PF" "$CX_START" "$CX_REPO" ACTUAL_TEST_MODE=no-codex-hook ACTUAL_TEST_VERSION=0.12.0 ACTUAL_TEST_CALLS="$CX_CALLS")
+st=$(run_codex "$PF" "$CX_START" "$CX_REPO" ACTUAL_TEST_MODE=no-codex-hook ACTUAL_TEST_VERSION=0.14.0 ACTUAL_TEST_CALLS="$CX_CALLS")
 ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
-if [ "$st" = 0 ] && [[ $ctx == *"(0.12.0) predates its Codex support"* ]] && [[ $ctx == *"0.13.0 or later"* ]] \
+if [ "$st" = 0 ] && [[ $ctx == *"(0.14.0) predates its Codex support"* ]] && [[ $ctx == *"0.15.0 or later"* ]] \
    && [[ $ctx == *"worth interrupting"* ]] && [[ $ctx != *"governance is active"* ]] \
    && ! grep -q -- '--codex-session-start' "$CX_CALLS"; then
   pass "Codex SessionStart, CLI without codex-hook, startup: the upgrade interrupt, nothing else called"
 else
   fail "Codex old-CLI startup wrong" "st=$st ctx=$ctx calls=$(tr '\n' ';' < "$CX_CALLS")"
 fi
-st=$(run_codex "$PF" "${WORK}/codex-sessionstart-resume.json" "$CX_REPO" ACTUAL_TEST_MODE=no-codex-hook ACTUAL_TEST_VERSION=0.12.0)
+st=$(run_codex "$PF" "${WORK}/codex-sessionstart-resume.json" "$CX_REPO" ACTUAL_TEST_MODE=no-codex-hook ACTUAL_TEST_VERSION=0.14.0)
 ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
 if [ "$st" = 0 ] && [[ $ctx == *"predates its Codex support"* ]] && [[ $ctx == *"natural pause"* ]] \
    && [[ $ctx == *"already declined"* ]]; then
@@ -225,7 +225,7 @@ if [ "$st" = 0 ] && [[ $ctx == *"predates its Codex support"* ]] && [[ $ctx == *
 else
   fail "Codex old-CLI resume wrong" "st=$st ctx=$ctx"
 fi
-# Every Claude Code minimum is below 0.13.0, so a Codex CLI that has the marker
+# Every Claude Code minimum is below 0.15.0, so a Codex CLI that has the marker
 # is never sent the Claude Code ladder, whatever its version reads.
 st=$(run_codex "$PF" "$CX_START" "$CX_REPO" ACTUAL_TEST_VERSION=0.6.0)
 ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
@@ -389,7 +389,7 @@ else
 fi
 rm -f "$CX_CALLS"
 st=$(run_codex "$IG" "$CX_STOP" "$CX_REPO" ACTUAL_TEST_MODE=no-codex-hook ACTUAL_TEST_CALLS="$CX_CALLS")
-if [ "$st" = 0 ] && [ "$(out_keys)" = systemMessage ] && grep -q 'predates its Codex support (needs 0.13.0+)' "${WORK}/out" \
+if [ "$st" = 0 ] && [ "$(out_keys)" = systemMessage ] && grep -q 'predates its Codex support (needs 0.15.0+)' "${WORK}/out" \
    && ! grep -q '^impl-check --codex' "$CX_CALLS"; then
   pass "Codex impl gate, CLI without codex-hook: stands down with a one-line notice"
 else

@@ -470,7 +470,7 @@ adr_v2_unsupported() {
 # The first CLI release that speaks Codex's hook contract (`--codex-hook` on
 # plan-check, impl-check, rules brief and session summary). Raise it with the
 # README's Codex requirement.
-CODEX_HOOK_MIN_CLI=0.13.0
+CODEX_HOOK_MIN_CLI=0.15.0
 
 # True when the installed CLI has `--codex-hook`. Like have_adr_v2 this reads the
 # capability marker the help documents (`Capability marker: codex-hook`), not a
