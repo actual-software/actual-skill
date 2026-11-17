@@ -2463,7 +2463,7 @@ echo "=== impl-gate: the ADR question ==="
 # re-renders it like any deny, so a passing turn continues once for the answer.
 st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=ask-pass)
 if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] \
-   && jq -r '.reason' "${WORK}/out" | head -1 | grep -qx 'Which of these ADRs did you use this turn? For each, name the file and line it shaped.' \
+   && jq -r '.reason' "${WORK}/out" | head -1 | grep -qx 'Which of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. Leave out any your change merely complies with or happens to agree with.' \
    && jq -r '.reason' "${WORK}/out" | grep -q '^actual rules report-use --claude-session test-session-stop-turn --turn 1-0123abcd' \
    && [ "$(jq -r '.systemMessage // "none"' "${WORK}/out")" = "none" ]; then
   pass "a passing turn's question becomes the reason of one Stop block"

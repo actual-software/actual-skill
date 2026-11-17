@@ -348,18 +348,18 @@ case "$mode" in
     ;;
   ask-pass)
     # The ADR question on a passing turn: a deny whose whole reason is the question.
-    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Which of these ADRs did you use this turn? For each, name the file and line it shaped.\n\n- `cross-cutting-persistence-abc123`: Persistence\n\nAnswer with one command, then end your turn:\nactual rules report-use --claude-session test-session-stop-turn --turn 1-0123abcd --repo /repo --claim <adr>=<file>:<line>"}}'
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Which of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. Leave out any your change merely complies with or happens to agree with.\n\n- `cross-cutting-persistence-abc123`: Persistence\n\nAnswer with one command, then end your turn:\nactual rules report-use --claude-session test-session-stop-turn --turn 1-0123abcd --repo /repo --claim <adr>=<file>:<line>\n\nRepeat --claim for each ADR you used, naming the line you added or changed this turn that best shows its effect. For a line of the plan approved this turn, use --plan-claim <adr>=<line>. When no listed ADR shaped the change, run the command with --none in place of the claims. That is a normal, expected answer."}}'
     exit 0
     ;;
   ask-block)
     # The question after the judge's reason on a blocked turn.
-    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer.\n\nWhich of these ADRs did you use this turn? For each, name the file and line it shaped."}}'
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer.\n\nWhich of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. Leave out any your change merely complies with or happens to agree with."}}'
     exit 0
     ;;
   ask-notice)
     # The question on a round that would only have shown a notice: the notice
     # rides beside the deny as a top-level systemMessage.
-    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Which of these ADRs did you use this turn? For each, name the file and line it shaped."},"systemMessage":"No committed rule under .actual/rules/ applies to this diff."}'
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Which of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. Leave out any your change merely complies with or happens to agree with."},"systemMessage":"No committed rule under .actual/rules/ applies to this diff."}'
     exit 0
     ;;
   deny-spaced)
