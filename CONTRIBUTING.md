@@ -17,7 +17,7 @@ Everything else can merge without a bump, because none of it changes what runs i
 
 ### The Codex version
 
-The Codex manifest keeps a version of its own. Codex installs each version into its own cache folder and doesn't pick up a change until that version moves, so a pull request that changes `.codex-plugin/` or `hooks/codex-hooks.json` raises `version` in `.codex-plugin/plugin.json`. The rules for choosing the number are the same as below.
+The Codex manifest keeps a version of its own. Codex installs each version into its own cache folder and doesn't pick up a change until that version moves, so a pull request that changes `.codex-plugin/` or a path it names (`skills/`, `hooks/codex-hooks.json` and `assets/`) raises `version` in `.codex-plugin/plugin.json`. The rules for choosing the number are the same as below.
 
 ### Choosing the number
 
