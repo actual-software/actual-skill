@@ -50,7 +50,7 @@ The Codex plugin runs the same hook scripts against the same CLI, so the rules, 
 - **Settings are environment variables only.** Codex has no per-plugin settings, so the `ACTUAL_*` variables above are the only way to set them.
 - **To override a rule, run `actual check-override` from a terminal outside Codex.** There is no denial dialog and no `/actual-cli:override`, and the command refuses inside the agent's own shell, as it does in Claude Code's.
 - **Each release asks you to trust the hooks again** (see [the install steps](install.md#codex-plugin)).
-- **Codex needs `actual` 0.13.0 or later.** On an older CLI the session start offers the upgrade and the checks stand down.
+- **Codex needs `actual` 0.15.0 or later.** On an older CLI the session start offers the upgrade and the checks stand down.
 
 ## Session summary
 

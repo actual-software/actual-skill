@@ -539,7 +539,7 @@ to tell which one installed it, since running the other would leave a second cop
 `PATH`. A CLI installed some other way gets the actual-releases page.
 
 Under Codex the requirement is the `codex-hook` capability instead, first shipped in
-actual-cli `CODEX_HOOK_MIN_CLI` (0.13.0). `preflight.sh` probes for the marker in
+actual-cli `CODEX_HOOK_MIN_CLI` (0.15.0). `preflight.sh` probes for the marker in
 `actual plan-check --help` rather than comparing versions, so a build that has it
 passes whatever its version reads, and one without it gets the same upgrade offer,
 with the same command selection, while every other Codex hook stands down.
