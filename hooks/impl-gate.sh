@@ -84,8 +84,14 @@ fi
 
 # 4b. ADR header v2 rule files the installed CLI cannot read: stand down with
 #     the one-line user-facing notice, same channel and reason as step 4.
+#     Under Codex this Stop also covers Plan-mode turns, where plan-gate.sh stays
+#     silent and no diff exists, so the wording names the turn, not a diff.
 if adr_v2_unsupported "$dir"; then
-  emit_stop_notice "$(adr_v2_standdown_notice "this turn's diff was not checked against them")"
+  if is_codex_host; then
+    emit_stop_notice "$(adr_v2_standdown_notice "this turn was not checked against them")"
+  else
+    emit_stop_notice "$(adr_v2_standdown_notice "this turn's diff was not checked against them")"
+  fi
   exit 0
 fi
 

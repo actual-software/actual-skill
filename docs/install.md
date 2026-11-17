@@ -51,6 +51,8 @@ codex plugin add actual-cli@actual-cli-skills
 
 The plugin brings the skill and the governance hooks. Codex runs a plugin's hooks only once you trust them, so open `/hooks` in the CLI (or **Settings → Hooks** in the app), review the plugin's hooks and trust them. Codex records that trust against the plugin's content, so after each update the hooks show as modified and stay off until you review them again.
 
+Codex has no equivalent of Claude Code's plan-approval step for the plan check to run before, so it checks a plan when the turn that proposes it ends. You see the first draft of a plan that conflicts with your rules, and then the agent revises it. Claude Code blocks a conflicting plan before you see it.
+
 To update, refresh the marketplace and install the plugin again, which installs the new version:
 
 ```bash
