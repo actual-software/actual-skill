@@ -147,6 +147,7 @@ cd "$repo_root" 2>/dev/null || true
 # same `resolve_repo_root` the gates use, so both paths name one root.
 reply=$(printf '%s' "$payload" | actual rules brief --claude-hook --repo "$repo_root" --rules-dir "$dir" 2>"$stderr_file")
 status=$?
+take_telemetry_debug_line "$stderr_file"
 
 # Silence is the whole contract here: on stdout a brief that never arrives
 # looks exactly like a file with no rules. The CLI separates the two on stderr
@@ -165,8 +166,12 @@ if [ -n "${ACTUAL_HOOK_DEBUG:-}" ]; then
   printf 'actual-rules-brief: cli-stdout: %s\n' "$reply" >&2
 fi
 
-# Any failure -- including an old CLI's unknown subcommand -- is silence.
-[ "$status" -eq 0 ] || exit 0
+# Any failure -- including an old CLI's unknown subcommand -- is silence, but for
+# telemetry debug mode's line when the run recorded an event.
+if [ "$status" -ne 0 ]; then
+  emit_with_telemetry_debug "" stop
+  exit 0
+fi
 
 trimmed=${reply#"${reply%%[![:space:]]*}"}
 trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
@@ -204,10 +209,14 @@ if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
   if ! is_single_json_string "$trimmed" "$prefix"; then
     [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
       printf 'actual-rules-brief: dropped (content is not a single JSON string)\n' >&2
+    emit_with_telemetry_debug "" stop
     exit 0
   fi
-  printf '%s\n' "$trimmed"
+  forward="$trimmed"
 elif [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && [ -n "$trimmed" ]; then
   printf 'actual-rules-brief: dropped (reply is not the allowlisted shape)\n' >&2
 fi
+# A top-level systemMessage beside the allowlisted object is this hook's own
+# text, added only in telemetry debug mode.
+emit_with_telemetry_debug "${forward:-}" stop
 exit 0

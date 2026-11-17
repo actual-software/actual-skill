@@ -73,7 +73,11 @@ cd "$repo_root" 2>/dev/null || true
 
 verdict=$(printf '%s' "$payload" | actual plan-check --claude-hook --rules-dir "$dir" 2>"$stderr_file")
 status=$?
+take_telemetry_debug_line "$stderr_file"
 
+# decide prints what this hook emits. Its output is captured so telemetry debug
+# mode can add its line to the systemMessage (see bootstrap.sh).
+decide() {
 case "$status" in
   0)
     # Forward a verdict only when it is one of two recognized, allowlisted shapes.
@@ -134,3 +138,12 @@ case "$status" in
     exit 0
     ;;
 esac
+}
+out=$(decide)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  emit_with_telemetry_debug "$out" pretooluse
+elif [ -n "$out" ]; then
+  printf '%s\n' "$out"
+fi
+exit "$rc"
