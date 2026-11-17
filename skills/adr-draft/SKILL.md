@@ -3,10 +3,10 @@ name: adr-draft
 description: >-
   Draft Architecture Decision Records (ADRs) in a repository with the actual
   CLI, from a topic the user names, the work in this session or the last N
-  commits. The user picks which drafts to write and whether each is accepted,
-  so plan-check and impl-check enforce its rules at once, or a draft. actual
-  adr new writes each one as a decision doc in docs/adr/ and a rule file in
-  .actual/rules/, actual adr check checks the format and lists likely
+  commits. The user picks which drafts to write and whether each is accepted
+  or a draft. Each one is written only to docs/adr/, the folder ADRs are
+  published from, as the decision doc actual adr new lays out, and never into
+  .actual/rules/. actual adr check checks the format and lists likely
   duplicates, and after actual login the skill offers actual adr create --file
   to save each one to Actual AI. Use when asked to draft, propose, write,
   capture or record an ADR or an architecture decision, or to check whether
@@ -17,7 +17,7 @@ description: >-
 
 # Draft ADRs
 
-Turn an architectural decision into an ADR the repository enforces. The actual CLI writes each one as a pair: a decision doc in `docs/adr/` and a rule file in `.actual/rules/`, laid out the way Actual AI's sync writes them. `plan-check` and `impl-check` read the rules with no account, and a later sync updates the same two files. Draft only what warrants an ADR, and write only what the person picks.
+Turn an architectural decision into an ADR in `docs/adr/`, the folder ADRs are published from. Write there and nowhere else: `.actual/rules/` holds the rule files `plan-check` and `impl-check` read, and those arrive through Actual AI's sync pull request once a decision is published. Draft only what warrants an ADR, and write only what the person picks.
 
 ## Check the CLI
 
@@ -116,7 +116,7 @@ Check every draft against these rules before you show it, and revise any that fa
 Show every draft in full, then ask two questions in one interactive question call (`AskUserQuestion` in Claude Code):
 
 1. **Which drafts to write.** A real multi-select (`multiSelect: true`), one option per draft labelled with its title, so the person can pick all, some or none. Never a lettered menu or a "reply with the numbers" prompt.
-2. **Their status.** Accepted (recommended): the rules govern `plan-check` and `impl-check` in this repository at once. Draft: the files are written, but no check reads them until the decision is published. One answer covers every ADR written, and the person can set them one by one under Other.
+2. **Their status.** Accepted (recommended): the decision is settled as written. Draft: it's still open. Either way, `plan-check` and `impl-check` read it only once it's published in Actual AI and the sync pull request writes its rule file. One answer covers every ADR written, and the person can set them one by one under Other.
 
 Only when no such tool exists, fall back to a literal checkbox list, one `- [ ]` per draft, and ask for the status in the same message.
 
@@ -124,7 +124,7 @@ Write nothing until the person answers, and nothing when they pick none.
 
 ## Write each picked ADR
 
-Run `actual adr new` once per picked draft, with the status the person chose. Always pass `--status`: an agent's shell has no terminal, and without one the CLI saves a draft.
+Write each picked ADR into `docs/adr/` and nowhere else. `actual adr new` lays it out, but it also writes a rule file into `.actual/rules/`, so run it with `--root` set to a new scratch directory, once per picked draft, with the status the person chose. Always pass `--status`: an agent's shell has no terminal, and without one the CLI writes a draft.
 
 ```bash
 actual adr new "<title>" \
@@ -133,16 +133,25 @@ actual adr new "<title>" \
   --deciders "<name or team>" \
   --scope 'services/**' \
   --status accepted \
+  --root "$(mktemp -d)" \
   --json
 ```
 
 - Pass `--context` once per Context bullet and `--policy` once per policy, in order. Leave out `--scope` for the whole repository, or pass it once per glob.
-- `--json` prints `adr_id`, `status`, `decision_file` and `rule_file`.
-- The CLI runs Actual AI's save check first. When the decision would be refused it writes nothing, lists each reason and exits 1: fix the draft and run it again. It never replaces an existing file.
+- `--json` prints `adr_id`, `status`, `decision_file` and `rule_file`, and both files sit in the scratch directory.
+- The CLI runs Actual AI's save check first. When the decision would be refused it writes nothing, lists each reason and exits 1: fix the draft and run it again.
 
-Then add the draft's Rationale, Consequences and References to the end of `decision_file`, in the template's shape. The file ends without a newline, so start with a blank line. Change nothing above them, and never edit `rule_file`: the CLI wrote its rules from the policies, and the IDs in it are what an override names.
+Move `decision_file` into the repository's `docs/adr/` under its own name, then delete the scratch directory (the part of `decision_file` before `/docs/adr/`) with the rule file in it:
 
-To change an ADR that's written but not yet pushed, such as dropping a policy, remove both of its files and run `actual adr new` again with the new content.
+```bash
+mkdir -p docs/adr && mv "<decision_file>" docs/adr/ && rm -r "<scratch directory>"
+```
+
+The name starts with the decision's new id, so the move can't replace a file the repository has. From here on, `decision_file` means the moved file.
+
+Then add the draft's Rationale, Consequences and References to the end of it, in the template's shape. The file ends without a newline, so start with a blank line. Change nothing above them.
+
+To change an ADR that's written but not yet pushed, such as dropping a policy, remove its file and write it again the same way with the new content.
 
 ## Check the files
 
@@ -151,10 +160,10 @@ actual adr check <decision_file>... --json
 ```
 
 - **`files`.** Each file's `ok`, with `problems` (a failure, exit 1) and `warnings`. Fix a failure in the sections you added, then check again.
-- **`duplicates`.** A new file and a likely duplicate of it: `other_file` in the repository or `other_decision` in Actual AI, with the matching title and policies under `overlap`. A duplicate doesn't fail the check. Show each one to the person and ask whether to keep the new ADR, fold it into the existing one or remove the new pair. Remove nothing without their answer.
+- **`duplicates`.** A new file and a likely duplicate of it: `other_file` in the repository or `other_decision` in Actual AI, with the matching title and policies under `overlap`. A duplicate doesn't fail the check. Show each one to the person and ask whether to keep the new ADR, fold it into the existing one or remove the new file. Remove nothing without their answer.
 - **`cloud`.** Whether the comparison with Actual AI ran (`compared`) and for which repository (`scope`). When it didn't, `note` says why, such as nobody being signed in.
 
-Tell the person which files were written, with each one's status. An accepted ADR already governs this repository's checks.
+Tell the person which files were written, with each one's status, and that the checks read an ADR only once it's published in Actual AI and the sync pull request writes its rule file.
 
 ## Sign in before pushing
 
@@ -167,13 +176,13 @@ actual whoami
 - **Exit 0.** Signed in. If the check above didn't compare with Actual AI, run it again now that it can.
 - **Exit 2, "Not signed in to Actual AI".** `actual login` opens a browser, so the person runs it, in their terminal or, in Claude Code, by typing `! actual login` at the prompt. Ask them to, wait until they say it's done, then run `actual whoami` and the check again. Never script the browser or the consent page.
 
-If the person would rather not sign in, stop here. The ADRs stay in the repository, and an accepted one keeps governing its checks.
+If the person would rather not sign in, stop here. The ADRs stay in `docs/adr/`, ready to save later.
 
 ## Offer the push
 
 Offer `actual adr create --file <decision_file>` for each new ADR, as a multi-select like the one for the drafts. Tell the person two things before they answer:
 
-- From an agent's shell the CLI saves each ADR to Actual AI as a draft and rewrites both local files to draft. An accepted ADR therefore stops governing locally until someone publishes it (`actual adr publish <id>`, or in the web app) and Actual AI's sync pull request rewrites its files.
+- From an agent's shell the CLI saves each ADR to Actual AI as a draft and marks its file draft too. It governs once someone publishes it (`actual adr publish <id>`, or in the web app) and Actual AI's sync pull request writes its rule file.
 - To save one as accepted, they can ask you to, or run the command themselves in a terminal.
 
 Pass `--status accepted` only when the person asks for it in answer to this offer. Never add it on your own.
@@ -184,13 +193,13 @@ actual adr create --file <decision_file> --json
 
 Push one file per command, and read each result before the next:
 
-- **Exit 0.** `adr_id` is the decision's id in Actual AI and `status` how it was saved. `files.renamed` lists the pair's new names, the ones the sync uses, so the next sync pull request updates these files instead of adding a copy. `local_status_was` appears when the local status changed. When setting the scope in the file's header or publishing an accepted save failed, the decision stays a saved draft, `status` reads `draft`, and `scope_problem` or `publish_problem` gives the command that finishes the job: show it to the person.
+- **Exit 0.** `adr_id` is the decision's id in Actual AI and `status` how it was saved. `files.renamed` gives the file's new name, the one the sync uses, so the next sync pull request updates it instead of adding a copy. `files.problems` notes that no rule file was renamed, which is expected: the skill writes none. `local_status_was` appears when the local status changed. When setting the scope in the file's header or publishing an accepted save failed, the decision stays a saved draft, `status` reads `draft`, and `scope_problem` or `publish_problem` gives the command that finishes the job: show it to the person.
 - **Exit 1.** Nothing was saved: the file didn't parse, Actual AI refused its content and the error lists the reasons, or it looks like one the repository already has and the error names the match. Re-run with `--allow-duplicate` only when the person says to, or when they already chose to keep this ADR after seeing that same match in the check. Show any other match and ask.
 - **Exit 2.** Signed out, no access to the organization, or no connected repository for the checkout's `origin` remote. Hand the sign-in back to the person, or ask which connected repository to use and pass `--repo <name, owner/name or id>`.
 - **Exit 3, saying the decision may have been saved.** Don't run `create` again: a second run can save a second copy. Run `actual adr list --json` and look for the title first.
 - **Any other exit 3.** Actual AI couldn't be reached or answered with an error, and the message says which. Tell the person, and offer to try again later.
 
-Report each pushed ADR's id, its status and its files' new paths, and for a draft, how to publish it.
+Report each pushed ADR's id, its status and its file's new path, and for a draft, how to publish it.
 
 ## Failure and completion
 
@@ -198,4 +207,4 @@ Report each pushed ADR's id, its status and its files' new paths, and for a draf
 - The person picks no draft: write nothing and stop.
 - Git or an ADR listing isn't available: say so and draft from what you can observe. Never invent history or existing ADRs.
 
-The skill is done when nothing warranted an ADR and you said so, or when the picked ADRs are written and checked and every one the person chose to push is saved, with its id and files reported.
+The skill is done when nothing warranted an ADR and you said so, or when the picked ADRs are written to `docs/adr/` and checked and every one the person chose to push is saved, with its id and file reported.

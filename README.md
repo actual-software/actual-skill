@@ -48,7 +48,7 @@ In Claude Code, the plugin checks your coding agent's work against the architect
    - **R-DB-001** MUST: Code outside `src/db/` reaches the database only through `src/db/`.
    ```
 
-   `actual rules ls` shows whether each file parses. Your agent can also draft them: `/actual-cli:adr-draft <a decision or an area of the code>`.
+   `actual rules ls` shows whether each file parses. Your agent can also draft ADRs into `docs/adr/` with `/actual-cli:adr-draft <a decision or an area of the code>`, and their rules arrive here through the sync pull request once they're published in Actual AI.
 
 4. Optionally, run `actual login` to sign in to Actual AI. The checks, `actual rules` and drafting ADRs work without it; saving ADRs to Actual AI needs it.
 
@@ -66,7 +66,7 @@ The checks run on their own. You can also ask your agent:
 - "Draft an ADR for how we call the payment provider."
 - "List our draft decisions in Actual AI."
 
-When a check denies, Claude Code asks whether to revise or override; `/actual-cli:override <rule-id|all> [code] [reason]` overrides from the prompt at any time. The [reference](docs/reference.md) covers the checks, overrides, rule briefing, settings and troubleshooting. The `adr-draft` skill writes each ADR you pick as a decision in `docs/adr/` and its rule file in `.actual/rules/`, so the checks enforce it at once, and after `actual login` it offers to save them to Actual AI ([Drafting ADRs](docs/reference.md#drafting-adrs)). The `actual` skill still runs adr-bot and the Advisor when you ask for them: [adr-bot and the Advisor](docs/adr-bot-and-advisor.md).
+When a check denies, Claude Code asks whether to revise or override; `/actual-cli:override <rule-id|all> [code] [reason]` overrides from the prompt at any time. The [reference](docs/reference.md) covers the checks, overrides, rule briefing, settings and troubleshooting. The `adr-draft` skill writes each ADR you pick to `docs/adr/` only, the folder ADRs are published from, and after `actual login` it offers to save them to Actual AI; the checks enforce each one after it's published and the sync pull request writes its rule file ([Drafting ADRs](docs/reference.md#drafting-adrs)). The `actual` skill still runs adr-bot and the Advisor when you ask for them: [adr-bot and the Advisor](docs/adr-bot-and-advisor.md).
 
 ## License
 
