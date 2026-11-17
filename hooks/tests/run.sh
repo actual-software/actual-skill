@@ -2386,8 +2386,9 @@ else
 fi
 
 st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TELEMETRY_DEBUG=1)
-if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(decision)" = "none" ] && [ "$(field .systemMessage)" = "$DBG" ]; then
-  pass "plan-gate: a conforming plan shows the line and makes no permission decision"
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(decision)" = "none" ] && [ "$(field .systemMessage)" = "$DBG" ] \
+   && [ "$(field .hookSpecificOutput.systemMessage)" = "$DBG" ]; then
+  pass "plan-gate: a conforming plan shows the line in both copies and makes no permission decision"
 else
   fail "plan-gate allow in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
 fi
@@ -2404,8 +2405,9 @@ fi
 st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice ACTUAL_TELEMETRY_DEBUG=1)
 msg=$(field .systemMessage)
 if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(decision)" = "none" ] \
-   && [ "${msg%$'\n'"$DBG"}" != "$msg" ] && [ -n "${msg%$'\n'"$DBG"}" ]; then
-  pass "plan-gate: the line is appended to the CLI's notice"
+   && [ "${msg%$'\n'"$DBG"}" != "$msg" ] && [ -n "${msg%$'\n'"$DBG"}" ] \
+   && [ "$(field .hookSpecificOutput.systemMessage)" = "$msg" ]; then
+  pass "plan-gate: the line is appended to both copies of the CLI's notice"
 else
   fail "plan-gate notice in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
 fi
@@ -2417,8 +2419,11 @@ else
   fail "plan-gate exit-2 in debug mode" "status=$st stderr=$(cat "${WORK}/err")"
 fi
 
+run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief >/dev/null
+plain_brief=$(jq -c '.hookSpecificOutput' < "${WORK}/out" 2>/dev/null)
 st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_TELEMETRY_DEBUG=1)
-if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && rb_ctx | grep -q "R-001" && [ "$(field .systemMessage)" = "$DBG" ]; then
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && rb_ctx | grep -q "R-001" && [ "$(field .systemMessage)" = "$DBG" ] \
+   && [ -n "$plain_brief" ] && [ "$(jq -c '.hookSpecificOutput' < "${WORK}/out")" = "$plain_brief" ]; then
   pass "rules-brief: the brief is forwarded unchanged beside the line"
 else
   fail "rules-brief in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
@@ -2429,6 +2434,20 @@ if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(rb_ctx)" = "" ] && [ "$(field
   pass "rules-brief: a run with no brief shows the line alone"
 else
   fail "rules-brief without a brief in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=crash ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(rb_ctx)" = "" ] && [ "$(field .systemMessage)" = "$DBG" ]; then
+  pass "rules-brief: a failed CLI run shows the line alone"
+else
+  fail "rules-brief failed run in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-trailing-field ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(rb_ctx)" = "" ] && [ "$(field .systemMessage)" = "$DBG" ]; then
+  pass "rules-brief: a reply dropped as not one JSON string shows the line alone"
+else
+  fail "rules-brief dropped reply in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
 fi
 
 st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TELEMETRY_DEBUG=1)
