@@ -1,6 +1,6 @@
 {
   "name": "actual-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Run and troubleshoot the Actual CLI for ADR-powered coding-agent guidance.",
   "author": {
     "name": "Actual AI",
@@ -18,6 +18,7 @@
     "coding-agents"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks/codex-hooks.json",
   "interface": {
     "displayName": "Actual CLI",
     "shortDescription": "Add architecture guidance to coding agents.",
