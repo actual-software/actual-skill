@@ -124,16 +124,17 @@ Write nothing until the person answers, and nothing when they pick none.
 
 ## Write each picked ADR
 
-Write each picked ADR into `docs/adr/` and nowhere else. `actual adr new` lays it out, but it also writes a rule file into `.actual/rules/`, so run it with `--root` set to a new scratch directory, once per picked draft, with the status the person chose. Always pass `--status`: an agent's shell has no terminal, and without one the CLI writes a draft.
+Write each picked ADR into `docs/adr/` and nowhere else. `actual adr new` lays it out, but it also writes a rule file into `.actual/rules/`, so point it at a scratch directory instead of the repository: once per picked draft, run `mktemp -d` and pass the directory it prints to `--root`, with the status the person chose. Always pass `--status`: an agent's shell has no terminal, and without one the CLI writes a draft.
 
 ```bash
+mktemp -d    # prints the scratch directory, such as /tmp/tmp.k3J9x0aB1c
 actual adr new "<title>" \
   --context "<point>" --context "<point>" \
   --policy "MUST: <statement>" --policy "SHOULD_NOT: <statement>" \
   --deciders "<name or team>" \
   --scope 'services/**' \
   --status accepted \
-  --root "$(mktemp -d)" \
+  --root "<scratch directory>" \
   --json
 ```
 
@@ -141,7 +142,7 @@ actual adr new "<title>" \
 - `--json` prints `adr_id`, `status`, `decision_file` and `rule_file`, and both files sit in the scratch directory.
 - The CLI runs Actual AI's save check first. When the decision would be refused it writes nothing, lists each reason and exits 1: fix the draft and run it again.
 
-Move `decision_file` into the repository's `docs/adr/` under its own name, then delete the scratch directory (the part of `decision_file` before `/docs/adr/`) with the rule file in it:
+Move `decision_file` into the repository's `docs/adr/` under its own name, then delete the scratch directory with the rule file in it. Remove only the path `mktemp -d` printed, never one inside the repository:
 
 ```bash
 mkdir -p docs/adr && mv "<decision_file>" docs/adr/ && rm -r "<scratch directory>"
