@@ -38,21 +38,17 @@ In Claude Code, the plugin checks your coding agent's work against the architect
 
    [Homebrew and other install options](docs/install.md).
 
-3. Add your architecture rules as Markdown files under `.actual/rules/`. Merge the sync pull request [app.actual.ai](https://app.actual.ai) opens, which writes your team's accepted decisions there, or write them by hand:
+3. Optionally, run `actual login` to sign in to Actual AI. The checks, `actual rules`, `actual adr new` and drafting ADRs run signed out; saving ADRs to Actual AI needs it.
 
-   ```markdown
-   # Use the repository layer for database access
+4. Add your team's architecture decisions under `docs/adr/`. In your own terminal, `actual adr new` (CLI 0.14.0 or later) writes a decision there, along with the rule file under `.actual/rules/` that the checks read:
 
-   ### Rules
-
-   - **R-DB-001** MUST: Code outside `src/db/` reaches the database only through `src/db/`.
+   ```bash
+   actual adr new "Use Postgres for storage" --policy "MUST: Services store relational data in Postgres."
    ```
 
-   `actual rules ls` shows whether each file parses. Your agent can also draft ADRs into `docs/adr/` with `/actual-cli:adr-draft <a decision or an area of the code>`, and their rules arrive here through the sync pull request once they're published in Actual AI.
+   Run from a coding agent's shell, it writes a draft, which no check reads. You can also merge the sync pull request [app.actual.ai](https://app.actual.ai) opens, which writes the same two files for each accepted decision, or have your agent draft decisions with you: `/actual-cli:adr-draft <a decision or an area of the code>`. `actual rules ls` lists the rule files the checks read and marks a draft as not enforced.
 
-4. Optionally, run `actual login` to sign in to Actual AI. The checks, `actual rules` and drafting ADRs work without it; saving ADRs to Actual AI needs it.
-
-From then on, every plan and every turn in that repository is checked against those rules.
+From then on, every plan and every turn in that repository is checked against those decisions.
 
 `npx skills add actual-software/actual-skill` installs the skill alone, without the checks, in Claude Code or another agent.
 
