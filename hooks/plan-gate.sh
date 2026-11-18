@@ -55,10 +55,11 @@ if is_codex_host; then
   repo_root=$(resolve_repo_root)
   cd "$repo_root" 2>/dev/null || true
 
-  verdict=$(printf '%s' "$payload" | actual plan-check --codex-hook --rules-dir "$dir" 2>"$stderr_file")
+  ask=$(codex_ask_flag)
+  verdict=$(printf '%s' "$payload" | actual plan-check --codex-hook ${ask:+"$ask"} --rules-dir "$dir" 2>"$stderr_file")
   status=$?
   case "$status" in
-    0) forward_codex_reply "$verdict" "block notice" ;;
+    0) forward_codex_reply "$verdict" "block notice stop" ;;
     2)
       # A usage error is not a deny (see is_cli_usage_error); anything else on
       # exit 2 is the CLI's fallback block, whose stderr Codex hands the agent.

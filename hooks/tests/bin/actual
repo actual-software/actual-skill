@@ -86,6 +86,12 @@
 #   codex-escaped       a block whose reason carries a \uXXXX escape
 #   codex-empty-reason  a block with an empty reason
 #   codex-claude-shape  Claude Code's nested deny
+#   codex-stop          {"continue":false,"stopReason":...}, a --codex-ask stop
+#                       or a typed override's answer
+#   codex-stop-extra / codex-stop-empty   a stop with an added key / no text
+#   codex-context       the UserPromptSubmit additionalContext handing the
+#                       agent the conflicts
+#   codex-context-extra a context reply with keys appended after it
 # `rules brief --codex-hook` shares the brief modes above (the payload names
 # the file in its command). Like the real CLI, its `brief` reply opens with a
 # systemMessage naming what was briefed, left out under --no-brief-notice. The
@@ -414,6 +420,11 @@ if [ "$codex" -eq 1 ]; then
     codex-extra-key) printf '{"decision":"block","reason":"%s","continue":"false"}\n' "$reason"; exit 0 ;;
     codex-escaped) printf '{"decision":"block","reason":"R-001 MUST: caf\\u00e9."}\n'; exit 0 ;;
     codex-empty-reason) printf '{"decision":"block","reason":""}\n'; exit 0 ;;
+    codex-stop) printf '{"continue":false,"stopReason":"Actual implementation governance stopped this turn: %s"}\n' "$reason"; exit 0 ;;
+    codex-stop-extra) printf '{"continue":false,"stopReason":"x","decision":"block"}\n'; exit 0 ;;
+    codex-stop-empty) printf '{"continue":false,"stopReason":""}\n'; exit 0 ;;
+    codex-context) printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"Your last turn was stopped: %s"}}\n' "$reason"; exit 0 ;;
+    codex-context-extra) printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"x"},"continue":false,"k":{"a":"b"}}\n'; exit 0 ;;
     codex-claude-shape) mode=deny ;;
   esac
 fi

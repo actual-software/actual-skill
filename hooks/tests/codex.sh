@@ -276,6 +276,33 @@ else
   fail "Codex turn-start ran on an old CLI" "calls=$(tr '\n' ';' < "$CX_CALLS")"
 fi
 
+# The CLI's answers to a Codex prompt: the waiting conflicts as context, or a
+# typed override's stop. Only those two shapes are forwarded.
+for mode in codex-stop codex-context; do
+  st=$(run_codex "$TS" "$CX_PROMPT" "$CX_REPO" ACTUAL_TEST_MODE="$mode")
+  want=continue,stopReason
+  [ "$mode" = codex-context ] && want=hookSpecificOutput
+  if [ "$st" = 0 ] && [ "$(out_keys)" = "$want" ] && grep -q 'R-001' "${WORK}/out"; then
+    pass "Codex UserPromptSubmit: a ${mode} reply is forwarded whole"
+  else
+    fail "Codex turn-start dropped ${mode}" "st=$st out=$(cat "${WORK}/out")"
+  fi
+done
+for mode in deny notice codex-stop-extra codex-stop-empty codex-context-extra codex-escaped; do
+  run_codex "$TS" "$CX_PROMPT" "$CX_REPO" ACTUAL_TEST_MODE="$mode" >/dev/null
+  if [ ! -s "${WORK}/out" ]; then
+    pass "Codex UserPromptSubmit: a ${mode} reply is not forwarded"
+  else
+    fail "Codex turn-start forwarded ${mode}" "$(cat "${WORK}/out")"
+  fi
+done
+run_hook "$TS" "${RESOLVED}/userpromptsubmit-turn.json" "$CX_REPO" ACTUAL_TEST_MODE=codex-context >/dev/null
+if [ ! -s "${WORK}/out" ]; then
+  pass "Claude Code UserPromptSubmit: still silent whatever the CLI prints"
+else
+  fail "Claude Code turn-start printed something" "$(cat "${WORK}/out")"
+fi
+
 # --- plan-gate.sh (Stop) ---
 
 rm -f "${CX_CAPTURE}"*
@@ -293,6 +320,42 @@ if grep -qx -- '--codex-hook' "${CX_CAPTURE}.argv" && ! grep -qx -- '--claude-ho
 else
   fail "Codex plan gate forwarding wrong" "$(tr '\n' ' ' < "${CX_CAPTURE}.argv" 2>/dev/null)"
 fi
+
+# --codex-ask by default; an unattended run, or the dialog switched off, keeps
+# the automatic revise.
+for gate in PG IG; do
+  script=${!gate}
+  rm -f "${CX_CAPTURE}"*
+  run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CX_CAPTURE" >/dev/null
+  asked=$(grep -cx -- '--codex-ask' "${CX_CAPTURE}.argv" 2>/dev/null)
+  rm -f "${CX_CAPTURE}"*
+  run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CX_CAPTURE" \
+    ACTUAL_UNATTENDED=on >/dev/null
+  unattended=$(grep -cx -- '--codex-ask' "${CX_CAPTURE}.argv" 2>/dev/null)
+  rm -f "${CX_CAPTURE}"*
+  run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CX_CAPTURE" \
+    ACTUAL_OVERRIDE_DIALOG=off >/dev/null
+  dialog_off=$(grep -cx -- '--codex-ask' "${CX_CAPTURE}.argv" 2>/dev/null)
+  if [ "$asked" = 1 ] && [ "$unattended" = 0 ] && [ "$dialog_off" = 0 ]; then
+    pass "Codex ${gate}: --codex-ask by default, not when unattended or with the dialog off"
+  else
+    fail "Codex ${gate} --codex-ask wrong" "default=$asked unattended=$unattended dialog_off=$dialog_off"
+  fi
+  st=$(run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=codex-stop)
+  if [ "$st" = 0 ] && [ "$(out_keys)" = continue,stopReason ] && [ "$(jq -r .continue < "${WORK}/out")" = false ]; then
+    pass "Codex ${gate}: a stop is forwarded whole, ending the turn for the user"
+  else
+    fail "Codex ${gate} dropped a stop" "st=$st out=$(cat "${WORK}/out")"
+  fi
+  for mode in codex-context codex-stop-extra codex-stop-empty; do
+    run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE="$mode" >/dev/null
+    if [ ! -s "${WORK}/out" ]; then
+      pass "Codex ${gate}: a ${mode} reply is not forwarded"
+    else
+      fail "Codex ${gate} forwarded ${mode}" "$(cat "${WORK}/out")"
+    fi
+  done
+done
 
 st=$(run_codex "$PG" "$CX_STOP" "$CX_REPO" ACTUAL_TEST_MODE=allow)
 if [ "$st" = 0 ] && [ "$(out_keys)" = none ]; then

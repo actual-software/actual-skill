@@ -1068,6 +1068,13 @@ is_single_json_string() {
 #
 #   block   {"decision":"block","reason":"..."}   a Stop that sends the agent back
 #   notice  {"systemMessage":"..."}               a line shown to the user
+#   stop    {"continue":false,"stopReason":"..."} end the turn, or keep a prompt
+#                                                 from the model, and tell the
+#                                                 user why (--codex-ask, and a
+#                                                 typed override)
+#   context {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",
+#            "additionalContext":"..."}}          what the agent reads with the
+#                                                 user's message
 #
 # The Claude Code gates match a verdict by substrings, because Claude Code's
 # replies carry a nested hookSpecificOutput whose key order they cannot pin.
@@ -1083,16 +1090,23 @@ forward_codex_reply() {
   trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
   [ -n "$trimmed" ] || return 1
 
+  local suffix_len=2
   case "$trimmed" in
     '{"decision":"block","reason":"'*'"}') kind=block prefix='{"decision":"block","reason":"' ;;
     '{"systemMessage":"'*'"}') kind=notice prefix='{"systemMessage":"' ;;
+    '{"continue":false,"stopReason":"'*'"}') kind=stop prefix='{"continue":false,"stopReason":"' ;;
+    '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"'*'"}}')
+      kind=context suffix_len=3
+      prefix='{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"' ;;
     *) return 1 ;;
   esac
   case " $allowed " in *" $kind "*) ;; *) return 1 ;; esac
   # The prefix and the closing `"}` must not overlap: `{"systemMessage":"}` is
   # not a string at all.
-  [ "${#trimmed}" -ge $((${#prefix} + 2)) ] || return 1
-  is_single_json_string "$trimmed" "$prefix" 2 || return 1
+  [ "${#trimmed}" -ge $((${#prefix} + suffix_len)) ] || return 1
+  is_single_json_string "$trimmed" "$prefix" "$suffix_len" || return 1
+  # A stop or context with nothing to say is not one the CLI writes.
+  [ "${#trimmed}" -gt $((${#prefix} + suffix_len)) ] || [ "$kind" = block ] || return 1
 
   if has_unicode_escape "$trimmed"; then
     emit_stop_notice "Actual governance received a reply it could not safely interpret (it contained an escaped character sequence); this turn was not checked against .actual/rules/."
@@ -1105,6 +1119,18 @@ forward_codex_reply() {
     return 0
   fi
   printf '%s\n' "$trimmed"
+}
+
+# The flag that makes a Codex gate end the turn on a conflict and put the
+# choice to the user (revise or override), the way Claude Code's override
+# dialog does, instead of sending the agent straight back. Left out, so a
+# conflict sends the agent back as before, for an unattended run (nobody to
+# ask; ACTUAL_UNATTENDED=on) and when ACTUAL_OVERRIDE_DIALOG=off, the switch
+# that turns the dialog off in Claude Code.
+codex_ask_flag() {
+  unattended_on && return 0
+  [ "${ACTUAL_OVERRIDE_DIALOG:-on}" = "off" ] && return 0
+  printf '%s' --codex-ask
 }
 
 # --- Stop hook output (impl-gate.sh) ---

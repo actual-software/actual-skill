@@ -110,13 +110,16 @@ trap 'rm -f "$stderr_file"' EXIT
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 
-verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" --rules-dir "$dir" 2>"$stderr_file")
+# Codex only: end the turn on a conflict and ask the user (see codex_ask_flag).
+ask=""
+is_codex_host && ask=$(codex_ask_flag)
+verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" ${ask:+"$ask"} --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 
 case "$status" in
   0)
     if is_codex_host; then
-      forward_codex_reply "$verdict" "block notice"
+      forward_codex_reply "$verdict" "block notice stop"
     else
       render_stop_verdict "$verdict"
     fi
