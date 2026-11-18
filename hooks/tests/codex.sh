@@ -413,10 +413,12 @@ rm -rf "${WORK}/cache"
 RB_ARGV="${CX_CAPTURE}.argv"
 rm -f "${CX_CAPTURE}"*
 st=$(run_codex "$RB" "$CX_READ" "$CX_REPO" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="$CX_CAPTURE")
-if [ "$st" = 0 ] && [ "$(out_keys)" = hookSpecificOutput ] && [ "$(hso_keys)" = "additionalContext,hookEventName" ] \
+if [ "$st" = 0 ] && [ "$(out_keys)" = hookSpecificOutput,systemMessage ] \
+   && [ "$(hso_keys)" = "additionalContext,hookEventName" ] \
    && [ "$(jq -r .hookSpecificOutput.hookEventName < "${WORK}/out")" = PostToolUse ] \
+   && [ "$(jq -r .systemMessage < "${WORK}/out")" = "Actual AI: briefed 1 ADR · 1 rule · src/persistence/repo.ts" ] \
    && grep -q 'R-001' "${WORK}/out"; then
-  pass "Codex PostToolUse:Bash read of a governed file: one PostToolUse brief, in Codex's shape"
+  pass "Codex PostToolUse:Bash read of a governed file: one PostToolUse brief and the user's line, in Codex's shape"
 else
   fail "Codex shell-read brief wrong" "st=$st out=$(cat "${WORK}/out")"
 fi
@@ -424,7 +426,7 @@ if grep -qx -- '--codex-hook' "$RB_ARGV" && ! grep -qx -- '--claude-hook' "$RB_A
    && [ "$(argv_after --max-session-chars "$RB_ARGV")" = 48000 ] \
    && [ "$(argv_after --repo "$RB_ARGV")" = "$CX_REPO" ] \
    && [ "$(argv_after --rules-dir "$RB_ARGV")" = "${CX_REPO}/.actual/rules" ] \
-   && ! grep -qxE -- '--limit|--rules-per-decision|--max-chars|--min-score' "$RB_ARGV"; then
+   && ! grep -qxE -- '--limit|--rules-per-decision|--max-chars|--min-score|--no-brief-notice' "$RB_ARGV"; then
   pass "Codex brief: --codex-hook, the 48000-character session cap, --repo and --rules-dir; no unset tuning flags"
 else
   fail "Codex brief flags wrong" "$(tr '\n' ' ' < "$RB_ARGV")"
@@ -473,7 +475,8 @@ if [ -s "${WORK}/out" ]; then
 else
   fail "Codex brief stood down for a mod that is not there" ""
 fi
-for mode in brief-permission brief-trailing-field brief-escaped; do
+for mode in brief-permission brief-trailing-field brief-escaped \
+  brief-notice-structure brief-notice-backslash brief-notice-escaped brief-notice-empty; do
   run_codex "$RB" "$CX_READ" "$CX_REPO" ACTUAL_TEST_MODE="$mode" >/dev/null
   if [ ! -s "${WORK}/out" ]; then
     pass "Codex brief: a ${mode} reply is dropped"
@@ -481,6 +484,32 @@ for mode in brief-permission brief-trailing-field brief-escaped; do
     fail "Codex brief forwarded ${mode}" "$(cat "${WORK}/out")"
   fi
 done
+run_codex "$RB" "$CX_READ" "$CX_REPO" ACTUAL_TEST_MODE=brief-notice-quoted >/dev/null
+if [ "$(out_keys)" = hookSpecificOutput,systemMessage ] \
+   && [ "$(jq -r .systemMessage < "${WORK}/out")" = 'Actual AI: briefed "src\\a.ts"' ]; then
+  pass "Codex brief: a user's line with escaped quotes and backslashes is forwarded whole"
+else
+  fail "Codex brief dropped or mangled a quoted user's line" "$(cat "${WORK}/out")"
+fi
+# The line is Codex's: Claude Code's reply never carries it, so there it is
+# not the allowlisted shape.
+run_hook "$RB" "${RESOLVED}/posttooluse-read-governed.json" "$CX_REPO" ACTUAL_TEST_MODE=brief >/dev/null
+claude_plain=$(cat "${WORK}/out")
+run_hook "$RB" "${RESOLVED}/posttooluse-read-governed.json" "$CX_REPO" ACTUAL_TEST_MODE=brief-notice >/dev/null
+if [ -n "$claude_plain" ] && [ ! -s "${WORK}/out" ]; then
+  pass "Claude Code brief: a reply carrying a systemMessage is dropped"
+else
+  fail "Claude Code brief forwarded a systemMessage" "$(cat "${WORK}/out")"
+fi
+rm -f "${CX_CAPTURE}"*
+run_codex "$RB" "$CX_READ" "$CX_REPO" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="$CX_CAPTURE" \
+  ACTUAL_RULES_BRIEF_NOTICE=off >/dev/null
+if grep -qx -- '--no-brief-notice' "$RB_ARGV" && [ "$(out_keys)" = hookSpecificOutput ] \
+   && grep -q 'R-001' "${WORK}/out"; then
+  pass "Codex brief: ACTUAL_RULES_BRIEF_NOTICE=off passes --no-brief-notice and the brief still arrives"
+else
+  fail "Codex brief ignored ACTUAL_RULES_BRIEF_NOTICE=off" "argv=$(tr '\n' ' ' < "$RB_ARGV") out=$(cat "${WORK}/out")"
+fi
 rm -f "$CX_CALLS"
 run_codex "$RB" "$CX_READ" "$CX_REPO" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CODEX=old ACTUAL_TEST_CALLS="$CX_CALLS" >/dev/null
 if [ ! -s "${WORK}/out" ] && ! grep -q '^rules brief --codex-hook' "$CX_CALLS"; then

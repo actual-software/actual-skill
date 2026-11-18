@@ -170,14 +170,14 @@ shapes and the wording; unset, everything behaves as in Claude Code.
 |------|-------|-------------------------------|
 | `preflight.sh` | `SessionStart` (all five sources) | The same ladder, plus one rung: a CLI without the `codex-hook` capability marker (`actual plan-check --help`, cached per binary like the ADR header v2 probe) gets the upgrade offer, as an interrupt at `startup` and at a pause afterwards, and the Claude Code version minimums are not asked. On `compact` and `clear` it runs `actual rules brief --codex-session-start`, which resets what the session has been briefed, as the mod does in Claude Code. The offers name no Claude Code tool: Codex's default mode has no question tool, so the agent is asked to put the question in its reply and end its turn on it |
 | `turn-start.sh` | `UserPromptSubmit` | `impl-check --codex-hook`; probes for `codex-hook` instead of the `UserPromptSubmit` dispatch |
-| `rules-brief.sh` | `PostToolUse` on `Bash`, `PreToolUse` on `Edit\|Write` | Codex has no Read tool. On `Bash` the CLI briefs the files a read-only command names (`cat`, `head`, `tail`, `sed -n`, `grep`, `rg`, `nl`, `wc` and similar, after a leading `cd`; no output redirection, no command substitution, at most two files). `Edit\|Write` is the alias Codex matches `apply_patch` by, and the CLI briefs the files the patch adds or updates, before it applies. No mod stands this down. The hook passes `--max-session-chars` (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, default 48000) and the other four limits when they are plain numbers, and the CLI enforces the cap and says once when it is spent |
+| `rules-brief.sh` | `PostToolUse` on `Bash`, `PreToolUse` on `Edit\|Write` | Codex has no Read tool. On `Bash` the CLI briefs the files a read-only command names (`cat`, `head`, `tail`, `sed -n`, `grep`, `rg`, `nl`, `wc` and similar, after a leading `cd`; no output redirection, no command substitution, at most two files). `Edit\|Write` is the alias Codex matches `apply_patch` by, and the CLI briefs the files the patch adds or updates, before it applies. No mod stands this down. The hook passes `--max-session-chars` (`ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS`, default 48000) and the other four limits when they are plain numbers, and the CLI enforces the cap and says once when it is spent. The CLI's reply opens with a `systemMessage`, such as `Actual AI: briefed 2 ADRs · 7 rules · src/a.ts`, because Codex shows `additionalContext` to the model only and has no mod to write a transcript row; Codex shows the line to the user and keeps it out of the model's context. `ACTUAL_RULES_BRIEF_NOTICE=off` passes `--no-brief-notice`, which drops it |
 | `plan-gate.sh` | `Stop` | Codex has no `ExitPlanMode`. The hook runs on every `Stop` and `actual plan-check --codex-hook` reads the turn's mode and plan from the rollout at `transcript_path`: outside Plan mode it prints nothing. A conflicting plan gets `{"decision":"block","reason":…}` and the agent revises it in the same turn, after the user has seen the first draft. Silent on a missing, unreadable or too-old CLI, which `impl-gate.sh` reports on the same `Stop` |
 | `impl-gate.sh` | `Stop` | `impl-check --codex-hook`, which skips a Plan-mode turn. Its reply is already Codex's `Stop` shape, so it is forwarded after the check below rather than re-rendered. On a CLI without `codex-hook` it stands down with a one-line notice |
 | `session-summary.sh` | `Stop` | Codex only. `actual session summary --codex-hook` prints the summary line as `{"systemMessage":…}` when it changed since it was last shown; Codex shows it to the user and never to the model. `ACTUAL_RULES_BRIEF=off` silences it |
 
 There is no `SessionEnd` registration, no transcript row and no `/rules-brief`
-pane: Codex gives a hook no way to write either, and its session-end event is not
-covered yet. Settings are environment variables only, since Codex has no
+pane: Codex gives a hook no way to write either (the brief's `systemMessage` line
+stands in for the row), and its session-end event is not covered yet. Settings are environment variables only, since Codex has no
 per-plugin `userConfig`.
 
 **Codex hook contract.** Codex parses hook output strictly: a key it does not know
@@ -188,7 +188,11 @@ the exact opening bytes, the exact closing `"}` and a single JSON string between
 and forwards only `{"decision":"block","reason":"…"}` (the gates) or
 `{"systemMessage":"…"}` (the gates' notices and the summary). A brief keeps Claude
 Code's `{"hookSpecificOutput":{"hookEventName","additionalContext"}}`, which Codex
-accepts. A reply with a `\uXXXX` escape is refused with a notice, as the Claude Code
+accepts, optionally preceded by a top-level `"systemMessage":"…"`. `rules-brief.sh`
+splits that line off at the first `","hookSpecificOutput":` (a JSON string cannot
+contain one unescaped), requires it to be a single JSON string with no unpaired
+trailing backslash, and runs the brief's own checks on what is left; under Claude
+Code a reply carrying the line is dropped. A reply with a `\uXXXX` escape is refused with a notice, as the Claude Code
 gates refuse one; a block with an empty reason blocks with a fixed reason. Exit 2
 still blocks, with stderr as the reason.
 

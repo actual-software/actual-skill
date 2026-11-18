@@ -34,10 +34,13 @@
 # in hooks/codex-hooks.json are PostToolUse on Bash, where the CLI briefs the
 # files a read-only shell command names (`cat`, `sed -n`, `rg` ...), and
 # PreToolUse on Edit|Write, the aliases Codex matches apply_patch by, where it
-# briefs the files the patch adds or updates. The reply shape is the same. With
-# no mod to cap a session's briefing, this script passes the cap to the CLI
-# (ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS, default 48000), together with the
-# tuning variables the mod would otherwise have forwarded.
+# briefs the files the patch adds or updates. The reply shape is the same, with
+# one addition: a leading top-level systemMessage, the one line Codex shows the
+# user for a brief (it shows additionalContext to the model only, and there is
+# no mod to write a transcript row). ACTUAL_RULES_BRIEF_NOTICE=off asks the CLI
+# to leave it out. With no mod to cap a session's briefing, this script passes
+# the cap to the CLI (ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS, default 48000),
+# together with the tuning variables the mod would otherwise have forwarded.
 
 set -uo pipefail
 
@@ -159,6 +162,7 @@ if is_codex_host; then
     && codex_flags+=(--rules-per-decision "$ACTUAL_RULES_BRIEF_RULES_PER_DECISION")
   is_count "${ACTUAL_RULES_BRIEF_MAX_CHARS:-}" && codex_flags+=(--max-chars "$ACTUAL_RULES_BRIEF_MAX_CHARS")
   is_score "${ACTUAL_RULES_BRIEF_MIN_SCORE:-}" && codex_flags+=(--min-score "$ACTUAL_RULES_BRIEF_MIN_SCORE")
+  [ "${ACTUAL_RULES_BRIEF_NOTICE:-on}" = "off" ] && codex_flags+=(--no-brief-notice)
 fi
 
 # "${codex_flags[@]}" on an empty array is an unbound-variable error under
@@ -214,17 +218,46 @@ trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
 # rules out a quote spelled \u0022 that this scan cannot see -- the allowlist
 # admits exactly the one shape its name claims.
 prefix="{\"hookSpecificOutput\":{\"hookEventName\":\"${event}\",\"additionalContext\":\""
+
+# Codex: the CLI may put the user's line first, as
+#
+#   {"systemMessage":"...","hookSpecificOutput":{...same as above...}}
+#
+# Peel it off and check it is a single JSON string, then check what is left as
+# the shape above. The separator is found by its first occurrence, which is the
+# real one: it holds `,"`, and inside a JSON string every quote is escaped, so
+# the message cannot spell it. The guards below run on the whole reply, notice
+# included, and on success the whole reply is forwarded. Claude Code's reply
+# never carries the line, so there a reply that does is dropped as before.
+whole=$trimmed
+notice_prefix='{"systemMessage":"'
+if is_codex_host && [ "${trimmed#"$notice_prefix"}" != "$trimmed" ]; then
+  separator="\",${prefix#\{}"
+  after=${trimmed#"$notice_prefix"}
+  notice=${after%%"$separator"*}
+  # A message ending in an unpaired backslash would escape the quote that is
+  # meant to close it, so the reply would not decode the way it was split.
+  unpaired=${notice//\\\\/}
+  if [ "$notice" = "$after" ] || [ -z "$notice" ] || [ "${unpaired%\\}" != "$unpaired" ] \
+     || ! is_single_json_string "$notice" "" 0; then
+    [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
+      printf 'actual-rules-brief: dropped (systemMessage is not a single JSON string)\n' >&2
+    exit 0
+  fi
+  trimmed="${prefix}${after#*"$separator"}"
+fi
+
 if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
    && [ "${trimmed%\"\}\}}" != "$trimmed" ] \
-   && ! has_permission_decision "$trimmed" \
-   && ! has_unicode_escape "$trimmed" \
-   && ! has_duplicate_permission_decision "$trimmed"; then
+   && ! has_permission_decision "$whole" \
+   && ! has_unicode_escape "$whole" \
+   && ! has_duplicate_permission_decision "$whole"; then
   if ! is_single_json_string "$trimmed" "$prefix" 3; then
     [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
       printf 'actual-rules-brief: dropped (content is not a single JSON string)\n' >&2
     exit 0
   fi
-  printf '%s\n' "$trimmed"
+  printf '%s\n' "$whole"
 elif [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && [ -n "$trimmed" ]; then
   printf 'actual-rules-brief: dropped (reply is not the allowlisted shape)\n' >&2
 fi

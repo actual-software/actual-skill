@@ -87,7 +87,12 @@
 #   codex-empty-reason  a block with an empty reason
 #   codex-claude-shape  Claude Code's nested deny
 # `rules brief --codex-hook` shares the brief modes above (the payload names
-# the file in its command), and `rules brief --codex-session-start` records its
+# the file in its command). Like the real CLI, its `brief` reply opens with a
+# systemMessage naming what was briefed, left out under --no-brief-notice. The
+# brief-notice-* modes vary that line: quoted (escaped quotes, forwarded),
+# structure (unescaped quotes that add keys), backslash (an unpaired trailing
+# backslash), escaped (a \uXXXX escape) and empty. brief-notice prints the
+# Codex shape whatever the host. `rules brief --codex-session-start` records its
 # argv and stdin and prints nothing. `session summary --codex-hook` prints the
 # line as {"systemMessage":...}; ACTUAL_TEST_SUMMARY varies it: none prints
 # nothing, extra adds a decision, plain prints the bare line, crash panics.
@@ -229,9 +234,13 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
     exit 0
   fi
   has_claude_hook=0
+  codex_brief=0
+  brief_notice=1
   for arg in "$@"; do
     case "$arg" in
-      --claude-hook|--codex-hook) has_claude_hook=1 ;;
+      --claude-hook) has_claude_hook=1 ;;
+      --codex-hook) has_claude_hook=1; codex_brief=1 ;;
+      --no-brief-notice) brief_notice=0 ;;
       --codex-session-start)
         if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
           printf '%s\n' "$@" > "${ACTUAL_TEST_CAPTURE}.session-start.argv"
@@ -274,9 +283,28 @@ if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then
     printf '%s\n' "$key" >> "$ACTUAL_TEST_STATE"
     mode=brief
   fi
+  notice='Actual AI: briefed 1 ADR \u00b7 1 rule \u00b7 src/persistence/repo.ts'
+  # The real CLI writes the middle dot as itself; JSON-escaped here only so this
+  # file stays ASCII. The forwarding guards refuse \uXXXX, so print it raw.
+  notice=$(printf '%s' "$notice" | sed 's/\\u00b7/·/g')
   case "$mode" in
     brief)
-      [ "$governed" -eq 1 ] && printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$ctx"
+      [ "$governed" -eq 1 ] || exit 0
+      if [ "$codex_brief" -eq 1 ] && [ "$brief_notice" -eq 1 ]; then
+        printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$notice" "$event" "$ctx"
+      else
+        printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$event" "$ctx"
+      fi
+      exit 0 ;;
+    brief-notice|brief-notice-quoted|brief-notice-structure|brief-notice-backslash|brief-notice-escaped|brief-notice-empty)
+      case "$mode" in
+        brief-notice-quoted) notice='Actual AI: briefed \"src\\\\a.ts\"' ;;
+        brief-notice-structure) notice='x","continue":false,"k":"v' ;;
+        brief-notice-backslash) notice='x\' ;;
+        brief-notice-escaped) notice='x\u0022' ;;
+        brief-notice-empty) notice='' ;;
+      esac
+      printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$notice" "$event" "$ctx"
       exit 0 ;;
     brief-pretty)
       [ "$governed" -eq 1 ] && printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n\n' "$ctx"
