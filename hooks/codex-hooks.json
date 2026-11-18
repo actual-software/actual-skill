@@ -46,6 +46,16 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "matcher": "request_user_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/gate-answer.sh",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "Stop": [

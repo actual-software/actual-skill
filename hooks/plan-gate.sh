@@ -56,7 +56,9 @@ if is_codex_host; then
   cd "$repo_root" 2>/dev/null || true
 
   ask=$(codex_ask_flag)
-  verdict=$(printf '%s' "$payload" | actual plan-check --codex-hook ${ask:+"$ask"} --rules-dir "$dir" 2>"$stderr_file")
+  # Split on purpose: codex_ask_flag prints fixed flags.
+  # shellcheck disable=SC2086
+  verdict=$(printf '%s' "$payload" | actual plan-check --codex-hook $ask --rules-dir "$dir" 2>"$stderr_file")
   status=$?
   case "$status" in
     0) forward_codex_reply "$verdict" "block notice stop" ;;

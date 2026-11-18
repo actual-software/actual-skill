@@ -100,6 +100,7 @@ expect_reg "SessionStart" '.hooks.SessionStart[0].hooks[0]' preflight.sh 30
 expect_reg "UserPromptSubmit" '.hooks.UserPromptSubmit[0].hooks[0]' turn-start.sh 10
 expect_reg "PreToolUse:Edit|Write" '.hooks.PreToolUse[] | select(.matcher=="Edit|Write") | .hooks[0]' rules-brief.sh 3
 expect_reg "PostToolUse:Bash" '.hooks.PostToolUse[] | select(.matcher=="Bash") | .hooks[0]' rules-brief.sh 3
+expect_reg "PostToolUse:request_user_input" '.hooks.PostToolUse[] | select(.matcher=="request_user_input") | .hooks[0]' gate-answer.sh 10
 expect_reg "Stop[0]" '.hooks.Stop[0].hooks[0]' plan-gate.sh 180
 expect_reg "Stop[1]" '.hooks.Stop[0].hooks[1]' impl-gate.sh 180
 expect_reg "Stop[2]" '.hooks.Stop[0].hooks[2]' session-summary.sh 5
@@ -303,6 +304,52 @@ else
   fail "Claude Code turn-start printed something" "$(cat "${WORK}/out")"
 fi
 
+# --- gate-answer.sh (PostToolUse on request_user_input) ---
+
+GA="${HOOKS_DIR}/gate-answer.sh"
+cx_answer() {
+  jq -nc --arg id "$1" --arg cwd "$CX_REPO" '{session_id:"s-ga",turn_id:"t1",cwd:$cwd,hook_event_name:"PostToolUse",tool_name:"request_user_input",tool_input:{questions:[{id:$id,header:"h",question:"q",options:[]}]},tool_response:({answers:{($id):{answers:["Override all 2 rules"]}}}|tojson)}' > "${WORK}/answer.json"
+  printf '%s' "${WORK}/answer.json"
+}
+rm -f "${CX_CAPTURE}"*
+st=$(run_codex "$GA" "$(cx_answer actual_choice_abcd1234)" "$CX_REPO" ACTUAL_TEST_MODE=codex-post-context ACTUAL_TEST_CAPTURE="$CX_CAPTURE")
+if [ "$st" = 0 ] && [ "$(out_keys)" = hookSpecificOutput ] \
+   && [ "$(jq -r .hookSpecificOutput.hookEventName < "${WORK}/out")" = PostToolUse ] \
+   && grep -qx -- '--codex-hook' "${CX_CAPTURE}.argv" \
+   && [ "$(argv_after --rules-dir "${CX_CAPTURE}.argv")" = "${CX_REPO}/.actual/rules" ] \
+   && grep -q 'actual_choice_abcd1234' "$CX_CAPTURE"; then
+  pass "Codex picker answer: the envelope goes to impl-check --codex-hook and its PostToolUse context comes back"
+else
+  fail "Codex gate-answer wrong" "st=$st out=$(cat "${WORK}/out") argv=$(tr '\n' ' ' < "${CX_CAPTURE}.argv" 2>/dev/null)"
+fi
+for mode in codex-post-context-extra codex-context codex-stop deny notice; do
+  run_codex "$GA" "$(cx_answer actual_reason_abcd1234)" "$CX_REPO" ACTUAL_TEST_MODE="$mode" >/dev/null
+  if [ ! -s "${WORK}/out" ]; then
+    pass "Codex picker answer: a ${mode} reply is not forwarded"
+  else
+    fail "Codex gate-answer forwarded ${mode}" "$(cat "${WORK}/out")"
+  fi
+done
+rm -f "$CX_CALLS"
+run_codex "$GA" "$(cx_answer some_other_question)" "$CX_REPO" ACTUAL_TEST_MODE=codex-post-context ACTUAL_TEST_CALLS="$CX_CALLS" >/dev/null
+if [ ! -s "${WORK}/out" ] && ! grep -q '^impl-check' "$CX_CALLS" 2>/dev/null; then
+  pass "Codex picker answer: a picker that isn't a gate's spawns no CLI"
+else
+  fail "Codex gate-answer ran for someone else's picker" "calls=$(tr '\n' ';' < "$CX_CALLS" 2>/dev/null)"
+fi
+run_hook "$GA" "$(cx_answer actual_choice_abcd1234)" "$CX_REPO" ACTUAL_TEST_MODE=codex-post-context >/dev/null
+if [ ! -s "${WORK}/out" ]; then
+  pass "gate-answer.sh is silent outside Codex"
+else
+  fail "gate-answer.sh spoke under Claude Code" "$(cat "${WORK}/out")"
+fi
+run_codex "$GA" "$(cx_answer actual_choice_abcd1234)" "$CX_REPO" ACTUAL_TEST_MODE=codex-post-context ACTUAL_PLAN_GATE=off >/dev/null
+if [ ! -s "${WORK}/out" ]; then
+  pass "Codex picker answer honours ACTUAL_PLAN_GATE=off"
+else
+  fail "Codex gate-answer ignored ACTUAL_PLAN_GATE=off" ""
+fi
+
 # --- plan-gate.sh (Stop) ---
 
 rm -f "${CX_CAPTURE}"*
@@ -328,6 +375,16 @@ for gate in PG IG; do
   rm -f "${CX_CAPTURE}"*
   run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CX_CAPTURE" >/dev/null
   asked=$(grep -cx -- '--codex-ask' "${CX_CAPTURE}.argv" 2>/dev/null)
+  picker=$(grep -cx -- '--codex-picker' "${CX_CAPTURE}.argv" 2>/dev/null)
+  rm -f "${CX_CAPTURE}"*
+  run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CX_CAPTURE" \
+    ACTUAL_CODEX_PICKER=off >/dev/null
+  text_only="$(grep -cx -- '--codex-ask' "${CX_CAPTURE}.argv" 2>/dev/null)/$(grep -cx -- '--codex-picker' "${CX_CAPTURE}.argv" 2>/dev/null)"
+  if [ "$picker" = 1 ] && [ "$text_only" = "1/0" ]; then
+    pass "Codex ${gate}: --codex-picker by default, left out under ACTUAL_CODEX_PICKER=off"
+  else
+    fail "Codex ${gate} --codex-picker wrong" "default=$picker picker-off=$text_only"
+  fi
   rm -f "${CX_CAPTURE}"*
   run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CX_CAPTURE" \
     ACTUAL_UNATTENDED=on >/dev/null

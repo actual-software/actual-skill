@@ -1075,6 +1075,8 @@ is_single_json_string() {
 #   context {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit",
 #            "additionalContext":"..."}}          what the agent reads with the
 #                                                 user's message
+#   post-context  the same with "PostToolUse"     the agent's next step after
+#                                                 the user answered a picker
 #
 # The Claude Code gates match a verdict by substrings, because Claude Code's
 # replies carry a nested hookSpecificOutput whose key order they cannot pin.
@@ -1098,6 +1100,9 @@ forward_codex_reply() {
     '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"'*'"}}')
       kind=context suffix_len=3
       prefix='{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"' ;;
+    '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"'*'"}}')
+      kind=post-context suffix_len=3
+      prefix='{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"' ;;
     *) return 1 ;;
   esac
   case " $allowed " in *" $kind "*) ;; *) return 1 ;; esac
@@ -1121,16 +1126,23 @@ forward_codex_reply() {
   printf '%s\n' "$trimmed"
 }
 
-# The flag that makes a Codex gate end the turn on a conflict and put the
-# choice to the user (revise or override), the way Claude Code's override
-# dialog does, instead of sending the agent straight back. Left out, so a
-# conflict sends the agent back as before, for an unattended run (nobody to
-# ask; ACTUAL_UNATTENDED=on) and when ACTUAL_OVERRIDE_DIALOG=off, the switch
-# that turns the dialog off in Claude Code.
+# The flags that make a Codex gate put the choice to the user (revise or
+# override), the way Claude Code's override dialog does, instead of sending the
+# agent straight back: --codex-ask ends the turn with the choices as text, and
+# --codex-picker has the agent show them as a picker wherever it can
+# (request_user_input). Printed space-separated, for the caller to split. Left
+# out, so a conflict sends the agent back as before, for an unattended run
+# (nobody to ask; ACTUAL_UNATTENDED=on) and when ACTUAL_OVERRIDE_DIALOG=off,
+# the switch that turns the dialog off in Claude Code. ACTUAL_CODEX_PICKER=off
+# keeps the text alone.
 codex_ask_flag() {
   unattended_on && return 0
   [ "${ACTUAL_OVERRIDE_DIALOG:-on}" = "off" ] && return 0
-  printf '%s' --codex-ask
+  if [ "${ACTUAL_CODEX_PICKER:-on}" = "off" ]; then
+    printf '%s' --codex-ask
+  else
+    printf '%s' "--codex-ask --codex-picker"
+  fi
 }
 
 # --- Stop hook output (impl-gate.sh) ---

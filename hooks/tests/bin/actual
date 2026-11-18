@@ -92,6 +92,8 @@
 #   codex-context       the UserPromptSubmit additionalContext handing the
 #                       agent the conflicts
 #   codex-context-extra a context reply with keys appended after it
+#   codex-post-context  the PostToolUse context answering a gate's picker
+#   codex-post-context-extra  the same with keys appended after it
 # `rules brief --codex-hook` shares the brief modes above (the payload names
 # the file in its command). Like the real CLI, its `brief` reply opens with a
 # systemMessage naming what was briefed, left out under --no-brief-notice. The
@@ -437,6 +439,8 @@ if [ "$codex" -eq 1 ]; then
     codex-stop-empty) printf '{"continue":false,"stopReason":""}\n'; exit 0 ;;
     codex-context) printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"Your last turn was stopped: %s"}}\n' "$reason"; exit 0 ;;
     codex-context-extra) printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"x"},"continue":false,"k":{"a":"b"}}\n'; exit 0 ;;
+    codex-post-context) printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"The user chose to revise the changes: %s"}}\n' "$reason"; exit 0 ;;
+    codex-post-context-extra) printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"x"},"decision":"block","k":{"a":"b"}}\n'; exit 0 ;;
     codex-claude-shape) mode=deny ;;
   esac
 fi

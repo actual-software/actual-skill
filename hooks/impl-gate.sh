@@ -113,7 +113,9 @@ cd "$repo_root" 2>/dev/null || true
 # Codex only: end the turn on a conflict and ask the user (see codex_ask_flag).
 ask=""
 is_codex_host && ask=$(codex_ask_flag)
-verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" ${ask:+"$ask"} --rules-dir "$dir" 2>"$stderr_file")
+# Split on purpose: codex_ask_flag prints fixed flags.
+# shellcheck disable=SC2086
+verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" $ask --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 take_telemetry_debug_line "$stderr_file"
 
