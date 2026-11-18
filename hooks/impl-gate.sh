@@ -115,7 +115,11 @@ ask=""
 is_codex_host && ask=$(codex_ask_flag)
 verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" ${ask:+"$ask"} --rules-dir "$dir" 2>"$stderr_file")
 status=$?
+take_telemetry_debug_line "$stderr_file"
 
+# decide prints what this hook emits. Its output is captured so telemetry debug
+# mode can add its line to the systemMessage (see bootstrap.sh).
+decide() {
 case "$status" in
   0)
     if is_codex_host; then
@@ -155,3 +159,12 @@ case "$status" in
     exit 0
     ;;
 esac
+}
+out=$(decide)
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  emit_with_telemetry_debug "$out" stop
+elif [ -n "$out" ]; then
+  printf '%s\n' "$out"
+fi
+exit "$rc"

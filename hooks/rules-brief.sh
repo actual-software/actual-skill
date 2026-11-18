@@ -169,6 +169,7 @@ fi
 # `set -u` on bash 3.2, hence the ${...+...} form.
 reply=$(printf '%s' "$payload" | actual rules brief "$(hook_flag)" ${codex_flags[@]+"${codex_flags[@]}"} --repo "$repo_root" --rules-dir "$dir" 2>"$stderr_file")
 status=$?
+take_telemetry_debug_line "$stderr_file"
 
 # Silence is the whole contract here: on stdout a brief that never arrives
 # looks exactly like a file with no rules. The CLI separates the two on stderr
@@ -187,8 +188,12 @@ if [ -n "${ACTUAL_HOOK_DEBUG:-}" ]; then
   printf 'actual-rules-brief: cli-stdout: %s\n' "$reply" >&2
 fi
 
-# Any failure -- including an old CLI's unknown subcommand -- is silence.
-[ "$status" -eq 0 ] || exit 0
+# Any failure -- including an old CLI's unknown subcommand -- is silence, but for
+# telemetry debug mode's line when the run recorded an event.
+if [ "$status" -ne 0 ]; then
+  emit_with_telemetry_debug "" stop
+  exit 0
+fi
 
 trimmed=${reply#"${reply%%[![:space:]]*}"}
 trimmed=${trimmed%"${trimmed##*[![:space:]]}"}
@@ -242,6 +247,7 @@ if is_codex_host && [ "${trimmed#"$notice_prefix"}" != "$trimmed" ]; then
      || ! is_single_json_string "$notice" "" 0; then
     [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
       printf 'actual-rules-brief: dropped (systemMessage is not a single JSON string)\n' >&2
+    emit_with_telemetry_debug "" stop
     exit 0
   fi
   trimmed="${prefix}${after#*"$separator"}"
@@ -255,10 +261,14 @@ if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
   if ! is_single_json_string "$trimmed" "$prefix" 3; then
     [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && \
       printf 'actual-rules-brief: dropped (content is not a single JSON string)\n' >&2
+    emit_with_telemetry_debug "" stop
     exit 0
   fi
-  printf '%s\n' "$whole"
+  forward="$whole"
 elif [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && [ -n "$trimmed" ]; then
   printf 'actual-rules-brief: dropped (reply is not the allowlisted shape)\n' >&2
 fi
+# A top-level systemMessage beside the allowlisted object is this hook's own
+# text, added only in telemetry debug mode.
+emit_with_telemetry_debug "${forward:-}" stop
 exit 0

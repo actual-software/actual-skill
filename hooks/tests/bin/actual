@@ -102,6 +102,9 @@
 # argv and stdin and prints nothing. `session summary --codex-hook` prints the
 # line as {"systemMessage":...}; ACTUAL_TEST_SUMMARY varies it: none prints
 # nothing, extra adds a decision, plain prints the bare line, crash panics.
+# With ACTUAL_TELEMETRY_DEBUG set, every --claude-hook call first prints the line
+# the real CLI prints on stderr when it records a telemetry event in debug mode,
+# naming ACTUAL_TEST_DEBUG_ID (default fake-id).
 #
 # It also records the envelope it received to $ACTUAL_TEST_CAPTURE, and the
 # remaining argv to $ACTUAL_TEST_CAPTURE.argv, so tests can assert stdin and
@@ -222,6 +225,15 @@ if [ "$subcommand" = "session" ] && [ "${2:-}" = "summary" ]; then
     *) printf '{"systemMessage":"%s"}\n' "$line" ;;
   esac
   exit 0
+fi
+if [ -n "${ACTUAL_TELEMETRY_DEBUG:-}" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "--claude-hook" ]; then
+      printf 'telemetry debug: %s -> ~/.actualai/actual/telemetry-debug/%s.jsonl\n' \
+        "${ACTUAL_TEST_DEBUG_ID:-fake-id}" "${ACTUAL_TEST_DEBUG_ID:-fake-id}" >&2
+      break
+    fi
+  done
 fi
 # `actual rules brief` is the one two-word subcommand: handled on its own below.
 if [ "$subcommand" = "rules" ] && [ "${2:-}" = "brief" ]; then

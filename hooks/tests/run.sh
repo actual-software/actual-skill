@@ -2336,6 +2336,132 @@ rm -rf "${WORK}/cache"
 . "${TESTS_DIR}/codex.sh"
 
 echo
+echo "=== Telemetry debug mode ==="
+# With ACTUAL_TELEMETRY_DEBUG set, the fake CLI prints the real CLI's debug line on
+# stderr for every --claude-hook call. The gates show it in their systemMessage,
+# appended to any notice, and keep their decision intact; turn-start stays silent.
+DBG='telemetry debug: fake-id -> ~/.actualai/actual/telemetry-debug/fake-id.jsonl'
+objects() { jq -s 'length' < "${WORK}/out" 2>/dev/null || printf 'unparseable'; }
+field() { jq -r "$1 // \"\"" < "${WORK}/out" 2>/dev/null; }
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(stop_decision)" = "none" ] && [ "$(field .systemMessage)" = "$DBG" ]; then
+  pass "impl-gate: a passing turn shows the debug line alone and lets the turn end"
+else
+  fail "impl-gate pass in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(stop_decision)" = "block" ] \
+   && field .reason | grep -q "R-001" && [ "$(field .systemMessage)" = "$DBG" ]; then
+  pass "impl-gate: a block stays one valid Stop object with its decision and reason, plus the line"
+else
+  fail "impl-gate deny in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice ACTUAL_TELEMETRY_DEBUG=1)
+msg=$(field .systemMessage)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(stop_decision)" = "none" ] \
+   && [ "${msg%$'\n'"$DBG"}" != "$msg" ] && [ -n "${msg%$'\n'"$DBG"}" ]; then
+  pass "impl-gate: the line is appended to the CLI's notice"
+else
+  fail "impl-gate notice in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-exit2 ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "2" ] && grep -q "R-001" "${WORK}/err" && ! grep -q "telemetry debug" "${WORK}/err"; then
+  pass "impl-gate: an exit-2 block's reason never carries the debug line"
+else
+  fail "impl-gate exit-2 in debug mode" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=usage-error ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && grep -q "rejected its invocation: error: invalid value" "${WORK}/out"; then
+  pass "impl-gate: a usage error is still read from the CLI's first stderr line"
+else
+  fail "impl-gate usage error in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] && ! grep -q "telemetry debug" "${WORK}/out"; then
+  pass "impl-gate: without debug mode the output carries no line"
+else
+  fail "impl-gate outside debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(decision)" = "none" ] && [ "$(field .systemMessage)" = "$DBG" ] \
+   && [ "$(field .hookSpecificOutput.systemMessage)" = "$DBG" ]; then
+  pass "plan-gate: a conforming plan shows the line in both copies and makes no permission decision"
+else
+  fail "plan-gate allow in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(decision)" = "deny" ] \
+   && field .hookSpecificOutput.permissionDecisionReason | grep -q "R-001" \
+   && field .systemMessage | grep -qF "$DBG"; then
+  pass "plan-gate: a deny keeps its decision and reason, plus the line"
+else
+  fail "plan-gate deny in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=notice ACTUAL_TELEMETRY_DEBUG=1)
+msg=$(field .systemMessage)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(decision)" = "none" ] \
+   && [ "${msg%$'\n'"$DBG"}" != "$msg" ] && [ -n "${msg%$'\n'"$DBG"}" ] \
+   && [ "$(field .hookSpecificOutput.systemMessage)" = "$msg" ]; then
+  pass "plan-gate: the line is appended to both copies of the CLI's notice"
+else
+  fail "plan-gate notice in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-exit2 ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "2" ] && grep -q "R-001" "${WORK}/err" && ! grep -q "telemetry debug" "${WORK}/err"; then
+  pass "plan-gate: an exit-2 block's reason never carries the debug line"
+else
+  fail "plan-gate exit-2 in debug mode" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
+run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief >/dev/null
+plain_brief=$(jq -c '.hookSpecificOutput' < "${WORK}/out" 2>/dev/null)
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && rb_ctx | grep -q "R-001" && [ "$(field .systemMessage)" = "$DBG" ] \
+   && [ -n "$plain_brief" ] && [ "$(jq -c '.hookSpecificOutput' < "${WORK}/out")" = "$plain_brief" ]; then
+  pass "rules-brief: the brief is forwarded unchanged beside the line"
+else
+  fail "rules-brief in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-ungoverned.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(rb_ctx)" = "" ] && [ "$(field .systemMessage)" = "$DBG" ]; then
+  pass "rules-brief: a run with no brief shows the line alone"
+else
+  fail "rules-brief without a brief in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=crash ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(rb_ctx)" = "" ] && [ "$(field .systemMessage)" = "$DBG" ]; then
+  pass "rules-brief: a failed CLI run shows the line alone"
+else
+  fail "rules-brief failed run in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=brief-trailing-field ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ "$(objects)" = 1 ] && [ "$(rb_ctx)" = "" ] && [ "$(field .systemMessage)" = "$DBG" ]; then
+  pass "rules-brief: a reply dropped as not one JSON string shows the line alone"
+else
+  fail "rules-brief dropped reply in debug mode" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "${RESOLVED}/userpromptsubmit-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TELEMETRY_DEBUG=1)
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "turn-start: stays silent in debug mode"
+else
+  fail "turn-start must stay silent in debug mode" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+echo
 echo "=== SessionEnd ==="
 if bash "${TESTS_DIR}/session-end.sh"; then
   pass "SessionEnd registration, forwarding, applicability, silence and opt-outs"

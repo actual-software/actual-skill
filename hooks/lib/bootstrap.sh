@@ -1292,6 +1292,70 @@ render_stop_verdict() {
   fi
 }
 
+# --- Telemetry debug mode (ACTUAL_TELEMETRY_DEBUG) ---
+#
+# With ACTUAL_TELEMETRY_DEBUG on, a CLI run that records a telemetry event prints
+# one stderr line naming the local log it wrote: `telemetry debug: <id> -> <path>`.
+# The gate hooks show that line to the user in the systemMessage they emit.
+
+# The line, once take_telemetry_debug_line has found it.
+TELEMETRY_DEBUG_LINE=""
+
+# Move the debug line out of the CLI's stderr file $1 into TELEMETRY_DEBUG_LINE,
+# so every check that reads the file, and the exit-2 reason Claude reads, sees
+# what it saw before. A file with no such line is left untouched.
+take_telemetry_debug_line() {
+  local file="$1" pattern='^telemetry debug: [A-Za-z0-9_-]+ -> '
+  TELEMETRY_DEBUG_LINE=""
+  case "${ACTUAL_TELEMETRY_DEBUG:-}" in ''|0|false) return 0 ;; esac
+  TELEMETRY_DEBUG_LINE=$(grep -m1 -E "$pattern" "$file" 2>/dev/null) || return 0
+  grep -v -E "$pattern" "$file" >"${file}.rest" 2>/dev/null
+  mv -f "${file}.rest" "$file" 2>/dev/null || true
+}
+
+# Print the JSON object $1 a hook would emit, with TELEMETRY_DEBUG_LINE appended
+# to its systemMessage, or added as one when it has none. With $1 empty, print the
+# line alone as a notice in the shape of event $2 (pretooluse, or stop for Stop
+# and PostToolUse, whose notice is a bare systemMessage). With no line, print $1
+# unchanged. $1 holds no \uXXXX escape: the hooks call this only on output they
+# composed or that passed has_unicode_escape.
+emit_with_telemetry_debug() {
+  local out="$1" kind="$2" line message rest from to done=""
+  if [ -z "$TELEMETRY_DEBUG_LINE" ]; then
+    [ -n "$out" ] && printf '%s\n' "$out"
+    return 0
+  fi
+  if [ -z "$out" ]; then
+    case "$kind" in
+      pretooluse) emit_pretooluse_notice "$TELEMETRY_DEBUG_LINE" ;;
+      *) emit_stop_notice "$TELEMETRY_DEBUG_LINE" ;;
+    esac
+    return 0
+  fi
+  line=$(json_escape "$TELEMETRY_DEBUG_LINE")
+  # Every compact copy of the message gets the line: PreToolUse notices carry two.
+  # Prefix and suffix removal, since a replacement string's quotes and `&` read
+  # differently across bash 3.2 and 5.2.
+  if message=$(extract_json_string_field "$out" "systemMessage"); then
+    from="\"systemMessage\":\"${message}\""
+    to="\"systemMessage\":\"${message}\\n${line}\""
+    rest="$out"
+    while [ "${rest#*"$from"}" != "$rest" ]; do
+      done="${done}${rest%%"$from"*}${to}"
+      rest="${rest#*"$from"}"
+    done
+    if [ -n "$done" ]; then
+      printf '%s\n' "${done}${rest}"
+      return 0
+    fi
+  fi
+  rest=${out#*\{}
+  case "${rest#"${rest%%[![:space:]]*}"}" in
+    \}*) printf '{"systemMessage":"%s"%s\n' "$line" "$rest" ;;
+    *) printf '{"systemMessage":"%s",%s\n' "$line" "$rest" ;;
+  esac
+}
+
 # --- PermissionRequest output (plan-approval.sh) ---
 
 # True when unattended mode is on: ACTUAL_UNATTENDED=on, or, with the variable
