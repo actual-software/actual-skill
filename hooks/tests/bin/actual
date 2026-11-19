@@ -352,8 +352,9 @@ case "$mode" in
     exit 0
     ;;
   ask-block)
-    # The question after the judge's reason on a blocked turn.
-    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer.\n\nWhich of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. Leave out any your change merely complies with or happens to agree with."}}'
+    # The question after the judge's reason on a blocked turn, asking for the
+    # answer once the block is fixed.
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"R-001 MUST: all persistence goes through the repository layer.\n\nWhich of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. Leave out any your change merely complies with or happens to agree with.\n\n- `cross-cutting-persistence-abc123`: Persistence\n\nAfter fixing the above, answer with one command, then end your turn:\nactual rules report-use --claude-session test-session-stop-turn --turn 1-0123abcd --repo /repo --claim <adr>=<repo-relative-path>:<line>\n\nRepeat --claim for each ADR you used, naming the line you added or changed this turn that best shows its effect. For a line of the plan approved this turn, use --plan-claim <adr>=<line>. When no listed ADR shaped the change, run the command with --none in place of the claims. That is a normal, expected answer."}}'
     exit 0
     ;;
   ask-notice)

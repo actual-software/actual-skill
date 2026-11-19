@@ -2464,7 +2464,8 @@ echo "=== impl-gate: the ADR question ==="
 st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=ask-pass)
 if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] \
    && jq -r '.reason' "${WORK}/out" | head -1 | grep -qx 'Which of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. Leave out any your change merely complies with or happens to agree with.' \
-   && jq -r '.reason' "${WORK}/out" | grep -q '^actual rules report-use --claude-session test-session-stop-turn --turn 1-0123abcd' \
+   && jq -r '.reason' "${WORK}/out" | grep -A1 -x 'Answer with one command, then end your turn:' | grep -q '^actual rules report-use --claude-session test-session-stop-turn --turn 1-0123abcd' \
+   && ! jq -r '.reason' "${WORK}/out" | grep -q 'After fixing' \
    && [ "$(jq -r '.systemMessage // "none"' "${WORK}/out")" = "none" ]; then
   pass "a passing turn's question becomes the reason of one Stop block"
 else
@@ -2475,8 +2476,10 @@ st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WI
 reason=$(jq -r '.reason' "${WORK}/out" 2>/dev/null)
 if [ "$st" = "0" ] && [ "$(stop_decision)" = "block" ] \
    && [ "${reason%%$'\n'*}" = "R-001 MUST: all persistence goes through the repository layer." ] \
-   && printf '%s' "$reason" | tail -1 | grep -q '^Which of these ADRs did you use this turn?'; then
-  pass "a blocked turn's question follows the judge's reason in the one block"
+   && printf '%s\n' "$reason" | sed -n 3p | grep -q '^Which of these ADRs did you use this turn?' \
+   && printf '%s\n' "$reason" | grep -A1 -x 'After fixing the above, answer with one command, then end your turn:' | grep -q '^actual rules report-use --claude-session test-session-stop-turn' \
+   && ! printf '%s\n' "$reason" | grep -qx 'Answer with one command, then end your turn:'; then
+  pass "a blocked turn's question follows the judge's reason and asks for the answer after the fix"
 else
   fail "the question on a block must follow the judge's reason" "status=$st stdout=$(cat "${WORK}/out")"
 fi
@@ -2526,7 +2529,27 @@ else
   fail "hooks.json Bash registration wrong" "$(jq -c '.hooks.PreToolUse' "${HOOKS_DIR}/hooks.json")"
 fi
 
-# Run the hook on a Bash call of $1. With $2 set, use it as the raw payload.
+# The grant is checked against real directories, and the allowed values hold
+# only letters, digits and `._/:=@+,-`. TMPDIR on macOS can hold `_`, so the
+# repositories these tests name live under /tmp instead.
+ALLOW_BASE=$(mktemp -d /tmp/actual-allow.XXXXXX) && ALLOW_BASE=$(cd "$ALLOW_BASE" && pwd -P) || exit 1
+trap 'rm -rf "$WORK" "$ALLOW_BASE"' EXIT
+case "$ALLOW_BASE" in *[!A-Za-z0-9./-]*) echo "allow tests need a plain temp path, got $ALLOW_BASE" >&2; exit 1 ;; esac
+AREPO="${ALLOW_BASE}/repo"
+ABARE="${ALLOW_BASE}/bare"
+AOUT="${ALLOW_BASE}/outside"
+mkdir -p "${AREPO}/.actual/rules" "${AREPO}/sub/.actual/rules" "$ABARE" "${AOUT}/.actual/rules"
+git -C "$AREPO" init -q
+git -C "$ABARE" init -q
+git -C "$AOUT" init -q
+cp "${REPO_WITH_RULES}/.actual/rules/"*.md "${AREPO}/.actual/rules/"
+cp "${REPO_WITH_RULES}/.actual/rules/"*.md "${AOUT}/.actual/rules/"
+ln -s "$AREPO" "${ALLOW_BASE}/repo-link"
+ln -s "$AOUT" "${ALLOW_BASE}/outside-link"
+ln -s "${AOUT}/.actual/rules" "${AREPO}/escape"
+
+# Run the hook on a Bash call of $1 from the repository $3 (default $AREPO).
+# With $2 set, use it as the raw payload.
 bash_call() {
   local payload="${WORK}/bash-call.json"
   if [ -n "${2:-}" ]; then
@@ -2534,16 +2557,16 @@ bash_call() {
   else
     jq -n --arg c "$1" '{session_id:"s1",hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c,description:"Record ADR use"}}' > "$payload"
   fi
-  run_hook "$ALLOW" "$payload" "$REPO_WITH_RULES"
+  run_hook "$ALLOW" "$payload" "${3:-$AREPO}"
 }
 
-BASE='actual rules report-use --claude-session 6f0c-41aa --turn 3-0123abcd --repo /Users/dev/repo'
+BASE="actual rules report-use --claude-session s1 --turn 3-0123abcd --repo ${AREPO}"
 for cmd in \
   "$BASE --claim api-errors-001=src/handlers/orders.rs:88" \
   "$BASE --claim api-errors-001=src/a.rs:1 --claim logging-001=src/b.rs:2 --plan-claim adr-x=4" \
   "$BASE --none" \
-  "$BASE --rules-dir /Users/dev/repo/sub/.actual/rules --none" \
-  "actual rules report-use --turn 3-0123abcd --claude-session 6f0c-41aa --none"; do
+  "$BASE --rules-dir ${AREPO}/sub/.actual/rules --none" \
+  "actual rules report-use --turn 3-0123abcd --repo ${ALLOW_BASE}/repo-link --claude-session s1 --none"; do
   st=$(bash_call "$cmd")
   if [ "$st" = "0" ] && [ "$(decision)" = "allow" ] && [ ! -s "${WORK}/err" ]; then
     pass "allows: ${cmd#"$BASE"}"
@@ -2567,20 +2590,19 @@ for cmd in \
   "$BASE --claim \"a\"=c.rs:1" \
   "$BASE --claim a=src/*.rs:1" \
   "$BASE --claim a={x,y}.rs:1" \
-  "$BASE --repo ~/repo --none" \
   "$BASE --none"$'\n'"rm -rf /" \
   "$BASE  --none" \
   "$BASE --none " \
   "$BASE --exec x" \
   "$BASE --claim" \
   "$BASE --claim --none" \
-  "actual rules report-use --turn 3-0123abcd --none" \
-  "actual rules report-use --claude-session 6f0c-41aa --none" \
+  "actual rules report-use --turn 3-0123abcd --repo ${AREPO} --none" \
+  "actual rules report-use --claude-session s1 --repo ${AREPO} --none" \
   "actual rules brief --file x" \
   "ACTUAL_X=1 $BASE --none" \
   "sudo $BASE --none" \
-  "/usr/local/bin/actual rules report-use --claude-session s --turn t --none" \
-  "actual  rules report-use --claude-session s --turn t --none" \
+  "/usr/local/bin/actual rules report-use --claude-session s1 --turn t --repo ${AREPO} --none" \
+  "actual  rules report-use --claude-session s1 --turn t --repo ${AREPO} --none" \
   "actual rules report-use"; do
   st=$(bash_call "$cmd")
   if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
@@ -2590,26 +2612,107 @@ for cmd in \
   fi
 done
 
-# Escapes and payload shapes a byte scan could misread: a \u-escaped
-# metacharacter, a JSON-escaped quote, a second command key, another tool.
-for raw in \
-  '{"tool_name":"Bash","tool_input":{"command":"actual rules report-use --claude-session s --turn t --none; id"}}' \
-  '{"tool_name":"Bash","tool_input":{"command":"actual rules report-use --claude-session s --turn t --claim \"x\"=a:1"}}' \
-  '{"tool_name":"Bash","tool_input":{"command":"actual rules report-use --claude-session s --turn t --none","command":"rm -rf ~"}}' \
-  '{"tool_name":"Bash","tool_input":{"description":"\"command\":\"actual rules report-use --claude-session s --turn t --none\"","command":"rm -rf ~"}}' \
-  '{"tool_name":"Write","tool_input":{"command":"actual rules report-use --claude-session s --turn t --none"}}' \
-  '{"tool_input":{"command":"actual rules report-use --claude-session s --turn t --none"}}' \
-  'not json'; do
-  st=$(bash_call "" "$raw")
+# The grant's scope: this session, this repository, rules inside it.
+S1T="actual rules report-use --claude-session s1 --turn 3-0123abcd"
+for cmd in \
+  "$S1T --none" \
+  "$S1T --repo ${AOUT} --none" \
+  "$S1T --repo ${ALLOW_BASE}/outside-link --none" \
+  "$S1T --repo ${ALLOW_BASE} --none" \
+  "$S1T --repo ${AREPO}/sub --none" \
+  "$S1T --repo . --none" \
+  "$S1T --repo ${ALLOW_BASE}/missing --none" \
+  "$S1T --repo ${AREPO}/.actual/rules/cross-cutting-persistence-abc123.md --none" \
+  "$S1T --repo ${AREPO} --repo ${AOUT} --none" \
+  "$S1T --repo ${AOUT} --repo ${AREPO} --none" \
+  "$BASE --rules-dir ${AOUT}/.actual/rules --none" \
+  "$BASE --rules-dir ${AREPO}/escape --none" \
+  "$BASE --rules-dir .actual/rules --none" \
+  "$BASE --rules-dir ${AREPO}/.actual/rules --rules-dir ${AOUT}/.actual/rules --none" \
+  "$BASE --rules-dir ${AOUT}/.actual/rules --rules-dir ${AREPO}/.actual/rules --none" \
+  "actual rules report-use --claude-session s2 --turn 3-0123abcd --repo ${AREPO} --none" \
+  "actual rules report-use --claude-session s1 --claude-session s2 --turn 3-0123abcd --repo ${AREPO} --none" \
+  "actual rules report-use --claude-session s2 --claude-session s1 --turn 3-0123abcd --repo ${AREPO} --none" \
+  "actual rules report-use --claude-session s1 --turn a --turn b --repo ${AREPO} --none"; do
+  st=$(bash_call "$cmd")
   if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
-    pass "no decision on payload: ${raw:0:70}"
+    pass "no decision outside the grant: ${cmd#"actual rules report-use "}"
   else
-    fail "must make no decision on payload: $raw" "status=$st stdout=$(cat "${WORK}/out")"
+    fail "must make no decision outside the grant: $cmd" "status=$st stdout=$(cat "${WORK}/out")"
+  fi
+done
+
+st=$(bash_call "actual rules report-use --claude-session s1 --turn 3-0123abcd --repo ${ABARE} --none" "" "$ABARE")
+if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then
+  pass "no decision in a repository without committed rules"
+else
+  fail "must make no decision without committed rules" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+# Escapes and payload shapes a byte scan could misread. Each is otherwise the
+# allowed call, so only the guard it names turns it away: a \u-escaped second
+# command key, a JSON-escaped quote, a second command key, a forged key inside
+# another field, a second session_id, another tool, no tool.
+OK_CMD="$BASE --none"
+raw_labels=(
+  "a \\u-escaped second command key"
+  "a JSON-escaped quote in the command"
+  "a second command key"
+  "a command key forged inside another field"
+  "a second session_id"
+  "another tool"
+  "no tool"
+  "not JSON"
+)
+raw_payloads=(
+  "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${OK_CMD}\",\"\\u0063ommand\":\"rm -rf ~\"}}"
+  "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${BASE} --claim \\\"x\\\"=a:1\"}}"
+  "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${OK_CMD}\",\"command\":\"rm -rf ~\"}}"
+  "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"tool_input\":{\"description\":\"\\\"command\\\":\\\"${OK_CMD}\\\"\",\"command\":\"rm -rf ~\"}}"
+  "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${OK_CMD}\"},\"session_id\":\"s2\"}"
+  "{\"session_id\":\"s1\",\"tool_name\":\"Write\",\"tool_input\":{\"command\":\"${OK_CMD}\"}}"
+  "{\"session_id\":\"s1\",\"tool_input\":{\"command\":\"${OK_CMD}\"}}"
+  'not json'
+)
+i=0
+while [ "$i" -lt "${#raw_payloads[@]}" ]; do
+  st=$(bash_call "" "${raw_payloads[$i]}")
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
+    pass "no decision on a payload with ${raw_labels[$i]}"
+  else
+    fail "must make no decision on a payload with ${raw_labels[$i]}" "status=$st payload=${raw_payloads[$i]} stdout=$(cat "${WORK}/out")"
+  fi
+  i=$((i + 1))
+done
+# The control for the cases above: the same raw shape, unaltered, is allowed.
+st=$(bash_call "" "{\"session_id\":\"s1\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"${OK_CMD}\"}}")
+if [ "$st" = "0" ] && [ "$(decision)" = "allow" ]; then
+  pass "allows the raw payload the escape cases alter"
+else
+  fail "must allow the unaltered raw payload" "status=$st stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+# Every Bash call pays for this hook, so a large one must be turned away
+# quickly: a 40 KB heredoc, and a 40 KB command that starts like the answer.
+timed_call() {
+  local t="${WORK}/bash-call-time"
+  { TIMEFORMAT=%R; time bash_call "" "$1" > "${WORK}/bash-call-st"; } 2> "$t"
+  printf '%s %s' "$(cat "${WORK}/bash-call-st")" "$(tail -1 "$t")"
+}
+filler=$(head -c 40960 /dev/zero | tr '\0' 'a')
+for raw in \
+  "$(jq -cn --arg c "cat > f <<'X'"$'\n'"${filler}"$'\n'"X" '{session_id:"s1",tool_name:"Bash",tool_input:{command:$c}}')" \
+  "$(jq -cn --arg c "${OK_CMD} --claim a=${filler}:1" '{session_id:"s1",tool_name:"Bash",tool_input:{command:$c}}')"; do
+  read -r st secs <<<"$(timed_call "$raw")"
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && awk -v s="$secs" 'BEGIN { exit !(s < 1) }'; then
+    pass "no decision within a second on a 40 KB call (${secs}s): ${raw:40:30}"
+  else
+    fail "a 40 KB call must get no decision within a second" "status=$st secs=$secs stdout=$(cat "${WORK}/out")"
   fi
 done
 
 bash_call "$BASE --none" >/dev/null
-st=$(run_hook "$ALLOW" "${WORK}/bash-call.json" "$REPO_WITH_RULES" ACTUAL_PLAN_GATE=off)
+st=$(run_hook "$ALLOW" "${WORK}/bash-call.json" "$AREPO" ACTUAL_PLAN_GATE=off)
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
   pass "ACTUAL_PLAN_GATE=off turns the allow hook off too"
 else

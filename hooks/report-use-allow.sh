@@ -12,6 +12,15 @@
 # a quote, a glob, a newline, an env assignment, another flag -- gets no
 # decision from this hook, so Claude Code's normal permission flow applies.
 #
+# The grant is also scoped to the question it answers: --repo must be this
+# session's repository root, --rules-dir (when given) must sit inside it,
+# --claude-session must be this session's id, and the repository must have
+# committed rules, since a repository without them is never asked. Anything
+# else gets no decision.
+#
+# It runs on every Bash call, so a payload that cannot hold the command, or one
+# too large for it, is turned away before any per-character work.
+#
 # The payload is scanned, never parsed (dependency-free, like every hook here),
 # so the same guards render_stop_verdict relies on come first: no \uXXXX escape
 # anywhere, exactly one "command" key, and no backslash in its value. A JSON
@@ -29,18 +38,33 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
+# Larger than any answer the CLI asks for, and small enough that the scan
+# below stays well inside the hook's timeout.
+REPORT_USE_MAX_PAYLOAD=8192
+
+# True when $1 names the key $2 exactly once.
+has_one_key() {
+  local key="\"$2\"" rest
+  rest="${1#*"$key"}"
+  [ "$rest" != "$1" ] && [ "${rest#*"$key"}" = "$rest" ]
+}
+
 # Prints the allow decision when $1, the raw payload, is a Bash call of exactly
 # the report-use form. Returns 1, printing nothing, otherwise.
 allow_report_use() {
   local LC_ALL=C
-  local payload="$1" tool command rest re word flag i
+  local payload="$1" tool command re word flag i
   local -a words
+  case "$payload" in
+    *'"command":"actual rules report-use '*|*'"command": "actual rules report-use '*) ;;
+    *) return 1 ;;
+  esac
+  [ "${#payload}" -le "$REPORT_USE_MAX_PAYLOAD" ] || return 1
   has_unicode_escape "$payload" && return 1
   tool=$(extract_json_string_field "$payload" "tool_name") || return 1
   [ "$tool" = "Bash" ] || return 1
-  rest="${payload#*\"command\"}"
-  [ "$rest" != "$payload" ] || return 1
-  [ "${rest#*\"command\"}" = "$rest" ] || return 1
+  has_one_key "$payload" "command" || return 1
+  has_one_key "$payload" "session_id" || return 1
   command=$(extract_json_string_field "$payload" "command") || return 1
   case "$command" in *\\*) return 1 ;; esac
 
@@ -48,7 +72,7 @@ allow_report_use() {
   [[ "$command" =~ $re ]] || return 1
 
   read -r -a words <<<"$command"
-  local session="" turn=""
+  local session="" turn="" repo="" rules=""
   i=3
   while [ "$i" -lt "${#words[@]}" ]; do
     flag="${words[$i]}"
@@ -63,12 +87,29 @@ allow_report_use() {
     word="${words[$((i + 1))]:-}"
     case "$word" in ''|-*) return 1 ;; esac
     case "$flag" in
-      --claude-session) session="$word" ;;
-      --turn) turn="$word" ;;
+      --claude-session) [ -z "$session" ] || return 1; session="$word" ;;
+      --turn) [ -z "$turn" ] || return 1; turn="$word" ;;
+      --repo) [ -z "$repo" ] || return 1; repo="$word" ;;
+      --rules-dir) [ -z "$rules" ] || return 1; rules="$word" ;;
     esac
     i=$((i + 2))
   done
-  [ -n "$session" ] && [ -n "$turn" ] || return 1
+  [ -n "$session" ] && [ -n "$turn" ] && [ -n "$repo" ] || return 1
+
+  local session_id root canon
+  session_id=$(extract_json_string_field "$payload" "session_id") || return 1
+  [ "$session" = "$session_id" ] || return 1
+
+  case "$repo" in /*) ;; *) return 1 ;; esac
+  root=$(canonical_dir "$(resolve_repo_root)") || return 1
+  canon=$(canonical_dir "$repo") || return 1
+  [ "$canon" = "$root" ] || return 1
+  if [ -n "$rules" ]; then
+    case "$rules" in /*) ;; *) return 1 ;; esac
+    canon=$(canonical_dir "$rules") || return 1
+    is_within "$root" "$canon" || return 1
+  fi
+  rules_present "$(rules_dir "$root")" || return 1
 
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Actual: the agent is recording which ADRs shaped this turn (actual rules report-use)."}}'
 }
