@@ -1068,6 +1068,9 @@ is_single_json_string() {
 # shapes $2 allows, and print nothing otherwise:
 #
 #   block   {"decision":"block","reason":"..."}   a Stop that sends the agent back
+#   block-notice  the same plus "systemMessage":"..." after the reason: the
+#                 ADR question on a round that would otherwise only show the
+#                 user that notice
 #   notice  {"systemMessage":"..."}               a line shown to the user
 #   stop    {"continue":false,"stopReason":"..."} end the turn, or keep a prompt
 #                                                 from the model, and tell the
@@ -1095,6 +1098,9 @@ forward_codex_reply() {
 
   local suffix_len=2
   case "$trimmed" in
+    '{"decision":"block","reason":"'*'","systemMessage":"'*'"}')
+      forward_codex_block_notice "$trimmed" "$allowed"
+      return ;;
     '{"decision":"block","reason":"'*'"}') kind=block prefix='{"decision":"block","reason":"' ;;
     '{"systemMessage":"'*'"}') kind=notice prefix='{"systemMessage":"' ;;
     '{"continue":false,"stopReason":"'*'"}') kind=stop prefix='{"continue":false,"stopReason":"' ;;
@@ -1122,6 +1128,30 @@ forward_codex_reply() {
   # let the turn end.
   if [ "$trimmed" = '{"decision":"block","reason":""}' ]; then
     emit_stop_block "Actual governance blocked this turn, but its reason could not be read. Revise the work so it conforms to .actual/rules/."
+    return 0
+  fi
+  printf '%s\n' "$trimmed"
+}
+
+# forward_codex_reply's block-notice kind. Inside a JSON string every quote is
+# escaped, so `","systemMessage":"` can only be the boundary between the two
+# values; each side must then be one non-empty JSON string that does not end in
+# a lone backslash, which would escape the quote that closes it.
+forward_codex_block_notice() {
+  local trimmed="$1" allowed="$2" LC_ALL=C
+  case " $allowed " in *" block-notice "*) ;; *) return 1 ;; esac
+  local inner=${trimmed#'{"decision":"block","reason":"'}
+  inner=${inner%'"}'}
+  local reason=${inner%%'","systemMessage":"'*}
+  local message=${inner#*'","systemMessage":"'}
+  [ -n "$reason" ] && [ -n "$message" ] || return 1
+  is_single_json_string "$reason" "" 0 && is_single_json_string "$message" "" 0 || return 1
+  local part
+  for part in "${reason//\\\\/}" "${message//\\\\/}"; do
+    case "$part" in *\\) return 1 ;; esac
+  done
+  if has_unicode_escape "$trimmed"; then
+    emit_stop_notice "Actual governance received a reply it could not safely interpret (it contained an escaped character sequence); this turn was not checked against .actual/rules/."
     return 0
   fi
   printf '%s\n' "$trimmed"

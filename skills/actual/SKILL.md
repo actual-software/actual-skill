@@ -188,7 +188,11 @@ fails the hook run, which is why Claude Code's notice shape, with its nested
 replies are flat, so `forward_codex_reply` in `bootstrap.sh` pins each one whole —
 the exact opening bytes, the exact closing `"}` and a single JSON string between —
 and forwards only `{"decision":"block","reason":"…"}` (the gates without
-`--codex-ask`), `{"continue":false,"stopReason":"…"}` (the gates with it, and
+`--codex-ask`, and the ADR question), `impl-gate.sh`'s
+`{"decision":"block","reason":"…","systemMessage":"…"}` (the ADR question on a
+round that would only have shown that notice; each of the two values must be one
+JSON string, split at the one place `","systemMessage":"` can occur),
+`{"continue":false,"stopReason":"…"}` (the gates with it, and
 `turn-start.sh` for a typed override), `{"systemMessage":"…"}` (the gates'
 notices and the summary), or `turn-start.sh`'s
 `{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"…"}}`,

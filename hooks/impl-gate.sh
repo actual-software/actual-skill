@@ -133,7 +133,7 @@ decide() {
 case "$status" in
   0)
     if is_codex_host; then
-      forward_codex_reply "$verdict" "block notice stop"
+      forward_codex_reply "$verdict" "block block-notice notice stop"
     else
       render_stop_verdict "$verdict"
     fi

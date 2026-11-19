@@ -94,6 +94,13 @@
 #   codex-context-extra a context reply with keys appended after it
 #   codex-post-context  the PostToolUse context answering a gate's picker
 #   codex-post-context-extra  the same with keys appended after it
+#   ask-pass / ask-notice  the ADR question as Codex gets it: a block whose
+#                       reason is the question, and on a notice round the
+#                       same block with the notice as systemMessage
+#   codex-block-notice-extra / -twice / -backslash / -empty / -escaped  that
+#                       block-plus-notice with a key appended, a second
+#                       systemMessage, a reason ending in an escaped quote, an
+#                       empty notice, or a \uXXXX escape in the notice
 # `rules brief --codex-hook` shares the brief modes above (the payload names
 # the file in its command). Like the real CLI, its `brief` reply opens with a
 # systemMessage naming what was briefed, left out under --no-brief-notice. The
@@ -428,6 +435,8 @@ fi
 
 if [ "$codex" -eq 1 ]; then
   reason='R-001 MUST: all persistence goes through the repository layer. The plan adds direct SQL in the handler.'
+  codex_question='Which of these ADRs did you use this turn?\n\n- `cross-cutting-persistence-abc123`: Persistence\n\nAnswer with one command, then end your turn:\nactual rules report-use --claude-session test-session --turn 1-0123abcd --repo /repo --claim <adr>=<repo-relative-path>:<line>'
+  codex_notice='No committed rule under .actual/rules/ applies to this diff.'
   case "$mode" in
     deny) printf '{"decision":"block","reason":"%s"}\n' "$reason"; exit 0 ;;
     notice) printf '{"systemMessage":"Partial coverage: 60 of 118 rules checked for this plan."}\n'; exit 0 ;;
@@ -441,6 +450,13 @@ if [ "$codex" -eq 1 ]; then
     codex-context-extra) printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"x"},"continue":false,"k":{"a":"b"}}\n'; exit 0 ;;
     codex-post-context) printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"The user chose to revise the changes: %s"}}\n' "$reason"; exit 0 ;;
     codex-post-context-extra) printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"x"},"decision":"block","k":{"a":"b"}}\n'; exit 0 ;;
+    ask-pass) printf '{"decision":"block","reason":"%s"}\n' "$codex_question"; exit 0 ;;
+    ask-notice) printf '{"decision":"block","reason":"%s","systemMessage":"%s"}\n' "$codex_question" "$codex_notice"; exit 0 ;;
+    codex-block-notice-extra) printf '{"decision":"block","reason":"%s","systemMessage":"%s","continue":"false"}\n' "$codex_question" "$codex_notice"; exit 0 ;;
+    codex-block-notice-backslash) printf '%s\n' '{"decision":"block","reason":"q\\\","systemMessage":"m"}'; exit 0 ;;
+    codex-block-notice-escaped) printf '{"decision":"block","reason":"%s","systemMessage":"caf\\u00e9"}\n' "$codex_question"; exit 0 ;;
+    codex-block-notice-empty) printf '{"decision":"block","reason":"%s","systemMessage":""}\n' "$codex_question"; exit 0 ;;
+    codex-block-notice-twice) printf '{"decision":"block","reason":"%s","systemMessage":"%s","systemMessage":"x"}\n' "$codex_question" "$codex_notice"; exit 0 ;;
     codex-claude-shape) mode=deny ;;
   esac
 fi
