@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # bootstrap.sh - Shared preflight helpers for the actual plan-stage governance hooks.
 #
-# Sourced by plan-gate.sh, impl-gate.sh, rules-brief.sh, preflight.sh,
-# turn-start.sh and session-end.sh. The only write is the capability cache under
+# Sourced by plan-gate.sh, plan-approval.sh, impl-gate.sh, report-use-allow.sh,
+# rules-brief.sh, preflight.sh, turn-start.sh and session-end.sh. The only write is the capability cache under
 # ~/.cache/actual-skill (see have_adr_v2).
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING

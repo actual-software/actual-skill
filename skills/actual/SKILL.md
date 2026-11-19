@@ -129,6 +129,7 @@ repository. They are registered automatically on install — there is no manual 
 | `hooks/plan-approval.sh` | `PermissionRequest` on `ExitPlanMode` | Unattended mode only (`ACTUAL_UNATTENDED=on`, or the `unattended` row under `/plugin`): answers Claude Code's plan dialog with allow and the request's `tool_input` echoed back as `updatedInput`, so an agent nobody is watching is not held there. It runs after `plan-gate.sh`, which has already denied a conflicting plan, and approves in any repository, rules or not. Silent, which leaves the dialog in place, whenever the switch is off or `ACTUAL_PLAN_GATE=off` |
 | `hooks/turn-start.sh` | `UserPromptSubmit` | Marks where each turn starts: runs `actual impl-check --claude-hook`, which on a `UserPromptSubmit` envelope records `HEAD` for the session, so the `Stop` check also covers work the agent commits, or commits and pushes, during the turn. Silent on every path, since this event's stdout is added to the prompt. Without it, the check diffs against `HEAD`. The dispatch needs CLI 0.7.0 or later, and on an older CLI the call would run a full check on every prompt, so the hook first checks that `actual impl-check --help` names `UserPromptSubmit` and does nothing when it doesn't |
 | `hooks/impl-gate.sh` | `Stop` | The end-of-turn checkpoint (AK-754). Hands the turn's accumulated working-tree diff (tracked changes plus untracked, non-ignored files, against the commit `turn-start.sh` recorded when the turn began, or `HEAD` when none was) to `actual impl-check` and forces the agent to continue on a non-conforming diff. Fires **unconditionally, every turn** — never gated on `plan-gate.sh` having run earlier in the session, so a turn that skips plan mode entirely is still governed |
+| `hooks/report-use-allow.sh` | `PreToolUse` on `Bash` | Lets the agent answer the ADR question `impl-gate.sh` carries (see below) without a permission prompt. Allows exactly `actual rules report-use` followed only by its own flags, each value plain (letters, digits and `._/:=@+,-`), and only when `--repo` is this session's repository root, `--rules-dir` (when given) sits inside it, `--claude-session` is this session's id and the repository has rules. Any other command, including one carrying a pipe, `;`, `$(...)`, a redirect or a quote, gets no decision, so Claude Code's usual permission flow applies. Checks for that command's prefix before scanning anything, and turns away a payload larger than `REPORT_USE_MAX_PAYLOAD` (in the hook), so other Bash calls pay almost nothing for it |
 | `hooks/rules-brief.sh` | `PostToolUse` on `Read`, `PreToolUse` on `Edit\|Write` | Read-time briefing (AK-793) and the write-time reminder (AK-794), for versions of Claude Code that cannot load a mod. Hands the envelope to `actual rules brief --claude-hook` and forwards only an allowlisted `additionalContext` reply naming the event it was called for. Advisory: never denies, never decides, silent on any failure; on `PreToolUse` it names no `permissionDecision`, so the normal permission flow is unchanged. **Where the mod loads it stands down**: the mod passes `classic.PostToolUse` (Read) on with an `actual_rules_brief_by_mod` marker, and for Edit and Write sets `ACTUAL_SKILL_MOD_SESSION` to its session id before the hook runs, which the hook inherits and stands down on when it matches its own `session_id`. The mod writes no files. Edit and Write cannot carry a marker: the tool's arguments are what the permission check judges, and auto mode refuses to judge a Write with a field it does not know. Either way the brief is delivered once, by the path that also has a budget and a record, and every other hook on those events still runs. It has no budget, no session cap and none of the four limits below: it forwards none of them |
 | `hooks/session-end.sh` | `SessionEnd` | In a repository with rules, forwards the shutdown envelope to `actual __session-ended`, which records the session id, coarse end reason and last completed hook check's blocking state. Silent and fail-open on every path, including missing or older CLIs. It performs no install, version probe or network wait; the companion CLI release must ship before this hook can report end events. The CLI honors telemetry opt-out. Killed sessions still rely on the inactivity fallback |
 | `hooks/register.js` | Claude mod, `$.ui.log` per read and a `/rules-brief` pane | What briefing did, for the person watching. One line per read names the ADRs and rule counts; a read that briefed nothing says why (nothing new, budget spent, CLI error), from the reason the CLI names on stderr. A read of only ungoverned files reports nothing, since most files are ungoverned. `/rules-brief` lists the session oldest first, because a suppressed row only makes sense after the delivered row it refers to. The model reads none of it, so none of it is charged against the context budget — and nothing is reported in `claude -p`, the SDK, the VS Code chat panel or a cloud session |
@@ -196,7 +197,7 @@ guarantee nothing gets past it.
 
 ### When the hooks do nothing
 
-All hooks are silent no-ops (no output, exit 0) unless the resolved rules directory has at least one `*.md` file. By default that directory is `.actual/rules/`; `ACTUAL_RULES_DIR` can select another. Installing the plugin therefore has no effect on repositories that are not governed by Actual.
+All hooks are silent no-ops (no output, exit 0) unless the resolved rules directory has at least one `*.md` file, apart from `plan-approval.sh` once the user turns on unattended mode. By default that directory is `.actual/rules/`; `ACTUAL_RULES_DIR` can select another. Installing the plugin therefore has no effect on repositories that are not governed by Actual.
 
 The gates also never hard-fail. If the CLI is missing, too old, or crashes, the hook
 reports the problem and **makes no blocking decision**, leaving the turn to proceed
@@ -213,12 +214,19 @@ Claude Code 2.1.231 an `allow` does not actually bypass the plan-approval dialog
 Claude Code logs `Hook returned 'allow' for ExitPlanMode, but ask rule/safety check
 requires full permission pipeline` and prompts the user anyway — but that safety
 check is undocumented, so the wrapper drops an `allow` verdict rather than rely on it.
-The plugin's one approval is `plan-approval.sh`'s, given only once the user turns on
+The plugin makes two approvals. The first is `plan-approval.sh`'s, given only once the user turns on
 unattended mode. It answers Claude Code's `PermissionRequest` for `ExitPlanMode`, after
 the gate has run, with allow plus `updatedInput` set to the request's own `tool_input`:
 the form Claude Code's hooks guide documents for this dialog, which ignores an allow
 without `updatedInput`. Measured on 2.1.287 and 2.1.322, it approves with no dialog and
 the session returns to the permission mode it had before planning.
+
+The second is `report-use-allow.sh`'s, and it needs no opt-in because it covers one
+command the plugin itself asks the agent to run: `actual rules report-use`, the answer
+to the ADR question, with only its own flags and plain values. It applies only in a
+repository with rules, for `--repo` naming this session's repository root (compared
+after resolving symlinks), a `--rules-dir` inside that root, and `--claude-session`
+naming this session. Outside that it makes no decision, leaving Claude Code's prompt in place.
 
 ### ADR header v2 rule files
 
@@ -299,6 +307,13 @@ forwarding it:
   name, the colon, and the opening quote is skipped, so a pretty-printed verdict
   still yields its reason. A recognized deny whose reason cannot be read still
   blocks, with a fixed reason; it does not degrade to a notice.
+- A recognized **deny that also carries a top-level `systemMessage`** becomes
+  `{"decision":"block","reason":"...","systemMessage":"..."}`, so the user still sees
+  the notice. This is the CLI's ADR question on a round that would otherwise have
+  shown only a notice. The question ("Which of these ADRs did you use this turn?")
+  always arrives as a deny: after the judge's reason on a block, where it asks for the
+  answer after the fix, or as the whole reason on a pass, which makes the agent
+  continue once to answer with `actual rules report-use`.
 - A recognized bare **notice** (partial coverage, round-limit pass — no permission
   decision at all) becomes a plain top-level `{"systemMessage":"..."}`. This is
   deliberately *not* `hookSpecificOutput.additionalContext`: per Claude Code's docs,
@@ -325,7 +340,7 @@ place that distinction is applied.
 
 | Variable | Effect |
 |----------|--------|
-| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `plan-approval.sh`, `impl-gate.sh`, `turn-start.sh`, `rules-brief.sh`, `session-end.sh` and `preflight.sh`, including its minimum-version check) |
+| `ACTUAL_PLAN_GATE=off` | Disable all of this plugin's governance hooks (`plan-gate.sh`, `plan-approval.sh`, `impl-gate.sh`, `report-use-allow.sh`, `turn-start.sh`, `rules-brief.sh`, `session-end.sh` and `preflight.sh`, including its minimum-version check) |
 | `ACTUAL_RULES_DIR` | Govern against a different rules directory (e.g. a subproject in a monorepo). The governance checks and briefing forward the resolved path to the CLI as `--rules-dir`; `session-end.sh` uses it only to check applicability. `plan-check`/`impl-check` must honor that flag rather than rediscovering rules from cwd |
 | `ACTUAL_PLAN_CHECK_MAX_ROUNDS` | Override `plan-check --claude-hook`'s round limit (default 3). Independent of the variable below — the two commands' revision loops are budgeted separately, even though they share session state |
 | `ACTUAL_TURN_START_LOG` | Path of a file `turn-start.sh` appends the CLI's output and exit status to, for diagnosing a turn-start record that is never written, or a `skipped` line when the CLI has no `UserPromptSubmit` dispatch. Unset by default, which keeps the hook fully silent; set, the hook is still silent on stdout and stderr |
