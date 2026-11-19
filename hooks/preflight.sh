@@ -22,6 +22,14 @@
 #
 # Registered for startup, resume, clear, compact, and fork so the reminder is
 # restored after compaction.
+#
+# Codex (ACTUAL_HOOK_HOST=codex) gets the same ladder with one more rung: every
+# Codex hook needs the CLI's codex-hook capability, so a CLI without it is
+# offered the upgrade the way one below GATES_MIN_CLI_VERSION is, and the
+# Claude Code version minimums, which every such CLI meets, are not asked.
+# After a compact or clear it also resets the CLI's record of what this session
+# was briefed (`rules brief --codex-session-start`), which Claude Code's mod
+# does there: the model has lost that text, so the next read should brief again.
 
 set -uo pipefail
 
@@ -56,9 +64,18 @@ if [ $? -eq 2 ]; then
   exit 0
 fi
 
-# A version cli_version cannot read is not an old CLI, so it prompts nothing.
 offer=""
-if [ -n "$installed" ] && version_older_than "$installed" "$MIN_CLI_VERSION"; then
+if is_codex_host; then
+  if ! have_codex_hook refresh; then
+    if is_session_startup "$envelope"; then
+      emit_sessionstart_context "$(codex_min_version_interrupt "$installed")"
+    else
+      emit_sessionstart_context "$(codex_min_version_reminder "$installed")"
+    fi
+    exit 0
+  fi
+# A version cli_version cannot read is not an old CLI, so it prompts nothing.
+elif [ -n "$installed" ] && version_older_than "$installed" "$MIN_CLI_VERSION"; then
   if version_older_than "$installed" "$GATES_MIN_CLI_VERSION"; then
     if is_session_startup "$envelope"; then
       emit_sessionstart_context "$(min_version_interrupt "$installed")"
@@ -85,7 +102,16 @@ fi
 # survive it, so every decision briefed before the compaction stays quiet
 # afterwards while the model has lost the text. Say it again when
 # `--claude-session-start` resets that memory.
-msg="Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."
+if is_codex_host; then
+  # Only compact and clear reset anything; the CLI ignores every other source.
+  # Silent, and bounded by this hook's own timeout like every call above.
+  repo_root=$(resolve_repo_root)
+  printf '%s' "$envelope" 2>/dev/null \
+    | actual rules brief --codex-session-start --repo "$repo_root" --rules-dir "$dir" >/dev/null 2>&1
+  msg="Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against the plan a Plan-mode turn proposes, when that turn ends, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."
+else
+  msg="Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."
+fi
 if [ -n "$offer" ]; then
   msg="${msg}
 

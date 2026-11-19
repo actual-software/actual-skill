@@ -35,6 +35,13 @@
 # no-op; no `actual` binary, or one too old for `impl-check` -> a notice,
 # never a block; any unexpected condition -> let the turn end normally. Only
 # an explicit deny from `impl-check` can force continuation.
+#
+# Codex (ACTUAL_HOOK_HOST=codex) runs this on the same Stop as plan-gate.sh.
+# `actual impl-check --codex-hook` prints nothing for a Plan-mode turn, which
+# makes no edits, and otherwise replies in Codex's own Stop shape, so its reply
+# is forwarded after an exact-shape check rather than re-rendered. This script
+# is also the one that tells a Codex user the CLI is missing, unreadable or too
+# old; plan-gate.sh stays quiet about those so a turn says it once.
 
 set -uo pipefail
 
@@ -77,8 +84,21 @@ fi
 
 # 4b. ADR header v2 rule files the installed CLI cannot read: stand down with
 #     the one-line user-facing notice, same channel and reason as step 4.
+#     Under Codex this Stop also covers Plan-mode turns, where plan-gate.sh stays
+#     silent and no diff exists, so the wording names the turn, not a diff.
 if adr_v2_unsupported "$dir"; then
-  emit_stop_notice "$(adr_v2_standdown_notice "this turn's diff was not checked against them")"
+  if is_codex_host; then
+    emit_stop_notice "$(adr_v2_standdown_notice "this turn was not checked against them")"
+  else
+    emit_stop_notice "$(adr_v2_standdown_notice "this turn's diff was not checked against them")"
+  fi
+  exit 0
+fi
+
+# 4c. Codex needs a CLI that speaks its hook contract; an older one rejects
+#     --codex-hook. Same channel and reason as 4b.
+if is_codex_host && ! have_codex_hook; then
+  emit_stop_notice "$(codex_standdown_notice)"
   exit 0
 fi
 
@@ -90,7 +110,12 @@ trap 'rm -f "$stderr_file"' EXIT
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 
-verdict=$(printf '%s' "$payload" | actual impl-check --claude-hook --rules-dir "$dir" 2>"$stderr_file")
+# Codex only: end the turn on a conflict and ask the user (see codex_ask_flag).
+ask=""
+is_codex_host && ask=$(codex_ask_flag)
+# Split on purpose: codex_ask_flag prints fixed flags.
+# shellcheck disable=SC2086
+verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" $ask --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 take_telemetry_debug_line "$stderr_file"
 
@@ -99,7 +124,11 @@ take_telemetry_debug_line "$stderr_file"
 decide() {
 case "$status" in
   0)
-    render_stop_verdict "$verdict"
+    if is_codex_host; then
+      forward_codex_reply "$verdict" "block notice stop"
+    else
+      render_stop_verdict "$verdict"
+    fi
     exit 0
     ;;
   2)

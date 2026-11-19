@@ -10,9 +10,9 @@
 # prints nothing, and the Stop check then diffs against the commit the turn
 # started from instead.
 #
-# Silent on every path, because a UserPromptSubmit hook's stdout is added to
-# the prompt, so the CLI's output is discarded. Nothing here can block the
-# prompt either. A missing CLI or any other failure only leaves the Stop check
+# In Claude Code, silent on every path, because a UserPromptSubmit hook's stdout
+# is added to the prompt, so the CLI's output is discarded; Codex is below.
+# Nothing here can block a Claude Code prompt either. A missing CLI or any other failure only leaves the Stop check
 # diffing against HEAD as it did before this hook existed, and impl-gate.sh
 # already tells the user about a missing or outdated CLI.
 #
@@ -21,6 +21,17 @@
 # prompt, and denials nobody sees that spend the Stop check's per-rule budget.
 # So the hook probes for the dispatch first (have_turn_start) and does nothing
 # without it.
+#
+# Codex (ACTUAL_HOOK_HOST=codex) sends the same event, and there the CLI may
+# answer. Codex has no mod to ask the user when a check blocks, so the gates
+# end the turn instead (--codex-ask) and the CLI keeps the conflicts. On the
+# next prompt it replies with one of two shapes, which this hook forwards
+# (forward_codex_reply "stop context") and nothing else:
+#   - the conflicts, as additionalContext the agent reads with the message;
+#   - for a typed `actual override <rule-id|all> [code] [reason]`, the
+#     override recorded and {"continue":false,"stopReason":...}, which keeps
+#     the prompt from the agent and tells the user what was overridden.
+# Claude Code's output is still discarded.
 
 set -uo pipefail
 
@@ -50,8 +61,18 @@ if adr_v2_unsupported "$dir" refresh; then
   exit 0
 fi
 
+# Codex needs the codex-hook capability instead, which post-dates the dispatch.
+# Its probe is cached; impl-gate.sh tells the user when it is missing.
+if is_codex_host; then
+  if ! have_codex_hook; then
+    if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
+      printf 'turn-start: skipped, actual plan-check --help does not name codex-hook\n' \
+        2>/dev/null >>"$ACTUAL_TURN_START_LOG"
+    fi
+    exit 0
+  fi
 # The ACTUAL_TURN_START_LOG trace described below records this skip too.
-if ! have_turn_start; then
+elif ! have_turn_start; then
   if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
     printf 'turn-start: skipped, actual impl-check --help does not name UserPromptSubmit\n' \
       2>/dev/null >>"$ACTUAL_TURN_START_LOG"
@@ -71,12 +92,20 @@ cd "$repo_root" 2>/dev/null || true
 # ACTUAL_TURN_START_LOG=<file> opts in to a trace: the CLI's output and exit
 # status are appended to that file, so a record that never gets written can be
 # diagnosed. Nothing reaches stdout or stderr either way.
-if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
+if is_codex_host; then
+  reply=$(printf '%s' "$payload" 2>/dev/null | actual impl-check "$(hook_flag)" --rules-dir "$dir" 2>/dev/null)
+  status=$?
+  if [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
+    printf '%s\nturn-start: exit=%s rules-dir=%s\n' "$reply" "$status" "$dir" \
+      2>/dev/null >>"$ACTUAL_TURN_START_LOG"
+  fi
+  [ "$status" -eq 0 ] && forward_codex_reply "$reply" "stop context"
+elif [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
   {
-    printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" 2>&1
+    printf '%s' "$payload" 2>/dev/null | actual impl-check "$(hook_flag)" --rules-dir "$dir" 2>&1
     printf 'turn-start: exit=%s rules-dir=%s\n' "${PIPESTATUS[1]}" "$dir"
   } 2>/dev/null >>"$ACTUAL_TURN_START_LOG"
 else
-  printf '%s' "$payload" 2>/dev/null | actual impl-check --claude-hook --rules-dir "$dir" >/dev/null 2>&1
+  printf '%s' "$payload" 2>/dev/null | actual impl-check "$(hook_flag)" --rules-dir "$dir" >/dev/null 2>&1
 fi
 exit 0
