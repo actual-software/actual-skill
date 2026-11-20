@@ -31,6 +31,14 @@
 # still pure byte-matching, never a JSON parse -- same reason plan-gate.sh
 # gives.
 #
+# Once per turn that changed files, the CLI also asks the agent which of the
+# session's ADRs it used. The question arrives as a deny: after the judge's
+# reason on a block, or as the whole reason on a pass, which in Stop's contract
+# means "continue once" so the agent can answer with `actual rules report-use`
+# (allowed without a prompt by report-use-allow.sh). A round that would
+# otherwise have shown a notice carries it as a systemMessage beside the deny,
+# and render_stop_verdict keeps it.
+#
 # Fail-open contract, identical to plan-gate.sh: no committed rules -> silent
 # no-op; no `actual` binary, or one too old for `impl-check` -> a notice,
 # never a block; any unexpected condition -> let the turn end normally. Only
@@ -125,7 +133,7 @@ decide() {
 case "$status" in
   0)
     if is_codex_host; then
-      forward_codex_reply "$verdict" "block notice stop"
+      forward_codex_reply "$verdict" "block block-notice notice stop"
     else
       render_stop_verdict "$verdict"
     fi
