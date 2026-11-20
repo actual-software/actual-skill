@@ -69,15 +69,17 @@ release.
 | `actual adr create "<title>"` | Write a new decision. Signed out: a file in `docs/adr/` and, for an accepted one, its rule file in `.actual/rules/`. Signed in: a decision in Actual AI, sent once and never retried, and with `--all` (0.16.0 or later), every decision file under `docs/adr/` it doesn't have yet. `new` is its alias | The title or `--title`, `--context <point>` and `--policy "LEVEL: statement"` (each repeatable), `--scope <glob>`, `--status accepted\|draft`, `--root`, `--json`; signed out only, `--deciders`; signed in only, `--file <path>` or `--all` in place of the title and content, `--repo`, `--allow-duplicate` |
 | `actual adr check [FILE]...` | Check decision files with Actual AI's save rules and list likely duplicates; local, and compares with Actual AI when signed in. From 0.16.0 it also lists each file under `docs/adr/` that won't publish | `--no-cloud`, `--repo <repo>`, `--root`, `--json` |
 | `actual adr discover` | 0.16.0 or later: copy the ADRs a repository keeps in other tools' folders into `docs/adr/imported/` and list the files that won't publish; sends nothing, needs no sign-in | `--dry-run`, `--no-cloud`, `--root`, `--json` |
-| `actual adr list` | List the organization's decisions (needs `login`) | `--repo <repo>`, `--state active\|draft\|suggested\|updated\|archived`, `--limit` (1 to 200, default 50), `--offset`, `--json` |
-| `actual adr show <id>` | Show one decision with its policies and their ids (needs `login`) | `--json` |
-| `actual adr update <id>` | Change a decision's title, context, policies, levels or scope (needs `login`) | `--title`, `--context`, `--policy "[<policy id>=]LEVEL: statement"`, `--level <policy id>=LEVEL`, `--scope`, `--clear-scope`, `--json` |
-| `actual adr publish <id>` | Publish a draft decision so it governs (needs `login`) | `--json` |
-| `actual adr unpublish <id>` | Move an active decision back to draft (needs `login`) | `--json` |
-| `actual adr delete <id>` | Archive an active decision or a draft, as Delete does in the web app (needs `login`) | `--json` |
-| `actual adr restore <id>` | Restore an archived decision to the list it came from (needs `login`) | `--json` |
+| `actual adr list` | List decisions. Signed out (0.16.0 or later): the decision files under `docs/adr/` that carry an ADR header. Signed in: the organization's decisions | `--state` (signed out `active\|draft`; signed in also `suggested\|updated\|archived`), `--limit` (1 to 200, default 50), `--offset`, `--json`; signed in only, `--repo <repo>` |
+| `actual adr show <id>` | Show one decision with its policies. Signed out (0.16.0 or later): the file whose header names the id, each policy with its rule id. Signed in: the decision, each policy with its id | `--json` |
+| `actual adr update <id>` | Change a decision's title, context, policies, levels or scope. Signed out (0.16.0 or later): the file, written back whole. Signed in: the decision in Actual AI | `--title`, `--context`, `--policy "[<policy id>=]LEVEL: statement"`, `--level <policy id>=LEVEL`, `--scope`, `--clear-scope`, `--json` |
+| `actual adr publish <id>` | Make a decision govern. Signed out (0.16.0 or later): set the file's status to accepted. Signed in: publish a draft | `--json` |
+| `actual adr unpublish <id>` | Stop a decision governing. Signed out (0.16.0 or later): set the file's status to draft. Signed in: move an active decision back to draft | `--json` |
+| `actual adr delete <id>` | Signed out (0.16.0 or later): remove the file and its rule file, which git can bring back. Signed in: archive an active decision or a draft, as Delete does in the web app | `--json` |
+| `actual adr restore <id>` | Restore an archived decision to the list it came from (needs `login`; signed out, git brings back a deleted file) | `--json` |
 | `actual adr accept <id>` | Accept a suggestion (needs `login`) | `--json` |
 | `actual adr reject <id>` | Reject a suggestion, saving the reason with it (needs `login`) | `--reason <text>` (required, up to 10,000 characters), `--json` |
+| `actual adr refresh` | 0.16.0 or later: bring the rule files in `.actual/rules/` in step with the decisions, from `docs/adr/` signed out and from Actual AI signed in, after sending new and changed files with `push`. The plugin's hooks run it on every call, so don't run it by hand | `--timeout-ms` (default 1,000), `--root`, `--json` |
+| `actual adr push` | 0.16.0 or later, signed in: send the decision files under `docs/adr/` that are new or changed in this checkout to Actual AI. `refresh` runs it first on every hook call, so don't run it by hand | `--limit` (default 10), `--repo <repo>`, `--root`, `--json` |
 | `actual status` | Check the state of the files `adr-bot` writes | `--verbose` |
 | `actual auth` | Check the runner (coding-agent) auth status | (none) |
 | `actual config show` | Display current config | (none) |
@@ -132,7 +134,7 @@ Best-effort server-side token revoke, then always clears local credentials. Safe
 
 ## ADR commands
 
-`actual adr` writes and checks ADRs in the repository and manages the organization's decisions in Actual AI. Signed out, `create` (alias `new`) writes a decision into `docs/adr/`, `check` reads the files there and `discover` copies other tools' ADRs in. Signed in, `create` saves to Actual AI, where the other commands act on the organization's decisions. Every command takes `--json` and prints its result as JSON on stdout, with errors on stderr. The commands arrived in 0.14.0, and 0.16.0 brings `create` into `docs/adr/` signed out, `discover` and `create --all`, so check `actual --version` first. On 0.15.0 and older, `discover` answers `unrecognized subcommand 'discover'` and `create --all` answers `unexpected argument '--all'` (both exit `2`); don't follow the tip it adds to try `--allow-duplicate`, a different flag. To draft a new ADR from the code or a conversation, use the plugin's `adr-draft` skill, which runs `create` and `check` with the user choosing at each step.
+`actual adr` writes, checks and manages ADRs. Each command that creates, reads, updates or deletes a decision has two pathways: signed out, it works on the decision files under `docs/adr/`, and signed in, on the organization's decisions in Actual AI. A stored sign-in picks the pathway even once it has lapsed, and the command then fails with the step that fixes it, never falling back to the files. `check`, `discover` and `refresh` read the files either way, and `restore`, `accept` and `reject` need a sign-in. Every command takes `--json` and prints its result as JSON on stdout, with errors on stderr. The commands arrived in 0.14.0, and 0.16.0 brings the signed-out pathways of `create` (with `new` as its alias), `list`, `show`, `update`, `publish`, `unpublish` and `delete`, plus `discover`, `create --all`, `refresh` and `push`, so check `actual --version` first. On 0.15.0 and older, `discover`, `refresh` and `push` answer `unrecognized subcommand` and `create --all` answers `unexpected argument '--all'` (all exit `2`; don't follow the tip there to try `--allow-duplicate`, a different flag), and signed out, `list`, `show`, `update`, `publish`, `unpublish` and `delete` exit `2` with `Fix: actual login`. To draft a new ADR from the code or a conversation, use the plugin's `adr-draft` skill, which runs `create` and `check` with the user choosing at each step.
 
 ### adr create — docs/adr/ signed out, Actual AI signed in; alias new
 
@@ -171,34 +173,66 @@ actual adr discover --json
 
 Finds the ADR files a repository keeps in the folders ADR tools use, each read three folders deep: the folder adr-tools' `.adr-dir` names (else `doc/adr`), MADR's `docs/decisions`, each `adrFolder` in `.log4brains.yml`, the `backstage.io/adr-location` annotation in `catalog-info.yaml`, and common folders such as `docs/adrs` and `docs/architecture/decisions`. It copies each one kept outside `docs/adr/` into `docs/adr/imported/<folder>/` under its own name, where `<folder>` is the source's folder with `-` between its parts (`doc/adr/0001-record-architecture-decisions.md` goes to `docs/adr/imported/doc-adr/`), so two tools' files of the same name don't collide. It never overwrites a file, copies each source once (`docs/adr/imported/.copied` lists them, and a listed source isn't copied again even after its copy is renamed or deleted), and leaves the sources where they are; `--dry-run` lists what it would copy and writes nothing. It sends nothing. Each file is listed with its layout (`actual`, `madr`, `nygard` or `other`), title and status, and the run ends with the files that won't publish, as `check` lists them (compared with Actual AI when signed in, unless `--no-cloud`). Copies in other layouts don't publish until they're normalized: offer the rewrite, and make it only when the user asks.
 
-### adr list and show — read; need login
+### adr list and show — docs/adr/ signed out, Actual AI signed in
 
 ```bash
 actual adr list --state draft --json
 actual adr show <id> --json
 ```
 
-`list` covers the connected repository the checkout's `origin` remote names, or the whole organization when there is none; `--repo` picks one by name, `owner/name` or id, and `--state` matches a list on the web app's decisions page. `--json`: `decisions`, `total`, and `next_offset` for the next page. `show` prints one decision: `id`, `kind` (`group` for one Actual AI grouped from several policies), `title`, `state`, `status`, `context`, `policies` (each with the `id` that `update` takes), `scope` and `category`. `show` and the commands that change a decision take the id `list` prints; for a grouped decision, the id of any of its policies' rows works too.
+Signed out (0.16.0 or later), `list` lists the decision files under `docs/adr/` that carry an ADR header, with the id each header names, and says how many files it left out for having none. `--state` takes `active` or `draft`; `--repo` and the states only Actual AI keeps (`suggested`, `updated`, `archived`) are refused (exit `2`). `show` reads the file whose header names the id. A file stores no policy ids, so `show` gives each policy the rule id its rule file prints, such as `R-0B6F-001`, and `update` takes those. `--json` prints the fields listed below for the signed-in pathway, each decision with its `file`.
 
-### adr update — needs login
+Signed in, `list` covers the connected repository the checkout's `origin` remote names, or the whole organization when there is none; `--repo` picks one by name, `owner/name` or id, and `--state` matches a list on the web app's decisions page. `--json`: `decisions`, `total`, and `next_offset` for the next page. `show` prints one decision: `id`, `kind` (`group` for one Actual AI grouped from several policies), `title`, `state`, `status`, `context`, `policies` (each with the `id` that `update` takes), `scope` and `category`. `show` and the commands that change a decision take the id `list` prints; for a grouped decision, the id of any of its policies' rows works too.
+
+### adr update — docs/adr/ signed out, Actual AI signed in
 
 ```bash
 actual adr update <id> --level <policy id>=SHOULD
 actual adr update <id> --policy "<policy id>=MUST: Services store relational data in Postgres." --policy "MAY: Jobs read a replica."
 ```
 
-Changes the title, context, policies, levels or scope, and saves the whole decision as the web app's editor does. `--policy` gives the whole list after the change: prefix a policy's id and `=` to keep it, and leave one out to remove it. `--level` can't be combined with `--policy`. `--context ''` clears the context. A blank `--title`, or a policy with no statement, is refused before anything is sent (exit `1`), and an archived decision can't be changed until it's restored. Editing the list can change policy ids, so take them from this command's output or `adr show` before the next edit. `--json`: `update` (`success`, `adr_id`) and the saved `decision`, or `read_back_problem` when the change was saved but reading it back failed.
+Changes the title, context, policies, levels or scope, with the same flags on both pathways. `--policy` gives the whole list after the change: prefix a policy's id and `=` to keep it, and leave one out to remove it. `--level` can't be combined with `--policy`. `--context ''` clears the context. A blank `--title`, or a policy with no statement, is refused before anything is changed (exit `1`). Editing the list can change policy ids, so take them from this command's output or `adr show` before the next edit.
 
-### adr publish, unpublish, delete, restore, accept and reject — need login
+Signed out (0.16.0 or later), it writes the whole file back, so it refuses (exit `3`) a file holding text or header fields outside the layout `create` writes rather than drop them; edit such a file by hand. A file under the sync's name moves to the name for its new title, and the decision's rule file is brought in step before the command returns. `--json`: `success`, `adr_id`, `file`, and `rule_files` (`written`, `rewritten`, `removed`, `problems`).
+
+Signed in, it saves the whole decision as the web app's editor does, and an archived decision can't be changed until it's restored. `--json`: `update` (`success`, `adr_id`) and the saved `decision`, or `read_back_problem` when the change was saved but reading it back failed.
+
+### adr publish, unpublish and delete — docs/adr/ signed out, Actual AI signed in
 
 ```bash
 actual adr publish <id>
+actual adr delete <id>
+```
+
+Signed out (0.16.0 or later), `publish` sets an unaccepted file's status to accepted, once the file passes the check an accepted decision has to pass, and `unpublish` sets an accepted file's status to draft, which no check reads. Each changes the header's status and the file's `Status:` line. `delete` removes the file and its rule file; `git restore <file>` brings the file back while the deletion is uncommitted, and the next `refresh` writes its rule file again. Each brings the decision's rule file in step before it returns and says which rule file it wrote, rewrote or removed. `--json`: `success`, `adr_id`, `file`, `status`, and `rule_files` (`written`, `rewritten`, `removed`, `problems`).
+
+Signed in, `publish` makes a draft govern and `unpublish` moves an active decision back to draft. `delete` archives an active decision or a draft, as Delete does in the web app, and `restore` returns it; nothing in Actual AI deletes permanently. Each command reads the decision's state first and sends nothing when the state doesn't allow the change (exit `3`). A grouped draft can't be published yet. The next `actual adr refresh` brings the repository's rule files in step with the change, and Actual AI's sync pull request writes the same files. `--json`: `success` and `adr_id`.
+
+### adr restore, accept and reject — need login
+
+```bash
+actual adr restore <id>
 actual adr reject <id> --reason "Covered by the gateway client decision"
 ```
 
-`publish` makes a draft govern and `unpublish` moves an active decision back to draft. `delete` archives an active decision or a draft, as Delete does in the web app, and `restore` returns an archived one to the list it came from; nothing deletes permanently. `accept` and `reject` act on a suggestion, either a new decision or a suggested change to an active one, and `reject` needs `--reason`, up to 10,000 characters. Each command reads the decision's state first and sends nothing when the state doesn't allow the change (exit `3`). A grouped draft can't be published yet, and a grouped decision can't be restored yet. The next `actual adr refresh` brings the repository's rule files in step with the change, and Actual AI's sync pull request writes the same files. `--json`: `success` and `adr_id`, plus `reason_saved` on `reject`.
+`restore` returns an archived decision to the list it came from. `accept` and `reject` act on a suggestion, either a new decision or a suggested change to an active one, and `reject` needs `--reason`, up to 10,000 characters. Each reads the decision's state first and sends nothing when the state doesn't allow the change (exit `3`), and a grouped decision can't be restored yet. They act on records only Actual AI keeps, its archive and its suggestions, so signed out each is refused (exit `2`) with what to do instead: a deleted decision file comes back through git. `--json`: `success` and `adr_id`, plus `reason_saved` on `reject`.
 
-Exit codes for every `adr` command: `1` a check failed (the save check, a `--policy` or `--level` value that doesn't parse, a blank `update --title` or policy statement, Actual AI's refusal of the content, `adr check`, `create`'s duplicate refusal, or a file `create --all` didn't save), `2` signed out, a command or flag the pathway can't take (such as `create --file` signed out), no access to the decision, no connected repository could be chosen, or a value refused while the command line is read (such as a blank `--reason`), `3` Actual AI unreachable or another API error, no decision with that id, a change the decision's state doesn't allow, or a `create` whose outcome is unknown, and `5` a local file couldn't be read or written. The CLI's [ADR command reference](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) has the rest.
+### adr refresh and push — the hooks run them; 0.16.0 or later
+
+```bash
+actual adr refresh --json
+```
+
+Every hook the plugin registers runs `refresh` first on each call, so neither you nor the user needs to run `refresh` or `push` by hand; run `refresh` yourself only when the user asks.
+
+- Signed out, `refresh` writes a rule file for each accepted decision file under `docs/adr/`, and removes the rule file of one that's deleted or no longer accepted.
+- Signed in, it first runs `push`, which sends the decision files under `docs/adr/` that are new or changed in this checkout to Actual AI. It then writes a rule file for each active decision of the connected repository, and removes those of decisions archived, unpublished or gone. It waits up to `--timeout-ms` (1,000 by default) for Actual AI, and when Actual AI is slower or can't be reached, every rule file stays as it is.
+
+`push` sends an edit to a decision Actual AI already holds at once, merged or not, a status change included, and counts a file as edited only when it changed in this checkout, never because it differs from Actual AI. So in a signed-in session, an edit to a decision file under `docs/adr/` changes that decision in Actual AI on the next hook call, and every signed-in session picks it up on its next one. A new file follows `create --all`'s rule: one marked accepted is published once the file is on the default branch, since a hook has no person at the terminal.
+
+A rule file is rewritten only when its decision changed after the file was written, so the files a merged sync pull request wrote are left alone until their decision changes, and a rule file with no ADR header is never touched. Actual AI's sync pull request writes the same folder, so the user commits or deletes the CLI's copies before pulling a sync merge. When the list of files under `docs/adr/` that aren't normalized changes, `refresh` prints it with each file's reasons; offer to normalize those files, and rewrite one only when the user asks. `refresh` always exits `0`. `--json`: `mode` (`signed-out` or `signed-in`), the rule files `written`, `rewritten` and `removed`, `kept` when Actual AI couldn't be read, the `unnormalized` files with their reasons, `unnormalized_changed`, a `message` when a person should hear about it, and any `problems`. `rules brief`, `plan-check` and `impl-check` never refresh by themselves, so a check run directly judges the rule files as they are.
+
+Exit codes for every `adr` command: `1` a check failed (the save check, a `--policy` or `--level` value that doesn't parse, a blank `update --title` or policy statement, Actual AI's refusal of the content, `adr check`, `create`'s duplicate refusal, or a file `create --all` didn't save), `2` a missing or lapsed sign-in where one is needed, a command or flag the pathway can't take (such as `create --file` or `accept` signed out), no access to the decision, no connected repository could be chosen, or a value refused while the command line is read (such as a blank `--reason`), `3` Actual AI unreachable or another API error, no decision with that id (signed out, no decision file whose header names it), a change the decision's state doesn't allow (signed out, also a file `update` can't write back whole), or a `create` whose outcome is unknown, and `5` a local file couldn't be read or written. `refresh` always exits `0`. The CLI's [ADR command reference](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) has the rest.
 
 ## Plan- and Implementation-Stage Governance (Claude Code and Codex hooks)
 

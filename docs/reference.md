@@ -74,11 +74,19 @@ Signed in, `actual adr create` saves each one to Actual AI and writes no file in
 
 Drafting needs `actual` 0.16.0 or later, the first release whose `create` writes into `docs/adr/` signed out. The skill checks `actual --version` and offers the upgrade on an older CLI.
 
+## Decisions in docs/adr/ and in Actual AI
+
+From `actual` 0.16.0, each `actual adr` command that creates, reads, updates or deletes a decision has two pathways. Signed out, `create`, `list`, `show`, `update`, `publish`, `unpublish` and `delete` work on the files in `docs/adr/`, and each change brings the decision's rule file in `.actual/rules/` in step before the command returns: `publish` marks a file accepted, `unpublish` marks it a draft, and `delete` removes the file and its rule file, which git can bring back. Signed in, the same commands work on your decisions in Actual AI. `restore`, `accept` and `reject` act on what only Actual AI keeps, its archive and its suggestions, so they need a sign-in. On 0.15.0 and older, only `new` and `check` work signed out.
+
+## Keeping rule files in step
+
+From `actual` 0.16.0, every hook call runs `actual adr refresh` first, so neither you nor your agent runs it by hand. Signed out, it writes a rule file for each accepted decision file in `docs/adr/` and removes the rule file of one you delete or stop accepting. Signed in, it first sends your new and changed files in `docs/adr/` to Actual AI with `actual adr push`, then writes the rule files of the repository's active decisions there, and keeps the existing files when Actual AI can't be reached. An edit to a decision Actual AI already holds goes up at once, from any session, merged or not, while a new accepted file sent this way waits as a draft until it's on the default branch. Each run lists the files in `docs/adr/` that aren't normalized whenever that list changes. Actual AI's sync pull request writes the same folder, so commit or delete the CLI's copies before you pull a sync merge.
+
 ## Importing existing ADRs
 
 With `actual` 0.16.0 or later, your agent can bring the ADRs a repository already keeps into `docs/adr/`. `actual adr discover` finds them in the folders ADR tools use (adr-tools, MADR, log4brains, Backstage, and common folders such as `docs/adrs`) and copies each one into `docs/adr/imported/`, one folder per source. Nothing is moved or overwritten. Add `--dry-run` to see what it would copy first; it needs no sign-in either way.
 
-A copy won't publish until it's normalized, which means rewritten in Actual's format: Actual's header, and passing `actual adr check`. `check` and `discover` both list every file that won't, each with the reason and a recommendation to normalize it. Your agent rewrites one only when you ask.
+A copy won't publish until it's normalized, which means rewritten in Actual's format: Actual's header, and passing `actual adr check`. `check` and `discover` both list every file that won't, each with the reason and what to do: normalize it, or compare it with the decision in Actual AI it looks like. Your agent rewrites one only when you ask.
 
 Signed in, `actual adr create --all` saves every decision file under `docs/adr/` that Actual AI doesn't have yet. Each keeps its own status, and a draft stays a draft. An accepted file is published at once when you run it yourself; run from your agent's shell, it waits as a draft until the file is on the default branch. Anything Actual AI already has, or that looks like one of its decisions, is skipped and listed, so a second run won't send a file twice. Your agent runs it only when you ask.
 
