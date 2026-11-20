@@ -54,10 +54,12 @@ hook_flag() {
 
 # Canonicalize a directory path -- resolves symlinks and trailing slashes so two
 # paths can be compared as plain strings. Fails for anything that is not a directory.
+# `cd -P` resolves a `..` after a symlink as the kernel does; a plain `cd` drops it
+# against the text first, so `root/link/..` would read as `root`.
 canonical_dir() {
   [ -n "${1:-}" ] || return 1
   [ -d "$1" ] || return 1
-  (cd -- "$1" 2>/dev/null && pwd -P) || return 1
+  (cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
 }
 
 # True when $2 is $1 itself or a directory beneath it. Both arguments must already

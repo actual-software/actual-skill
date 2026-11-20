@@ -2631,6 +2631,10 @@ for cmd in \
   "$S1T --repo ${AOUT} --repo ${AREPO} --none" \
   "$BASE --rules-dir ${AOUT}/.actual/rules --none" \
   "$BASE --rules-dir ${AREPO}/escape --none" \
+  "$S1T --repo ${AREPO}/escape/.. --none" \
+  "$BASE --rules-dir ${AREPO}/escape/.. --none" \
+  "$S1T --repo ${AREPO}/sub/.. --none" \
+  "$BASE --rules-dir ${AREPO}/sub/../.actual/rules --none" \
   "$BASE --rules-dir .actual/rules --none" \
   "$BASE --rules-dir ${AREPO}/.actual/rules --rules-dir ${AOUT}/.actual/rules --none" \
   "$BASE --rules-dir ${AOUT}/.actual/rules --rules-dir ${AREPO}/.actual/rules --none" \
@@ -2645,6 +2649,21 @@ for cmd in \
     fail "must make no decision outside the grant: $cmd" "status=$st stdout=$(cat "${WORK}/out")"
   fi
 done
+
+# canonical_dir resolves a `..` after a symlink the way the kernel does, so the
+# hook's view of a path matches the directory the CLI would open.
+got=$( . "${HOOKS_DIR}/lib/bootstrap.sh"; canonical_dir "${AREPO}/escape/.." )
+if [ "$got" = "${AOUT}/.actual" ]; then
+  pass "canonical_dir resolves a .. after a symlink physically"
+else
+  fail "canonical_dir must resolve link/.. physically" "got=$got want=${AOUT}/.actual"
+fi
+got=$( . "${HOOKS_DIR}/lib/bootstrap.sh"; canonical_dir "${ALLOW_BASE}/repo-link/sub/.." )
+if [ "$got" = "$AREPO" ]; then
+  pass "canonical_dir still resolves a symlinked repository"
+else
+  fail "canonical_dir must resolve repo-link/sub/.. to the repository" "got=$got want=$AREPO"
+fi
 
 st=$(bash_call "actual rules report-use --claude-session s1 --turn 3-0123abcd --repo ${ABARE} --none" "" "$ABARE")
 if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "${WORK}/err" ]; then

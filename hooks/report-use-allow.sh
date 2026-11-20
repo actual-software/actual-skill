@@ -13,7 +13,8 @@
 # decision from this hook, so Claude Code's normal permission flow applies.
 #
 # The grant is also scoped to the question it answers: --repo must be this
-# session's repository root, --rules-dir (when given) must sit inside it,
+# session's repository root, --rules-dir (when given) must sit inside it, both
+# must be absolute with no `..` component (the CLI never writes one),
 # --claude-session must be this session's id, and the repository must have
 # committed rules, since a repository without them is never asked. Anything
 # else gets no decision.
@@ -47,6 +48,12 @@ has_one_key() {
   local key="\"$2\"" rest
   rest="${1#*"$key"}"
   [ "$rest" != "$1" ] && [ "${rest#*"$key"}" = "$rest" ]
+}
+
+# True when $1 is an absolute path with no `..` component.
+plain_absolute_path() {
+  case "$1" in /*) ;; *) return 1 ;; esac
+  case "$1" in */..|*/../*) return 1 ;; esac
 }
 
 # Prints the allow decision when $1, the raw payload, is a Bash call of exactly
@@ -100,12 +107,12 @@ allow_report_use() {
   session_id=$(extract_json_string_field "$payload" "session_id") || return 1
   [ "$session" = "$session_id" ] || return 1
 
-  case "$repo" in /*) ;; *) return 1 ;; esac
+  plain_absolute_path "$repo" || return 1
   root=$(canonical_dir "$(resolve_repo_root)") || return 1
   canon=$(canonical_dir "$repo") || return 1
   [ "$canon" = "$root" ] || return 1
   if [ -n "$rules" ]; then
-    case "$rules" in /*) ;; *) return 1 ;; esac
+    plain_absolute_path "$rules" || return 1
     canon=$(canonical_dir "$rules") || return 1
     is_within "$root" "$canon" || return 1
   fi
