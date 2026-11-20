@@ -74,6 +74,16 @@ Signed in, `actual adr create` saves each one to Actual AI and writes no file in
 
 Drafting needs `actual` 0.16.0 or later, the first release whose `create` writes into `docs/adr/` signed out. The skill checks `actual --version` and offers the upgrade on an older CLI.
 
+## Importing existing ADRs
+
+With `actual` 0.16.0 or later, your agent can bring the ADRs a repository already keeps into `docs/adr/`. `actual adr discover` finds them in the folders ADR tools use (adr-tools, MADR, log4brains, Backstage, and common folders such as `docs/adrs`) and copies each one into `docs/adr/imported/`, one folder per source. Nothing is moved or overwritten. Add `--dry-run` to see what it would copy first; it needs no sign-in either way.
+
+A copy won't publish until it's normalized, which means rewritten in Actual's format: Actual's header, and passing `actual adr check`. `check` and `discover` both list every file that won't, each with the reason and a recommendation to normalize it. Your agent rewrites one only when you ask.
+
+Signed in, `actual adr create --all` saves every decision file under `docs/adr/` that Actual AI doesn't have yet. Each keeps its own status, and a draft stays a draft. An accepted file is published at once when you run it yourself; run from your agent's shell, it waits as a draft until the file is on the default branch. Anything Actual AI already has, or that looks like one of its decisions, is skipped and listed, so a second run won't send a file twice. Your agent runs it only when you ask.
+
+On 0.15.0 and older, `actual adr discover` reports an unrecognized subcommand and `create --all` an unexpected argument; the skill offers the upgrade.
+
 ## Troubleshooting
 
 When something fails, the skill diagnoses it for you. It knows every error the CLI can return and all five runners (`claude-cli`, `anthropic-api`, `openai-api`, `codex-cli`, `cursor-cli`), so it can find the cause and retry without you reading logs.
