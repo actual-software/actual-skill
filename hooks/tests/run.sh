@@ -16,6 +16,13 @@ TESTS_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 HOOKS_DIR=$(cd -- "${TESTS_DIR}/.." && pwd)
 FIXTURES="${TESTS_DIR}/fixtures"
 
+# Each case sets the ACTUAL_* switches it tests, so start from none of the caller's: an
+# agent shell's ACTUAL_UNATTENDED=on, or a saved plugin option (CLAUDE_PLUGIN_OPTION_*),
+# would otherwise reach every case that expects the default.
+for var in $(compgen -e); do
+  case "$var" in ACTUAL_*|CLAUDE_PLUGIN_OPTION_*) unset "$var" ;; esac
+done
+
 pass_count=0
 fail_count=0
 
