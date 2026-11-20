@@ -769,8 +769,8 @@ The CLI auto-selects a runner from the model name:
 
 The checks read only `.actual/rules/`, so an ADR a person or an agent writes into `docs/adr/` governs nothing until it has a rule file there. When the user asks to import, adopt, normalize or index existing ADRs, or asks why one isn't enforced, run `actual adr discover --json` and follow `references/adr-discovery.md`. In short:
 
-1. Discover, then preview with `actual adr normalize --all --dry-run --json`.
-2. For an ADR whose decision is prose, write the extraction yourself (`--extracted`) instead of letting the CLI start a model.
+1. Discover, then preview with `actual adr normalize --all --dry-run --json`. Get the user's go-ahead before writing without `--dry-run`: it rewrites docs in place.
+2. For an ADR whose decision is prose, write the extraction yourself (`--extracted`, with `--no-model`) instead of letting the CLI start a model, keep the JSON files outside the repository, and flag your extracted policies for the user to review.
 3. Ask the user every question the report returns (`needs-input`) and pass the answers with `--answers`. Never answer for them, and use `--yes` only when they ask for an unattended run: it writes undecided decisions as drafts.
 
 Never normalize a `synced` or `synced-edited` decision, since Actual AI's sync owns it. Convert `legacy` (adr-bot) ADRs only on request. Ask before `--push`, which saves the decisions to the user's Actual AI organization. All of this works without an Actual AI account.

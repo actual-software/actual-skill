@@ -48,7 +48,7 @@ In Claude Code, the plugin checks your coding agent's work against the architect
 
    Run from a coding agent's shell, it writes a draft, which no check reads. You can also merge the sync pull request [app.actual.ai](https://app.actual.ai) opens, which writes the same two files for each accepted decision. `actual rules ls` lists the rule files the checks read and marks a draft as not enforced.
 
-   ADRs already in `docs/adr/`, written by hand or by an agent, aren't checked until they have a rule file. `actual adr discover` lists them, and `actual adr normalize --all` converts them, asking about anything it can't tell from the file. Both run signed out, on a CLI whose `actual adr --help` lists them.
+   ADRs already in `docs/adr/`, written by hand or by an agent, aren't checked until they have a rule file. `actual adr discover` lists them, and `actual adr normalize --all` converts them, and turns anything it can't tell from the file into a question. Both run signed out, on a CLI whose `actual adr --help` lists them.
 
 From then on, every plan and every turn in that repository is checked against those decisions.
 

@@ -29,8 +29,8 @@ The checks (`plan-check`, `impl-check`, `rules`) read only `.actual/rules/`. An 
 ## Workflow
 
 1. **Discover.** Run `actual adr discover --json`, add `--no-cloud` to skip the Actual AI comparison, and summarize the counts and anything to act on.
-2. **Preview.** Run `actual adr normalize --all --dry-run --json` (or name files instead of `--all`). Each result has an `outcome` (`would-write`, `would-reindex`, `needs-input`, `skipped`, `unchanged`) and, for a conversion, a `diff`. Show the user what would change before writing.
-3. **Extract prose decisions yourself.** A doc whose decision is prose (no RFC-2119 keyword lines and no `## Policies` list) needs extraction. Rather than letting the CLI start a model of its own, read each such doc and write `extracted.json`, keyed by the doc's path from the repository root:
+2. **Preview.** Run `actual adr normalize --all --dry-run --json` (or name files instead of `--all`). Each result has an `outcome` (`would-write`, `would-reindex`, `needs-input`, `skipped`, `unchanged`) and, for a conversion, a `diff`. Show the user what would change and get their go-ahead before you run it without `--dry-run`: it rewrites the docs in place.
+3. **Extract prose decisions yourself.** A doc whose decision is prose (no RFC-2119 keyword lines and no `## Policies` list) needs extraction. Rather than letting the CLI start a model of its own, read each such doc and write `extracted.json` outside the repository (your scratchpad or a temp directory, so it is never committed), keyed by the doc's path from the repository root:
 
    ```json
    {
@@ -46,17 +46,28 @@ The checks (`plan-check`, `impl-check`, `rules`) read only `.actual/rules/`. An 
    }
    ```
 
-   Write policies as checkable rules about the code, each `LEVEL: statement` with LEVEL one of MUST, MUST NOT, SHOULD, SHOULD NOT or MAY. Never invent a requirement the ADR doesn't state. Leave `scope` empty for the whole repository, and only name paths the ADR names. List every field you had to guess in `uncertain`, so the user is asked about it. Leave out a field the file already states clearly (title, status, context): the CLI reads those itself. Pass the file with `--extracted extracted.json`.
-4. **Ask the user what's still open.** Results with `outcome: "needs-input"` carry `questions`, each with a `field`, `question`, `options` and `suggested`. Ask the user with your question tool, one question per item, using the options and showing `suggested`. Never answer for them. Write the answers to `answers.json` in the same shape: `keep_duplicate` and `is_adr` are booleans, `status` is `accepted` or `draft`, and `policies` and `scope` are lists. Then run `actual adr normalize <files> --extracted extracted.json --answers answers.json --json`.
+   Write policies as checkable rules about the code, each `LEVEL: statement` with LEVEL one of MUST, MUST NOT, SHOULD, SHOULD NOT or MAY. Never invent a requirement the ADR doesn't state. Leave `scope` empty for the whole repository, and only name paths the ADR names. List every field you had to guess in `uncertain`, so the user is asked about it. Leave out a field the file already states clearly (title, status, context): the CLI reads those itself. Pass the file with `--extracted extracted.json`, and add `--no-model` so a prose doc you didn't extract is left as a question instead of starting a model. The CLI notes only the docs a model wrote, so tell the user which policies you extracted and ask them to review the wording.
+4. **Ask the user what's still open.** Results with `outcome: "needs-input"` carry `questions`, each with a `field`, `question`, `options` and `suggested`. Ask the user with your question tool, one question per item, using the options and showing `suggested`. Never answer for them. Write the answers to `answers.json`, also outside the repository, keyed by each doc's path and then by the `field` the question names: `keep_duplicate` and `is_adr` are booleans, `status` is `accepted` or `draft`, and `policies` and `scope` are lists.
+
+   ```json
+   {
+     "docs/adr/0007-use-postgres.md": {
+       "status": "accepted",
+       "scope": ["services/**"]
+     }
+   }
+   ```
+
+   Then run `actual adr normalize <files> --extracted extracted.json --answers answers.json --no-model --json`.
 5. **Confirm.** Run `actual adr discover` again (everything handled should be `managed`) and `actual rules ls`.
 
 Don't pass `--yes` unless the user asks for an unattended run. It writes every undecided decision as a draft, which no check reads, and skips any file with no policy.
 
-`normalize` keeps each doc's file name, so links still work. Sections the format has no place for are carried over word for word after it, and a prose Decision section is kept as `Original Decision`. Mention that the file was rewritten in place, and that git has the original.
+`normalize` keeps each doc's file name, so links still work. `--rename` instead gives the doc the file name Actual AI's sync would use for its id and title; pass it only if the user asks. Sections the format has no place for are carried over word for word after it, and a prose Decision section is kept as `Original Decision`. Mention that the file was rewritten in place, and that git has the original.
 
 ## Status and governance
 
-An `accepted` decision governs at once; a `draft` waits. The status comes from the ADR itself (Accepted→accepted, Proposed→draft, Superseded, Deprecated and Rejected→inactive). When the ADR doesn't say, the user is asked. A decision whose policies a model extracted carries a follow-up note: point the user at it so they review the wording.
+An `accepted` decision governs at once; a `draft` waits. The status comes from the ADR itself (Accepted→accepted, Proposed→draft, Superseded, Deprecated and Rejected→inactive). When the ADR doesn't say, the user is asked. A decision whose policies the CLI's own model extracted carries a follow-up note: point the user at it so they review the wording. Policies you wrote into `--extracted` carry none, so flag those yourself.
 
 ## Actual AI users
 
