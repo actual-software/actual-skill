@@ -149,6 +149,9 @@
 #                        ACTUAL_TEST_HANG_SECONDS (default 10).
 #   ACTUAL_TEST_CALLS    a file each invocation appends its argv to, one line
 #                        per call, so tests can count spawns.
+#   ACTUAL_TEST_DEBUG_BUILD  set: every call first writes to stderr the line a
+#                        debug build of the real CLI starts with, naming the
+#                        binary, its version, its path and the working directory.
 
 set -uo pipefail
 
@@ -161,6 +164,11 @@ fi
 if [ "$mode" = "cannot-run" ]; then
   echo "actual: platform package \"@actualai/actual-test\" not installed. Try reinstalling with npm install." >&2
   exit "${ACTUAL_TEST_EXIT:-1}"
+fi
+
+if [ -n "${ACTUAL_TEST_DEBUG_BUILD:-}" ]; then
+  printf 'actual debug build: name=actual version=%s path=%s cwd=%s\n' \
+    "${ACTUAL_TEST_VERSION:-99.0.0-test}" "$0" "$PWD" >&2
 fi
 
 hang_if_asked() {

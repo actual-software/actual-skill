@@ -125,6 +125,7 @@ is_codex_host && ask=$(codex_ask_flag)
 # shellcheck disable=SC2086
 verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" $ask --rules-dir "$dir" 2>"$stderr_file")
 status=$?
+drop_debug_invocation_line "$stderr_file"
 take_telemetry_debug_line "$stderr_file"
 
 # decide prints what this hook emits. Its output is captured so telemetry debug

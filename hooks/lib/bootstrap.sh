@@ -1364,6 +1364,23 @@ TELEMETRY_DEBUG_LINE=""
 # Move the debug line out of the CLI's stderr file $1 into TELEMETRY_DEBUG_LINE,
 # so every check that reads the file, and the exit-2 reason Claude reads, sees
 # what it saw before. A file with no such line is left untouched.
+# A debug build of the CLI writes one line first on stderr at every invocation,
+# naming the binary that ran ("actual debug build: name=... version=... path=...
+# cwd=..."). Drop it, so the rest reads as a release build's stderr would: a
+# usage error still starts with "error: " (is_cli_usage_error), and the exit-2
+# fallback's reason is all the agent is handed. A release build never prints it.
+drop_debug_invocation_line() {
+  local file="$1" first=""
+  IFS= read -r first <"$file" 2>/dev/null || [ -n "$first" ] || return 0
+  case "$first" in
+    'actual debug build: '*)
+      tail -n +2 "$file" >"${file}.rest" 2>/dev/null && mv -f "${file}.rest" "$file" 2>/dev/null
+      rm -f "${file}.rest" 2>/dev/null
+      ;;
+  esac
+  return 0
+}
+
 take_telemetry_debug_line() {
   local file="$1" pattern='^telemetry debug: [A-Za-z0-9_-]+ -> '
   TELEMETRY_DEBUG_LINE=""

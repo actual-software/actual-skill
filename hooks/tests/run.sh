@@ -260,6 +260,21 @@ else
   fail "CLI usage error must fail open" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
 fi
 
+# A debug build of the CLI names itself first on stderr. The usage error after
+# that line is still one, and the fallback block's reason leaves the line out.
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=usage-error ACTUAL_TEST_DEBUG_BUILD=1)
+if [ "$st" = "0" ] && [ "$(decision)" = "none" ] && grep -q "rejected its invocation: error: invalid value" "${WORK}/out" && ! grep -q "actual debug build" "${WORK}/out"; then
+  pass "debug-build CLI: a usage error after its first stderr line still fails open"
+else
+  fail "debug-build CLI usage error must fail open" "status=$st decision=$(decision) stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-exit2 ACTUAL_TEST_DEBUG_BUILD=1)
+if [ "$st" = "2" ] && grep -q "R-001" "${WORK}/err" && ! grep -q "actual debug build" "${WORK}/err"; then
+  pass "debug-build CLI: the exit-2 fallback's reason leaves out the debug line"
+else
+  fail "debug-build CLI exit-2 fallback wrong" "status=$st stderr=$(cat "${WORK}/err")"
+fi
+
 st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow)
 if [ "$st" = "0" ] && [ "$(decision)" = "none" ]; then
   pass "CLI allow verdict is not forwarded (leaves the approval dialog intact)"
@@ -689,6 +704,19 @@ if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "rejected its i
   pass "CLI usage error at exit 2 fails open with a notice, never forces continuation"
 else
   fail "CLI usage error must fail open" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=usage-error ACTUAL_TEST_DEBUG_BUILD=1)
+if [ "$st" = "0" ] && [ "$(stop_decision)" = "none" ] && grep -q "rejected its invocation: error: invalid value" "${WORK}/out" && ! grep -q "actual debug build" "${WORK}/out"; then
+  pass "impl-gate, debug-build CLI: a usage error after its first stderr line still fails open"
+else
+  fail "impl-gate debug-build CLI usage error must fail open" "status=$st decision=$(stop_decision) stdout=$(cat "${WORK}/out") stderr=$(cat "${WORK}/err")"
+fi
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=deny-exit2 ACTUAL_TEST_DEBUG_BUILD=1)
+if [ "$st" = "2" ] && grep -q "R-001" "${WORK}/err" && ! grep -q "actual debug build" "${WORK}/err"; then
+  pass "impl-gate, debug-build CLI: the exit-2 fallback's reason leaves out the debug line"
+else
+  fail "impl-gate debug-build CLI exit-2 fallback wrong" "status=$st stderr=$(cat "${WORK}/err")"
 fi
 
 st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=emit-allow)

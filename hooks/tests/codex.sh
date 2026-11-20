@@ -466,6 +466,12 @@ for mode in crash usage-error; do
     fail "Codex plan gate ${mode} wrong" "st=$st out=$(cat "${WORK}/out")"
   fi
 done
+st=$(run_codex "$PG" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=usage-error ACTUAL_TEST_DEBUG_BUILD=1)
+if [ "$st" = 0 ] && [ "$(out_keys)" = systemMessage ] && grep -q 'rejected its invocation: error: invalid value' "${WORK}/out"; then
+  pass "Codex plan gate: a debug-build CLI's usage error still fails open with a notice"
+else
+  fail "Codex plan gate debug-build usage error wrong" "st=$st out=$(cat "${WORK}/out")"
+fi
 # impl-gate.sh runs on the same Stop and reports these, so the plan gate does not.
 rm -f "$CX_CALLS"
 st=$(run_codex "$PG" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=no-codex-hook ACTUAL_TEST_CALLS="$CX_CALLS")

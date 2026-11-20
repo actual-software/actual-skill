@@ -60,6 +60,7 @@ if is_codex_host; then
   # shellcheck disable=SC2086
   verdict=$(printf '%s' "$payload" | actual plan-check --codex-hook $ask --rules-dir "$dir" 2>"$stderr_file")
   status=$?
+  drop_debug_invocation_line "$stderr_file"
   case "$status" in
     0) forward_codex_reply "$verdict" "block notice stop" ;;
     2)
@@ -122,6 +123,7 @@ cd "$repo_root" 2>/dev/null || true
 
 verdict=$(printf '%s' "$payload" | actual plan-check --claude-hook --rules-dir "$dir" 2>"$stderr_file")
 status=$?
+drop_debug_invocation_line "$stderr_file"
 take_telemetry_debug_line "$stderr_file"
 
 # decide prints what this hook emits. Its output is captured so telemetry debug
