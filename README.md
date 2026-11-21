@@ -18,7 +18,7 @@
   <a href="https://github.com/actual-software/actual-skill/stargazers"><img src="https://img.shields.io/github/stars/actual-software/actual-skill?style=flat" alt="Stars"></a>
 </p>
 
-In Claude Code, the plugin checks your coding agent's work against the architecture rules committed in `.actual/rules/`: its plan before you see the approval dialog, and its changes at the end of every turn. A conflict goes back to the agent with the reason. As the agent reads a file, it's briefed on the rules that govern it, and you can override a denied rule from the session. The [actual CLI](https://github.com/actual-software/actual-cli) does the checking. The plugin's `actual` skill runs and troubleshoots it for your agent, and its `adr-draft` skill drafts new ADRs with you. The same checks and briefing run in Codex, with [a few differences](docs/reference.md#governance-in-codex).
+In Claude Code, the plugin checks your coding agent's work against the architecture rules committed in `.actual/rules/`: its plan before you see the approval dialog, and its changes at the end of every turn. A conflict goes back to the agent with the reason. As the agent reads a file, it's briefed on the rules that govern it, and you can override a denied rule from the session. The [actual CLI](https://github.com/actual-software/actual-cli) does the checking. The plugin's `actual` skill runs and troubleshoots it for your agent, and its `adr-draft` and `adr-bootstrap` skills write ADRs with you, one at a time or as a repository's first set. The same checks and briefing run in Codex, with [a few differences](docs/reference.md#governance-in-codex).
 
 ## Getting started
 
@@ -46,7 +46,7 @@ In Claude Code, the plugin checks your coding agent's work against the architect
    actual adr create "Use Postgres for storage" --policy "MUST: Services store relational data in Postgres."
    ```
 
-   Signed in, the same command saves the decision to Actual AI and writes an accepted one's rule file under `.actual/rules/`. The sync pull request [app.actual.ai](https://app.actual.ai) opens also writes both files for each accepted decision. You can have your agent draft decisions with you too: `/actual-cli:adr-draft <a decision or an area of the code>`. `actual rules ls` lists the rule files the checks read and marks a draft as not enforced.
+   Signed in, the same command saves the decision to Actual AI and writes an accepted one's rule file under `.actual/rules/`. The sync pull request [app.actual.ai](https://app.actual.ai) opens also writes both files for each accepted decision. You can have your agent draft decisions with you too: `/actual-cli:adr-draft <a decision>` for one, or `/actual-cli:adr-bootstrap` to propose a foundation set from the code. `actual rules ls` lists the rule files the checks read and marks a draft as not enforced.
 
 From then on, every plan and every turn in that repository is checked against those decisions.
 
@@ -60,9 +60,10 @@ The checks run on their own. You can also ask your agent:
 - "Check my uncommitted changes against our architecture rules."
 - "Diagnose why Actual is failing."
 - "Draft an ADR for how we call the payment provider."
+- "Propose the foundation ADRs for this repository."
 - "List our draft decisions in Actual AI."
 
-When a check denies, Claude Code asks whether to revise or override; `/actual-cli:override <rule-id|all> [code] [reason]` overrides from the prompt at any time. The [reference](docs/reference.md) covers the checks, overrides, rule briefing, settings and troubleshooting. The `adr-draft` skill creates each ADR you pick with `actual adr create`: signed out, an accepted file in `docs/adr/` that the checks enforce at once, and signed in, a decision in Actual AI, accepted or a draft as you choose ([Drafting ADRs](docs/reference.md#drafting-adrs)). The `actual` skill still runs adr-bot and the Advisor when you ask for them: [adr-bot and the Advisor](docs/adr-bot-and-advisor.md).
+When a check denies, Claude Code asks whether to revise or override; `/actual-cli:override <rule-id|all> [code] [reason]` overrides from the prompt at any time. The [reference](docs/reference.md) covers the checks, overrides, rule briefing, settings and troubleshooting. The `adr-draft` skill creates, changes or removes one ADR with you, and `adr-bootstrap` proposes a set from the code, your ADR files and, if you agree, your past sessions in the repository, then creates the ones you pick through `adr-draft`. Signed out, each is an accepted file in `docs/adr/` that the checks enforce at once, and signed in, a decision in Actual AI, accepted or a draft as you choose ([Drafting ADRs](docs/reference.md#drafting-adrs)). The `actual` skill still runs adr-bot and the Advisor when you ask for them: [adr-bot and the Advisor](docs/adr-bot-and-advisor.md).
 
 ## License
 
