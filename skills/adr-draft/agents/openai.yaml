@@ -1,7 +1,7 @@
 interface:
-  display_name: "Draft ADRs"
-  short_description: "Draft ADRs and create the ones you pick, in docs/adr or in Actual AI"
-  default_prompt: "Use $adr-draft to draft ADRs about this topic, the work in this session, or the last N commits if I give a number, then let me pick which to create."
+  display_name: "Draft an ADR"
+  short_description: "Draft, change or remove one ADR, in docs/adr or in Actual AI"
+  default_prompt: "Use $adr-draft to draft an ADR for this decision, or a change to an existing one, and create it once I agree."
   brand_color: "#06E58B"
 
 policy:
