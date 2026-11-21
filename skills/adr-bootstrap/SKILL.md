@@ -61,7 +61,7 @@ ls docs/adr/ .actual/rules/ 2>/dev/null
 
 Signed out, `list` reads the decision files under `docs/adr/` that carry an ADR header and leaves the rest out. Signed in, it reads this repository's decisions in Actual AI; page on with `--offset` and the `next_offset` it returns. Read every file under `docs/adr/`, headed or not, and open the related decisions with `actual adr show <id> --json`. Don't propose a decision that `list` shows.
 
-A file under `docs/adr/` with no ADR header records a decision in another format, which no check reads, so it still needs an ADR. Count it as an intent and draft its decision to adr-draft's rules, naming the file it came from. Whether to keep the old file once the new ADR exists is the person's call.
+A file under `docs/adr/` with no ADR header records a decision in another format, which no check reads, so it still needs an ADR. Count it as an intent and draft its decision to adr-draft's rules, naming the file it came from. A file under `docs/adr/drafts/` gets the same treatment, header or not, since `list` leaves that folder out and its files get no rule file. Whether to keep the old file once the new ADR exists is the person's call.
 
 Keep the answer `actual whoami` gave: it decides where each pick is created.
 
