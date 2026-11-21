@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # bootstrap.sh - Shared preflight helpers for the actual plan-stage governance hooks.
 #
-# Sourced by plan-gate.sh, impl-gate.sh, rules-brief.sh, preflight.sh,
-# turn-start.sh, session-end.sh and session-summary.sh, under Claude Code and
-# under Codex (see "Host" below). The only write is the capability cache under
+# Sourced by plan-gate.sh, plan-approval.sh, impl-gate.sh, report-use-allow.sh,
+# rules-brief.sh, preflight.sh, turn-start.sh, session-end.sh, session-summary.sh
+# and gate-answer.sh, under Claude Code and under Codex (see "Host" below). The
+# only write is the capability cache under
 # ~/.cache/actual-skill (see have_adr_v2).
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
@@ -53,10 +54,12 @@ hook_flag() {
 
 # Canonicalize a directory path -- resolves symlinks and trailing slashes so two
 # paths can be compared as plain strings. Fails for anything that is not a directory.
+# `cd -P` resolves a `..` after a symlink as the kernel does; a plain `cd` drops it
+# against the text first, so `root/link/..` would read as `root`.
 canonical_dir() {
   [ -n "${1:-}" ] || return 1
   [ -d "$1" ] || return 1
-  (cd -- "$1" 2>/dev/null && pwd -P) || return 1
+  (cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
 }
 
 # True when $2 is $1 itself or a directory beneath it. Both arguments must already
@@ -1067,6 +1070,9 @@ is_single_json_string() {
 # shapes $2 allows, and print nothing otherwise:
 #
 #   block   {"decision":"block","reason":"..."}   a Stop that sends the agent back
+#   block-notice  the same plus "systemMessage":"..." after the reason: the
+#                 ADR question on a round that would otherwise only show the
+#                 user that notice
 #   notice  {"systemMessage":"..."}               a line shown to the user
 #   stop    {"continue":false,"stopReason":"..."} end the turn, or keep a prompt
 #                                                 from the model, and tell the
@@ -1094,6 +1100,9 @@ forward_codex_reply() {
 
   local suffix_len=2
   case "$trimmed" in
+    '{"decision":"block","reason":"'*'","systemMessage":"'*'"}')
+      forward_codex_block_notice "$trimmed" "$allowed"
+      return ;;
     '{"decision":"block","reason":"'*'"}') kind=block prefix='{"decision":"block","reason":"' ;;
     '{"systemMessage":"'*'"}') kind=notice prefix='{"systemMessage":"' ;;
     '{"continue":false,"stopReason":"'*'"}') kind=stop prefix='{"continue":false,"stopReason":"' ;;
@@ -1121,6 +1130,30 @@ forward_codex_reply() {
   # let the turn end.
   if [ "$trimmed" = '{"decision":"block","reason":""}' ]; then
     emit_stop_block "Actual governance blocked this turn, but its reason could not be read. Revise the work so it conforms to .actual/rules/."
+    return 0
+  fi
+  printf '%s\n' "$trimmed"
+}
+
+# forward_codex_reply's block-notice kind. Inside a JSON string every quote is
+# escaped, so `","systemMessage":"` can only be the boundary between the two
+# values; each side must then be one non-empty JSON string that does not end in
+# a lone backslash, which would escape the quote that closes it.
+forward_codex_block_notice() {
+  local trimmed="$1" allowed="$2" LC_ALL=C
+  case " $allowed " in *" block-notice "*) ;; *) return 1 ;; esac
+  local inner=${trimmed#'{"decision":"block","reason":"'}
+  inner=${inner%'"}'}
+  local reason=${inner%%'","systemMessage":"'*}
+  local message=${inner#*'","systemMessage":"'}
+  [ -n "$reason" ] && [ -n "$message" ] || return 1
+  is_single_json_string "$reason" "" 0 && is_single_json_string "$message" "" 0 || return 1
+  local part
+  for part in "${reason//\\\\/}" "${message//\\\\/}"; do
+    case "$part" in *\\) return 1 ;; esac
+  done
+  if has_unicode_escape "$trimmed"; then
+    emit_stop_notice "Actual governance received a reply it could not safely interpret (it contained an escaped character sequence); this turn was not checked against .actual/rules/."
     return 0
   fi
   printf '%s\n' "$trimmed"
@@ -1248,6 +1281,12 @@ emit_stop_block_raw() {
   printf '{"decision":"block","reason":"%s"}\n' "$1"
 }
 
+# emit_stop_block_raw with $2, also already JSON-string-escaped, as the
+# user-facing systemMessage beside the block.
+emit_stop_block_with_notice_raw() {
+  printf '{"decision":"block","reason":"%s","systemMessage":"%s"}\n' "$1" "$2"
+}
+
 # Same shape as emit_stop_block_raw, for a reason this script composed rather
 # than extracted. json_escape runs first so a quote or newline in $1 cannot
 # break the emitted object.
@@ -1276,7 +1315,10 @@ emit_stop_notice_raw() {
 # verdict -- see that script's comments for the full rationale -- but ends in
 # a re-render instead of a forward. A recognized deny always blocks: the
 # extracted reason when the scan can read it, otherwise a fixed reason. A deny
-# must not degrade to a notice, which would let the turn end.
+# must not degrade to a notice, which would let the turn end. A deny that also
+# carries a top-level systemMessage (the CLI's ADR question asked on a round
+# that would otherwise have shown only a notice) keeps that notice beside the
+# block, so the user still sees it.
 render_stop_verdict() {
   local verdict="$1" trimmed reason message
 
@@ -1290,7 +1332,13 @@ render_stop_verdict() {
     elif is_deny_decision "$trimmed"; then
       reason=$(extract_json_string_field "$verdict" "permissionDecisionReason") || reason=""
       if [ -n "$reason" ]; then
-        emit_stop_block_raw "$reason"
+        if has_system_message "$trimmed" \
+           && message=$(extract_json_string_field "$verdict" "systemMessage") \
+           && [ -n "$message" ]; then
+          emit_stop_block_with_notice_raw "$reason" "$message"
+        else
+          emit_stop_block_raw "$reason"
+        fi
       else
         # Missing, empty, or not a string. Stop requires a reason on block;
         # an empty one fails schema validation and the turn would end.

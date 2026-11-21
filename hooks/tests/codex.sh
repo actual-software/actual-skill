@@ -440,6 +440,12 @@ if [ "$st" = 0 ] && [ "$(out_keys)" = systemMessage ] && grep -q 'could not safe
 else
   fail "Codex plan gate escaped reply wrong" "$(cat "${WORK}/out")"
 fi
+run_codex "$PG" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=ask-notice >/dev/null
+if [ "$(out_keys)" = none ]; then
+  pass "Codex plan gate: a block-plus-notice, which only impl-check sends, is not forwarded"
+else
+  fail "Codex plan gate forwarded a block-plus-notice" "$(cat "${WORK}/out")"
+fi
 st=$(run_codex "$PG" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=codex-empty-reason)
 if [ "$st" = 0 ] && [ "$(stop_decision)" = block ] && [ -n "$(jq -r .reason < "${WORK}/out")" ]; then
   pass "Codex plan gate: a block with an empty reason still blocks, with a fixed reason"
@@ -493,7 +499,28 @@ if [ "$st" = 0 ] && [ "$(out_keys)" = none ]; then
 else
   fail "Codex impl gate allow wrong" "$(cat "${WORK}/out")"
 fi
-for mode in codex-extra-key codex-claude-shape; do
+st=$(run_codex "$IG" "$CX_STOP" "$CX_REPO" ACTUAL_TEST_MODE=ask-pass)
+if [ "$st" = 0 ] && [ "$(out_keys)" = "decision,reason" ] && [ "$(stop_decision)" = block ] \
+   && jq -r '.reason' "${WORK}/out" | grep -q '^actual rules report-use '; then
+  pass "Codex impl gate: the ADR question on a passing turn is forwarded as the block's reason"
+else
+  fail "Codex impl gate dropped the ADR question" "$(cat "${WORK}/out")"
+fi
+st=$(run_codex "$IG" "$CX_STOP" "$CX_REPO" ACTUAL_TEST_MODE=ask-notice)
+if [ "$st" = 0 ] && [ "$(out_keys)" = "decision,reason,systemMessage" ] && [ "$(stop_decision)" = block ] \
+   && jq -r '.reason' "${WORK}/out" | grep -q '^actual rules report-use ' \
+   && [ "$(jq -r '.systemMessage' "${WORK}/out")" = "No committed rule under .actual/rules/ applies to this diff." ]; then
+  pass "Codex impl gate: the ADR question on a notice round is forwarded with the notice as systemMessage"
+else
+  fail "Codex impl gate dropped the ADR question or its notice" "$(cat "${WORK}/out")"
+fi
+st=$(run_codex "$IG" "$CX_STOP" "$CX_REPO" ACTUAL_TEST_MODE=codex-block-notice-escaped)
+if [ "$st" = 0 ] && [ "$(out_keys)" = systemMessage ] && grep -q 'could not safely interpret' "${WORK}/out"; then
+  pass "Codex impl gate: an escaped block-plus-notice is refused, and the user told"
+else
+  fail "Codex impl gate escaped block-plus-notice wrong" "$(cat "${WORK}/out")"
+fi
+for mode in codex-extra-key codex-claude-shape codex-block-notice-extra codex-block-notice-twice codex-block-notice-backslash codex-block-notice-empty; do
   run_codex "$IG" "$CX_STOP" "$CX_REPO" ACTUAL_TEST_MODE="$mode" >/dev/null
   if [ "$(out_keys)" = none ]; then
     pass "Codex impl gate: a ${mode} reply is not forwarded"
