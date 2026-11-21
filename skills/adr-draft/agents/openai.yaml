@@ -1,0 +1,8 @@
+interface:
+  display_name: "Draft an ADR"
+  short_description: "Draft, change or remove one ADR, in docs/adr or in Actual AI"
+  default_prompt: "Use $adr-draft to draft an ADR for this decision, or a change to an existing one, and create it once I agree."
+  brand_color: "#06E58B"
+
+policy:
+  allow_implicit_invocation: true
