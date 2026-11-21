@@ -1,0 +1,142 @@
+---
+name: adr-bootstrap
+description: >-
+  Propose a repository's foundation set of Architecture Decision Records
+  (ADRs) with the actual CLI. Surveys the code and any files under docs/adr/
+  and, once the user agrees, this checkout's local Claude Code or Codex
+  sessions, turns what it finds into intents, observations and signals, and
+  drafts each decision that warrants an ADR. The user picks which to create
+  in multi-select questions, and the adr-draft skill creates each pick:
+  signed out an accepted file in docs/adr/, signed in a decision in Actual
+  AI. The whole repository is the default; the last N commits or this
+  session narrow it. Use when asked to bootstrap, seed or set up a
+  repository's ADRs, to find the decisions in a repository, its recent
+  commits or this session, when a repository has no decisions yet, or when
+  the actual CLI's refresh recommends adr-bootstrap. When that
+  recommendation is all that prompted it, offer the survey to the user and
+  run it only once they agree. Don't use it for a single ADR (adr-draft does
+  that) or to review code.
+---
+
+# Bootstrap a repository's ADRs
+
+Survey a repository for the decisions it already follows and propose a foundation set of ADRs: the conventions and constraints future code should keep to. The person picks which to create, and the adr-draft skill creates each pick. Signed out, that's an accepted file in `docs/adr/` with its rule file in `.actual/rules/`, which `plan-check` and `impl-check` enforce at once. Signed in, it's a decision in Actual AI, accepted or a draft as the person picks. Nothing is created before the person answers.
+
+## A recommendation from the CLI
+
+`actual adr refresh` recommends this skill when it finds no decision governing the repository. When that recommendation, not the person, brought you here, don't start the survey. Tell the person the repository has no decisions yet, offer the survey in one question, and go on only on a yes. After a no, don't offer it again in the session.
+
+## Check the CLI and adr-draft
+
+```bash
+command -v actual && actual --version
+```
+
+Creating needs actual 0.16.0 or later. Offer to install or upgrade it as the adr-draft skill does, and without it, draft and show the ADRs but create none.
+
+This skill drafts to adr-draft's rules and creates through its steps. Load the adr-draft skill now (in Claude Code through the Skill tool, in Codex with `$adr-draft`) and keep its instructions for the steps below, without starting its own flow. When it isn't installed, say so and that the plugin, or `npx skills add actual-software/actual-skill`, brings it, and stop before creating anything.
+
+## Scope
+
+- **No argument, or the whole repository.** The default: the code, the files under `docs/adr/` and, once the person agrees, this checkout's coding-agent sessions.
+- **A number `N`, or "the last N commits".** Only what those commits changed:
+
+  ```bash
+  git log -N --stat        # replace N with the argument
+  git diff HEAD~N..HEAD
+  ```
+
+  With fewer than `N` commits, use as many as exist.
+- **"This session".** Only what changed in this session: the files edited and the decisions behind them. `git status` and `git diff` help.
+
+The two narrower windows read no past sessions.
+
+## Read the decisions the repository has
+
+```bash
+actual whoami                    # exit 0: signed in; exit 2: not signed in
+actual adr list --json --limit 200
+ls docs/adr/ .actual/rules/ 2>/dev/null
+```
+
+Signed out, `list` reads the decision files under `docs/adr/` that carry an ADR header and leaves the rest out. Signed in, it reads this repository's decisions in Actual AI; page on with `--offset` and the `next_offset` it returns. Read every file under `docs/adr/`, headed or not, and open the related decisions with `actual adr show <id> --json`. Don't propose a decision that `list` shows.
+
+A file under `docs/adr/` with no ADR header records a decision in another format, which no check reads, so it still needs an ADR. Count it as an intent and draft its decision to adr-draft's rules, naming the file it came from. Whether to keep the old file once the new ADR exists is the person's call.
+
+Keep the answer `actual whoami` gave: it decides where each pick is created.
+
+## Read this checkout's sessions, once the person agrees
+
+Past coding-agent sessions in this checkout often hold decisions the code doesn't show yet: a rule the person stated, a correction they made more than once, a trade-off they settled. So in the whole-repository survey, ask whether you may read them before you draft anything, saying what you'll read and that it stays on this machine. Ask in an interactive question where you have the tool (`AskUserQuestion` in Claude Code), and otherwise in your reply, ending your turn on it. Read none until they agree, and survey without them when they decline. The narrower windows skip this step.
+
+Read only the sessions recorded for this checkout, the folder `git rev-parse --show-toplevel` prints, and never another folder's, repository's or worktree's:
+
+- **Claude Code** keeps them in `~/.claude/projects/` (`$CLAUDE_CONFIG_DIR/projects/` when that's set), in a folder named for the checkout's absolute path with each character other than a letter or digit turned into `-`, such as `-home-me-src-shop` for `/home/me/src/shop`. Each `<session id>.jsonl` file there is one session, one JSON object per line. Skip the folders beside them, which hold tool output. The people's messages and the agent's replies are the text of the `user` and `assistant` lines:
+
+  ```bash
+  ROOT=$(git rev-parse --show-toplevel)
+  ls -t "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$ROOT" | sed 's/[^A-Za-z0-9]/-/g')"/*.jsonl
+  jq -r 'select((.type == "user" or .type == "assistant") and .isMeta != true and .isSidechain != true)
+    | .message.content | if type == "string" then . else (.[] | select(.type == "text") | .text) end' <session file>
+  ```
+
+- **Codex** keeps them in `~/.codex/sessions/` (`$CODEX_HOME/sessions/` when that's set), in dated folders of `rollout-*.jsonl` files. Read only the files whose first line, a `session_meta` entry, names the checkout in `payload.cwd`. Their messages are the `response_item` lines whose payload is a `message` from the `user` or the `assistant`:
+
+  ```bash
+  ROOT=$(git rev-parse --show-toplevel)
+  for f in "${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/rollout-*.jsonl; do
+    head -1 "$f" | jq -e --arg root "$ROOT" '.payload.cwd == $root' >/dev/null && echo "$f"
+  done
+  jq -r 'select(.type == "response_item" and .payload.type == "message" and (.payload.role == "user" or .payload.role == "assistant"))
+    | .payload.content[]? | select(.type == "input_text" or .type == "output_text") | .text' <session file>
+  ```
+
+Without `jq`, read the same fields with any JSON reader. Start with the newest sessions and stop once new ones add nothing.
+
+Sessions stay on this machine. Use them to find decisions and for nothing else: no draft, question or report quotes a transcript, says who said what or when, or repeats a credential, a name or any other personal detail found there. An ADR states its decision in its own words, and its policies rest on the code or on what the person confirms.
+
+## Sort what you find
+
+Sort each finding into one of three kinds, and note where it shows: the files and commits, or for a session only that one exists.
+
+- **Intents.** Decisions people stated or wrote down: a decision file without an ADR header, a rule in a README, a contributing guide or a code comment, a choice settled in a session.
+- **Observations.** What the code does consistently: one database client or HTTP layer, module boundaries nothing crosses, how errors, retries, logging or configuration are handled, test conventions. Search for where each shows (imports, module boundaries, config, tests, CI) and read those files.
+- **Signals.** Signs that a decision is being made or is changing: a dependency added or removed, a migration under way (two ways of doing one thing, one of them newer), a new lint rule or CI check, a TODO that names a direction, an ADR the code no longer follows.
+
+## Choose the foundation set
+
+An ADR is warranted only for an architectural or cross-cutting decision, a convention, constraint or policy future code should follow, that no existing ADR covers. Fold findings that point at one decision into one draft. When findings disagree, such as a stated rule the code breaks, draft the decision they point toward and name the conflict when you show it.
+
+Rank the decisions by how much of the code each one governs and what breaking it would cost, and propose at most ten, most significant first. If nothing in scope warrants an ADR, say so briefly and stop. Don't invent one.
+
+Draft each in the shape and to the rules of adr-draft's "Draft the ADR" section, grounded in the files you read.
+
+## Let the person choose
+
+Show every draft in full, numbered in ranked order, each with a line naming what it rests on. Then ask in one interactive question call (`AskUserQuestion` in Claude Code):
+
+1. **Which drafts to create.** Real multi-select questions (`multiSelect: true`), one option per draft labelled with its title. Use as many questions as the drafts need, each with two to four options, split as evenly as you can (ten drafts as four, three and three). A single draft gets one question: create it or not. Never a lettered menu or a "reply with the numbers" prompt.
+2. **Their status, signed in only.** Accepted (recommended): the decision is settled as written and governs once it's saved. Draft: it's still open, and governs once someone publishes it. One answer covers every ADR created, and the person can set them one by one under Other.
+
+Signed out there's no status to pick: the ADRs written to `docs/adr/` are accepted, and a person who wants drafts signs in first, as adr-draft describes.
+
+Only when no such tool exists, fall back to a literal checkbox list, one `- [ ]` per draft, ask for the status in the same message when signed in, and end your turn on it.
+
+Don't create anything until the person answers, or when they pick none.
+
+## Create the picks
+
+Hand the picked drafts to adr-draft in ranked order, as its "Drafts handed over by adr-bootstrap" section describes. It creates each with the content the person saw and, signed in, the status they chose, then checks and reports them. Where adr-draft needs the person's answer, such as for a likely duplicate, ask it and carry on.
+
+## Report
+
+Add to adr-draft's report what the survey left: the drafts the person didn't pick, and anything it found that didn't warrant an ADR on its own, one line each. adr-draft can update or delete any of the new ADRs later.
+
+## Failure and completion
+
+- Nothing in scope warrants an ADR: say so and stop.
+- The person declines the survey or picks no draft: create nothing and stop.
+- The person declines the session read: survey without it.
+- Git, an ADR listing or a session folder isn't available: say so and survey what you can. Never invent history, sessions or existing ADRs.
+
+The skill is done when nothing warranted an ADR and you said so, when the person declined, or when every picked ADR is created through adr-draft and reported.
