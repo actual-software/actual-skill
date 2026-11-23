@@ -564,8 +564,8 @@ if [ "$st" = 0 ] && [ "$(out_keys)" = hookSpecificOutput,systemMessage ] \
    && [ "$(hso_keys)" = "additionalContext,hookEventName" ] \
    && [ "$(jq -r .hookSpecificOutput.hookEventName < "${WORK}/out")" = PostToolUse ] \
    && [ "$(jq -r .systemMessage < "${WORK}/out")" = "Actual AI: briefed 1 ADR · 1 rule · src/persistence/repo.ts" ] \
-   && grep -q 'R-001' "${WORK}/out"; then
-  pass "Codex PostToolUse:Bash read of a governed file: one PostToolUse brief and the user's line, in Codex's shape"
+   && jq -e '.hookSpecificOutput.additionalContext | contains("R-001 MUST: all persistence goes through the repository layer.") and contains("In your next user-facing commentary (or final reply if none follows), report this briefing in one short line: Actual AI: briefed 1 ADR · 1 rule · src/persistence/repo.ts")' < "${WORK}/out" >/dev/null; then
+  pass "Codex PostToolUse:Bash brief keeps the user's line and asks the agent to repeat it in chat"
 else
   fail "Codex shell-read brief wrong" "st=$st out=$(cat "${WORK}/out")"
 fi
@@ -602,8 +602,9 @@ fi
 
 st=$(run_codex "$RB" "$CX_PATCH" "$CX_REPO" ACTUAL_TEST_MODE=brief)
 if [ "$st" = 0 ] && [ "$(jq -r .hookSpecificOutput.hookEventName < "${WORK}/out" 2>/dev/null)" = PreToolUse ] \
-   && [ "$(hso_keys)" = "additionalContext,hookEventName" ]; then
-  pass "Codex PreToolUse:apply_patch of a governed file: a PreToolUse brief"
+   && [ "$(hso_keys)" = "additionalContext,hookEventName" ] \
+   && jq -e '.hookSpecificOutput.additionalContext | contains("In your next user-facing commentary (or final reply if none follows), report this briefing in one short line:")' < "${WORK}/out" >/dev/null; then
+  pass "Codex PreToolUse:apply_patch brief asks for a chat receipt"
 else
   fail "Codex patch brief wrong" "$(cat "${WORK}/out")"
 fi
@@ -633,8 +634,9 @@ for mode in brief-permission brief-trailing-field brief-escaped \
 done
 run_codex "$RB" "$CX_READ" "$CX_REPO" ACTUAL_TEST_MODE=brief-notice-quoted >/dev/null
 if [ "$(out_keys)" = hookSpecificOutput,systemMessage ] \
-   && [ "$(jq -r .systemMessage < "${WORK}/out")" = 'Actual AI: briefed "src\\a.ts"' ]; then
-  pass "Codex brief: a user's line with escaped quotes and backslashes is forwarded whole"
+   && [ "$(jq -r .systemMessage < "${WORK}/out")" = 'Actual AI: briefed "src\\a.ts"' ] \
+   && [ "$(jq -r .hookSpecificOutput.additionalContext < "${WORK}/out" | tail -n 1)" = 'In your next user-facing commentary (or final reply if none follows), report this briefing in one short line: Actual AI: briefed "src\\a.ts"' ]; then
+  pass "Codex brief: escaped quotes and backslashes stay valid in both receipt channels"
 else
   fail "Codex brief dropped or mangled a quoted user's line" "$(cat "${WORK}/out")"
 fi
@@ -652,8 +654,8 @@ rm -f "${CX_CAPTURE}"*
 run_codex "$RB" "$CX_READ" "$CX_REPO" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CAPTURE="$CX_CAPTURE" \
   ACTUAL_RULES_BRIEF_NOTICE=off >/dev/null
 if grep -qx -- '--no-brief-notice' "$RB_ARGV" && [ "$(out_keys)" = hookSpecificOutput ] \
-   && grep -q 'R-001' "${WORK}/out"; then
-  pass "Codex brief: ACTUAL_RULES_BRIEF_NOTICE=off passes --no-brief-notice and the brief still arrives"
+   && jq -e '.hookSpecificOutput.additionalContext | contains("R-001") and (contains("In your next user-facing commentary") | not)' < "${WORK}/out" >/dev/null; then
+  pass "Codex brief: ACTUAL_RULES_BRIEF_NOTICE=off keeps the ADR and silences both receipts"
 else
   fail "Codex brief ignored ACTUAL_RULES_BRIEF_NOTICE=off" "argv=$(tr '\n' ' ' < "$RB_ARGV") out=$(cat "${WORK}/out")"
 fi

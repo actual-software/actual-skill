@@ -35,10 +35,12 @@
 # files a read-only shell command names (`cat`, `sed -n`, `rg` ...), and
 # PreToolUse on Edit|Write, the aliases Codex matches apply_patch by, where it
 # briefs the files the patch adds or updates. The reply shape is the same, with
-# one addition: a leading top-level systemMessage, the one line Codex shows the
-# user for a brief (it shows additionalContext to the model only, and there is
-# no mod to write a transcript row). ACTUAL_RULES_BRIEF_NOTICE=off asks the CLI
-# to leave it out. With no mod to cap a session's briefing, this script passes
+# one addition: a leading top-level systemMessage, the one line Codex can show
+# the user for a brief. The same line is appended to additionalContext as an
+# instruction to report it in the agent's next commentary, for Codex surfaces
+# that do not display the hook's systemMessage. ACTUAL_RULES_BRIEF_NOTICE=off
+# asks the CLI to leave the line out, which also skips the chat instruction.
+# With no mod to cap a session's briefing, this script passes
 # the cap to the CLI (ACTUAL_RULES_BRIEF_MAX_SESSION_CHARS, default 48000),
 # together with the tuning variables the mod would otherwise have forwarded.
 
@@ -236,6 +238,7 @@ prefix="{\"hookSpecificOutput\":{\"hookEventName\":\"${event}\",\"additionalCont
 # never carries the line, so there a reply that does is dropped as before.
 whole=$trimmed
 notice_prefix='{"systemMessage":"'
+notice=''
 if is_codex_host && [ "${trimmed#"$notice_prefix"}" != "$trimmed" ]; then
   separator="\",${prefix#\{}"
   after=${trimmed#"$notice_prefix"}
@@ -265,6 +268,17 @@ if [ "${trimmed#"$prefix"}" != "$trimmed" ] \
     exit 0
   fi
   forward="$whole"
+  # Codex Desktop can keep a successful hook's systemMessage out of the visible
+  # conversation. The CLI already made a short receipt with the exact count and
+  # file; ask the agent to say that receipt in chat too. The receipt was checked
+  # above as one JSON string, so it can be inserted into additionalContext
+  # without decoding or re-escaping it. This changes only the model's context:
+  # the original systemMessage remains byte-for-byte intact for other clients.
+  if is_codex_host && [ -n "${notice:-}" ]; then
+    context_end='"}}'
+    chat_instruction='\n\nIn your next user-facing commentary (or final reply if none follows), report this briefing in one short line: '
+    forward="${forward%"$context_end"}${chat_instruction}${notice}${context_end}"
+  fi
 elif [ -n "${ACTUAL_HOOK_DEBUG:-}" ] && [ -n "$trimmed" ]; then
   printf 'actual-rules-brief: dropped (reply is not the allowlisted shape)\n' >&2
 fi
