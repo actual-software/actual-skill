@@ -75,11 +75,13 @@ Past coding-agent sessions in this checkout often hold decisions the code doesn'
 
 Read only the sessions recorded for this checkout, the folder `git rev-parse --show-toplevel` prints, and never another folder's, repository's or worktree's:
 
-- **Claude Code** keeps them in `~/.claude/projects/` (`$CLAUDE_CONFIG_DIR/projects/` when that's set), in a folder named for the checkout's absolute path with each character other than a letter or digit turned into `-`, such as `-home-me-src-shop` for `/home/me/src/shop`. Each `<session id>.jsonl` file there is one session, one JSON object per line. Skip the folders beside them, which hold tool output. The people's messages and the agent's replies are the text of the `user` and `assistant` lines:
+- **Claude Code** keeps them in `~/.claude/projects/` (`$CLAUDE_CONFIG_DIR/projects/` when that's set), in a folder named for the checkout's absolute path with each character other than a letter or digit turned into `-`, such as `-home-me-src-shop` for `/home/me/src/shop`. Each `<session id>.jsonl` file there is one session, one JSON object per line. Skip the folders beside them, which hold tool output. Two checkouts can share that folder, since `/home/me/src-shop` gets the same name, so read a file only when the first line that records a `cwd` names the checkout. The people's messages and the agent's replies are the text of the `user` and `assistant` lines:
 
   ```bash
   ROOT=$(git rev-parse --show-toplevel)
-  ls -t "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$ROOT" | sed 's/[^A-Za-z0-9]/-/g')"/*.jsonl
+  ls -t "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(printf '%s' "$ROOT" | sed 's/[^A-Za-z0-9]/-/g')"/*.jsonl | while IFS= read -r f; do
+    jq -n -e --arg root "$ROOT" 'first(inputs | .cwd? // empty) == $root' "$f" >/dev/null && echo "$f"
+  done
   jq -r 'select((.type == "user" or .type == "assistant") and .isMeta != true and .isSidechain != true)
     | .message.content | if type == "string" then . else (.[] | select(.type == "text") | .text) end' <session file>
   ```
