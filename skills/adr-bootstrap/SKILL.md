@@ -26,6 +26,8 @@ Survey a repository for the decisions it already follows and propose a foundatio
 
 `actual adr refresh` recommends this skill when it finds no decision governing the repository. When that recommendation, not the person, brought you here, don't start the survey. Tell the person the repository has no decisions yet, offer the survey in one question, and go on only on a yes. After a no, don't offer it again in the session.
 
+Signed in, the same refresh can also list files under `docs/adr/` that aren't in Actual AI yet and say `actual adr create --all` sends them. Don't run it on your own: it sends the person's `docs/adr/` files to Actual AI, so it waits on their yes, as adr-draft's "Files in docs/adr/ that Actual AI doesn't have" section describes.
+
 ## Check the CLI and adr-draft
 
 ```bash
@@ -62,6 +64,8 @@ ls docs/adr/ .actual/rules/ 2>/dev/null
 Signed out, `list` reads the decision files under `docs/adr/` that carry an ADR header and leaves the rest out. Signed in, it reads this repository's decisions in Actual AI; page on with `--offset` and the `next_offset` it returns. Read every file under `docs/adr/`, headed or not, and open the related decisions with `actual adr show <id> --json`. Don't propose a decision that `list` shows.
 
 A file under `docs/adr/` with no ADR header records a decision in another format, which no check reads, so it still needs an ADR. Count it as an intent and draft its decision to adr-draft's rules, naming the file it came from. A file under `docs/adr/drafts/` gets the same treatment, header or not, since `list` leaves that folder out and its files get no rule file. Whether to keep the old file once the new ADR exists is the person's call.
+
+Signed in, a file under `docs/adr/`, outside `docs/adr/drafts/`, with an ADR header that `list` doesn't show is a decision Actual AI doesn't have yet, such as one a signed-out `create` wrote. Don't propose it again. Sending such files is `actual adr create --all`, which sends the person's `docs/adr/` files to Actual AI, so never run it on your own: the report asks about them.
 
 Keep the answer `actual whoami` gave: it decides where each pick is created.
 
@@ -131,6 +135,8 @@ Hand the picked drafts to adr-draft in ranked order, as its "Drafts handed over 
 ## Report
 
 Add to adr-draft's report what the survey left: the drafts the person didn't pick, and anything it found that didn't warrant an ADR on its own, one line each. adr-draft can update or delete any of the new ADRs later.
+
+Signed in, when the survey found files under `docs/adr/` that Actual AI doesn't have, name them and ask whether to send them to Actual AI with `actual adr create --all`. Run it only after a yes, as adr-draft's "Files in docs/adr/ that Actual AI doesn't have" section describes, and report what it saved, skipped and didn't save.
 
 ## Failure and completion
 

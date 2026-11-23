@@ -135,7 +135,7 @@ Show the draft in full, or the change before and after, then ask in one interact
 - **Update.** Apply the change or not.
 - **Delete.** Delete it or keep it.
 
-Signed out there's no status to pick. Drafts live in Actual AI, so the CLI writes only accepted ADRs into `docs/adr/` and refuses `--status draft` there. A person who wants a draft, or wants the ADR in Actual AI, signs in first. `actual login` opens a browser, so the person runs it, in their terminal or, in Claude Code, by typing `! actual login` at the prompt. Wait until they say it's done, run `actual whoami` and read Actual AI's decisions as above, then ask again. Never script the browser or the consent page.
+Signed out there's no status to pick. Drafts live in Actual AI, so the CLI writes only accepted ADRs into `docs/adr/` and refuses `--status draft` there. A person who wants a draft, or wants the ADR in Actual AI, signs in first. `actual login` opens a browser, so the person runs it, in their terminal or, in Claude Code, by typing `! actual login` at the prompt. Wait until they say it's done, run `actual whoami` and read Actual AI's decisions as above, then ask again. Never script the browser or the consent page. The files a signed-out `create` wrote stay in `docs/adr/`, and Actual AI doesn't have them; they go there only on the person's yes, as "Files in docs/adr/ that Actual AI doesn't have" below says.
 
 Only when no such tool exists, ask in your reply and end your turn on the question.
 
@@ -196,7 +196,7 @@ actual adr update <id> \
   --json
 ```
 
-- **Exit 0.** The change is saved. Signed out, the output names the `file` and the `rule_files` it rewrote, so the checks read the change at once. Signed in, `decision` is the decision as saved; run `actual adr refresh` to bring an accepted decision's rule file in step now. Editing the policy list can change policy ids, so read them again with `actual adr show <id>` before another edit.
+- **Exit 0.** The change is saved. Signed out, the output names the `file` and the `rule_files` it rewrote, so the checks read the change at once. Signed in, `decision` is the decision as saved; run `actual adr refresh` to bring an accepted decision's rule file in step now, and leave any `create --all` it names to "Files in docs/adr/ that Actual AI doesn't have" below. Editing the policy list can change policy ids, so read them again with `actual adr show <id>` before another edit.
 - **Exit 1.** A value didn't parse, or the content was refused, and the error lists the reasons. Fix the change and run it again.
 - **Exit 2.** As for `create`: the sign-in lapsed, there's no access, or no connected repository matches.
 - **Exit 3.** No ADR has that id, a policy id isn't the decision's, or the ADR can't take the change. Signed out, that's a file that isn't accepted, which needs `actual adr publish <id>` first (the person's call), or a file holding text or header fields outside the layout `create` writes, which `update` won't drop. For the second, with the person's yes, make the change in the file itself and check it as below; `actual adr refresh` then brings its rule file in step. Signed in, an archived decision can't change until it's restored.
@@ -207,7 +207,19 @@ actual adr update <id> \
 actual adr delete <id> --json
 ```
 
-Signed out, it removes the file and its rule file, and says so when git never tracked the file and can't bring it back. Signed in, it archives the decision, as Delete does in the web app; run `actual adr refresh` to remove its rule file now. Exit 3 means no ADR has that id, or signed in, that the decision's state doesn't allow it.
+Signed out, it removes the file and its rule file, and says so when git never tracked the file and can't bring it back. Signed in, it archives the decision, as Delete does in the web app; run `actual adr refresh` to remove its rule file now, leaving any `create --all` it names to the next section. Exit 3 means no ADR has that id, or signed in, that the decision's state doesn't allow it.
+
+## Files in docs/adr/ that Actual AI doesn't have
+
+Signed in, `actual adr refresh` can list decision files under `docs/adr/` that aren't in Actual AI yet and say `actual adr create --all` sends them. They're the person's files: ones a signed-out `create` wrote before they signed in, or ones the repository already kept. Never run `create --all` on your own, from that message or for any other reason. Ask the person first, in an interactive question where you have the tool (`AskUserQuestion` in Claude Code) and otherwise in your reply, ending your turn on it. Say that it sends their `docs/adr/` files to Actual AI and name the files, which `actual adr refresh --json` lists under `create_all`, then run it only after a yes:
+
+```bash
+actual adr create --all --json
+```
+
+Signed in, it sends every decision file under `docs/adr/` that Actual AI doesn't have yet, one at a time and keyed on its path, and nothing under `docs/adr/drafts/`. A file goes only when it has an ADR header and passes `actual adr check`. It skips and lists a file whose id is already one of the repository's decisions, one whose status doesn't govern and one that looks like a decision already there; `--allow-duplicate` sends a look-alike too, and only the person can ask for that. Each file keeps the status its header names. A draft or proposed file becomes a draft, and an accepted one is accepted at once only with a person at the terminal: from an agent's shell it's saved as a draft until the file is on the default branch, and the first run after that accepts it. The run stops at the first save whose outcome is unknown. Report what `--json` lists: the files `saved`, `skipped` and `not_saved`, and after a stop, the `stopped` file and the ones `not_sent`.
+
+Signed out it sends nothing: the CLI refuses `--all` (exit 2), since sending needs `actual login`. The files need no sending there, because `actual adr check` checks them and `actual adr refresh` writes the rule file of each normalized one.
 
 ## Check the file
 
