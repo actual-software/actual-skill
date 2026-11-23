@@ -71,7 +71,7 @@ Keep the answer `actual whoami` gave: it decides where each pick is created.
 
 ## Read this checkout's sessions, once the person agrees
 
-Past coding-agent sessions in this checkout often hold decisions the code doesn't show yet: a rule the person stated, a correction they made more than once, a trade-off they settled. So in the whole-repository survey, ask whether you may read them before you draft anything, saying what you'll read and that it stays on this machine. Ask in an interactive question where you have the tool (`AskUserQuestion` in Claude Code), and otherwise in your reply, ending your turn on it. Read none until they agree, and survey without them when they decline. The narrower windows skip this step.
+Past coding-agent sessions in this checkout often hold decisions the code doesn't show yet: a rule the person stated, a correction they made more than once, a trade-off they settled. So in the whole-repository survey, ask whether you may read them before you draft anything, saying what you'll read and that reading them puts their text in your context, which reaches your model provider, though no ADR will quote them. Ask in an interactive question where you have the tool (`AskUserQuestion` in Claude Code), and otherwise in your reply, ending your turn on it. Read none until they agree, and survey without them when they decline. The narrower windows skip this step.
 
 Read only the sessions recorded for this checkout, the folder `git rev-parse --show-toplevel` prints, and never another folder's, repository's or worktree's:
 
@@ -97,7 +97,7 @@ Read only the sessions recorded for this checkout, the folder `git rev-parse --s
 
 Without `jq`, read the same fields with any JSON reader. Start with the newest sessions and stop once new ones add nothing.
 
-Sessions stay on this machine. Use them to find decisions and for nothing else: no draft, question or report quotes a transcript, says who said what or when, or repeats a credential, a name or any other personal detail found there. An ADR states its decision in its own words, and its policies rest on the code or on what the person confirms.
+What you read from the sessions is in your context, which reaches your model provider. Use them to find decisions and for nothing else: no draft, question or report quotes a transcript, says who said what or when, or repeats a credential, a name or any other personal detail found there. An ADR states its decision in its own words, and its policies rest on the code or on what the person confirms.
 
 ## Sort what you find
 
