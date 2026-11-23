@@ -77,7 +77,7 @@ Signed out, `actual adr create` writes each new ADR into `docs/adr/` as an accep
 
 Signed in, `actual adr create` saves each new ADR to Actual AI and writes no file into `docs/adr/`, and `update` and `delete` change or archive the decision there. You pick whether each new ADR is accepted or a draft, and your agent saves one as accepted only when you pick that. An accepted decision's rule file goes into `.actual/rules/` at once, and a draft governs once it's published (`actual adr publish <id>`, or in the web app). `actual login` opens a browser, so you run it yourself. The [actual CLI's ADR command reference](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) covers both pathways.
 
-Both skills need `actual` 0.16.0 or later, the first release whose `adr` commands work on `docs/adr/` signed out. They check `actual --version` and offer the upgrade on an older CLI.
+Both skills need `actual` 0.17.0 or later, the first release whose `create`, `update` and `delete` work on `docs/adr/` signed out. They check `actual --version` and offer the upgrade on an older CLI.
 
 ## Troubleshooting
 

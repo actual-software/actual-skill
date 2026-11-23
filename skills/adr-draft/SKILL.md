@@ -28,9 +28,9 @@ command -v actual && actual --version
 ```
 
 - **No `actual` on `PATH`.** Offer to install it (`npm install -g @actualai/actual`, or `brew install actual-software/actual/actual`) with an interactive question tool such as `AskUserQuestion`, and wait for the answer before going on.
-- **A version below 0.16.0.** From 0.16.0, `create`, `update` and `delete` work on `docs/adr/` signed out. In 0.14.0 and 0.15.0 they need a sign-in, and an older CLI answers `actual adr` with `unrecognized subcommand 'adr'` and suggests `adr-bot`, a different command that writes agent guidance files. Offer the upgrade the same way: `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
+- **A version below 0.17.0.** From 0.17.0, `create`, `update` and `delete` work on `docs/adr/` signed out. In 0.14.0 through 0.16.0 they need a sign-in, and an older CLI answers `actual adr` with `unrecognized subcommand 'adr'` and suggests `adr-bot`, a different command that writes agent guidance files. Offer the upgrade the same way: `npm install -g @actualai/actual@latest` or `brew upgrade actual-software/actual/actual`.
 
-Without actual 0.16.0 or later you can still draft an ADR and show it, but don't create, change or remove one: only the CLI writes them in the layout the checks read.
+Without actual 0.17.0 or later you can still draft an ADR and show it, but don't create, change or remove one: only the CLI writes them in the layout the checks read.
 
 ## What the person wants
 

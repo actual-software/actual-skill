@@ -34,7 +34,7 @@ Signed in, the same refresh can also list files under `docs/adr/` that aren't in
 command -v actual && actual --version
 ```
 
-Creating needs actual 0.16.0 or later. Offer to install or upgrade it as the adr-draft skill does, and without it, draft and show the ADRs but create none.
+Creating needs actual 0.17.0 or later. Offer to install or upgrade it as the adr-draft skill does, and without it, draft and show the ADRs but create none.
 
 This skill drafts to adr-draft's rules and creates through its steps. Load the adr-draft skill now (in Claude Code through the Skill tool, in Codex with `$adr-draft`) and keep its instructions for the steps below, without starting its own flow. When it isn't installed, say so and that the plugin, or `npx skills add actual-software/actual-skill`, brings it, and stop before creating anything.
 

@@ -40,7 +40,7 @@ In Claude Code, the plugin checks your coding agent's work against the architect
 
 3. Optionally, run `actual login` to sign in to Actual AI. The checks, `actual rules` and drafting ADRs run signed out. Signed in, new ADRs go to Actual AI instead of `docs/adr/`.
 
-4. Add your team's architecture decisions. Signed out, `actual adr create` (CLI 0.16.0 or later; `new` is its alias) writes each one into `docs/adr/` as accepted, along with the rule file under `.actual/rules/` that the checks read:
+4. Add your team's architecture decisions. Signed out, `actual adr create` (CLI 0.17.0 or later; `new` is its alias) writes each one into `docs/adr/` as accepted, along with the rule file under `.actual/rules/` that the checks read:
 
    ```bash
    actual adr create "Use Postgres for storage" --policy "MUST: Services store relational data in Postgres."
