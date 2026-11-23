@@ -194,7 +194,7 @@ Signed out, `publish` sets a file's status to accepted once it passes the save c
 
 Signed in, `publish` makes a draft govern and `unpublish` moves an active decision back to draft. `delete` archives an active decision or a draft, as Delete does in the web app, and `restore` returns an archived one to the list it came from; nothing deletes permanently. `accept` and `reject` act on a suggestion, either a new decision or a suggested change to an active one, and `reject` needs `--reason`, up to 10,000 characters. Each command reads the decision's state first and sends nothing when the state doesn't allow the change (exit `3`). A grouped draft can't be published yet, and a grouped decision can't be restored yet. The next `actual adr refresh` brings the repository's rule files in step with the change, and Actual AI's sync pull request writes the same files. `--json`: `success` and `adr_id`, plus `reason_saved` on `reject`.
 
-Exit codes for every `adr` command: `1` a check failed (the save check, a `--policy` or `--level` value that doesn't parse, a blank `update --title` or policy statement, Actual AI's refusal of the content, `adr check`, or `create`'s duplicate refusal), `2` signed out, a command or flag the pathway can't take (such as `create --file`, `create --status draft` or `unpublish` signed out), no access to the decision, no connected repository could be chosen, or a value refused while the command line is read (such as a blank `--reason`), `3` Actual AI unreachable or another API error, no decision with that id, a change the decision's state doesn't allow (such as `update` on a file it can't write back whole), or a `create` whose outcome is unknown, and `5` a local file couldn't be read or written. The CLI's [ADR command reference](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) has the rest.
+Exit codes for every `adr` command: `1` a check failed (the save check, a `--policy` or `--level` value that doesn't parse, a blank `update --title` or policy statement, Actual AI's refusal of the content, `adr check`, or `create`'s duplicate refusal), `2` signed out, a command or flag the pathway can't take (such as `create --file`, `create --status draft` or `unpublish` signed out), no access to the decision, no connected repository could be chosen, or a value refused while the command line is read (such as a blank `--reason`), `3` Actual AI unreachable or another API error, no decision with that id, a change the decision's state doesn't allow (such as `update` on a file it can't write back whole), or a `create` whose outcome is unknown, and `5` a local file couldn't be read or written. `references/error-catalog.md` gives each error's message and fix. The CLI's [ADR command reference](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) has the rest.
 
 ## Plan- and Implementation-Stage Governance (Claude Code and Codex hooks)
 
@@ -999,9 +999,16 @@ Use inline commands instead when checking a single thing (e.g., just `actual aut
 | ApiKeyMissing | 2 | Required env var not set | Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` |
 | NotLoggedIn | 2 | Not signed in to the Actual AI platform | Run `actual login` |
 | CodexCliModelRequiresApiKey | 2 | ChatGPT OAuth with explicit model | Set `OPENAI_API_KEY` (OAuth only supports default model) |
+| AdrAccessDenied | 2 | Actual AI refused an `adr` request (HTTP 403) | Run `actual login` again, or get a role that can change decisions |
+| AdrRepoRequired | 2 | No connected repository matches the checkout | Run in a connected checkout, or pass `--repo owner/name` |
+| AdrPathway | 2 | An `adr` command or flag the signed-out or signed-in pathway can't take | Leave it out, or sign in with `actual login` |
 | CreditBalanceTooLow | 3 | Insufficient API credits | Add credits to account |
 | ApiError | 3 | API request failed | Check API URL, network, credentials |
 | ApiResponseError | 3 | Unexpected API response | Check API status, retry |
+| AdrCreateUnconfirmed | 3 | A `create` got no answer, so it may have saved | Look with `actual adr list` before running `create` again |
+| AdrNotFound | 3 | No decision or decision file has that id | Take the id from `actual adr list` |
+| AdrNotAllowed | 3 | The decision's state doesn't allow the change | Do what the message names first, once the user agrees |
+| AdrNotSaved | 3 | Actual AI couldn't be reached, so nothing was saved | Check the network and `actual whoami`, then retry |
 | RunnerFailed | 1 | Runner process errored | Check runner output, logs |
 | RunnerOutputParse | 1 | Could not parse runner output | Check model compatibility |
 | RunnerTimeout | 1 | Runner exceeded time limit | Increase `invocation_timeout_secs` |
@@ -1009,6 +1016,9 @@ Use inline commands instead when checking a single thing (e.g., just `actual aut
 | AnalysisEmpty | 1 | No analysis results | Check project path, repo content |
 | TailoringValidationError | 1 | Tailored output invalid | Retry, or use `--no-tailor` |
 | TerminalIOError | 1 | CLI needs a TTY (non-interactive shell) | Add `--force --no-tui` flags |
+| AdrInvalid | 1 | A decision failed the save check, or a value didn't parse | Fix each reason the message lists |
+| AdrCheckFailed | 1 | `adr check` found failing files, or `create --all` didn't save one | Fix the files the report names |
+| AdrDuplicate | 1 | `create` found a look-alike decision and sent nothing | Update that decision, or `--allow-duplicate` if the user wants both |
 | IoError | 5 | File I/O failure | Check permissions, disk space |
 | UserCancelled | 4 | User cancelled operation | (intentional) |
 
@@ -1019,7 +1029,7 @@ Use inline commands instead when checking a single thing (e.g., just `actual aut
 | Code | Category | Errors |
 |------|----------|--------|
 | 1 | General / runtime | RunnerFailed, RunnerOutputParse, ConfigError, RunnerTimeout, AnalysisEmpty, TailoringValidationError, InternalError, TerminalIOError, AdrInvalid, AdrCheckFailed, AdrDuplicate |
-| 2 | Auth / setup | ClaudeNotFound, ClaudeNotAuthenticated, CodexNotFound, CodexNotAuthenticated, CursorNotFound, ApiKeyMissing, CodexCliModelRequiresApiKey, NotLoggedIn, AdrAccessDenied, AdrRepoRequired |
+| 2 | Auth / setup | ClaudeNotFound, ClaudeNotAuthenticated, CodexNotFound, CodexNotAuthenticated, CursorNotFound, ApiKeyMissing, CodexCliModelRequiresApiKey, NotLoggedIn, AdrAccessDenied, AdrRepoRequired, AdrPathway |
 | 3 | Billing / API | CreditBalanceTooLow, ApiError, ApiResponseError, AdrCreateUnconfirmed, AdrNotFound, AdrNotAllowed, AdrNotSaved |
 | 4 | User cancelled | UserCancelled |
 | 5 | I/O | IoError |
