@@ -585,6 +585,33 @@ test('a call that passes, or a gate that let it through with a notice, reports n
   expect(w.reports).toEqual([])
 })
 
+// The CLI's ADR-use question, as impl-gate.sh carries it on a passing turn: a
+// Stop block whose whole reason is the question.
+const QUESTION =
+  'Which of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. ' +
+  'Leave out any your change merely complies with or happens to agree with.\n\n' +
+  '- `cross-cutting-persistence-abc123`: Persistence\n\n' +
+  'Answer with one command, then end your turn:\n' +
+  'actual rules report-use --claude-session session-1 --turn 1-0123abcd --repo /repo --claim <adr>=<repo-relative-path>:<line>'
+
+for (const env of [{}, { ACTUAL_OVERRIDE_DIALOG: 'off' }]) {
+  test(`a passing turn's ADR question is no denial: nothing asked or reported (${JSON.stringify(env)})`, async ($, on) => {
+    const w = world(on, { stopBlock: () => QUESTION, blocking: keys('R-HDR-001'), env })
+    const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
+    expect(out.block).toBe(QUESTION)
+    expect(w.asked).toEqual([])
+    expect(w.listed).toEqual([])
+    expect(w.reports).toEqual([])
+  })
+}
+
+test('the ADR question after a denial is still a denial: asked and reported', async ($, on) => {
+  const block = `${denyText(['R-HDR-001'], 'A revised change is re-checked automatically.')}\n\n${QUESTION.replace('Answer with', 'After fixing the above, answer with')}`
+  const w = world(on, { stopBlock: () => block, blocking: keys('R-HDR-001'), answers: [null] })
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(reported(w)).toEqual([flags('impl', 'shown', 'dismissed', 'as-written', 1)])
+})
+
 test('a report that never finishes holds up neither gate', async ($, on) => {
   const deny = denyText(['R-AUTH-001'])
   const block = denyText(['R-HDR-001'], 'A revised change is re-checked automatically.')

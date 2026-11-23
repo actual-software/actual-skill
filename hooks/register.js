@@ -84,6 +84,7 @@
 // them are registered here.
 import {
   offersOverride,
+  isQuestionOnly,
   blockingCall,
   parseBlocking,
   denialQuestion,
@@ -1437,8 +1438,9 @@ async function unattendedOn($, options) {
 // override-dialog.js. Resolves to `{ pass, note }` or `{ text }`, and to the
 // denial untouched on any failure, either question dismissed, or the dialog
 // turned off. Either carries `report`, what `reportDelivery` sends, except
-// where nothing is governed.
+// where nothing is governed or nothing was denied.
 async function askAboutDenial($, gate, reason, options) {
+  if (isQuestionOnly(reason)) return { text: reason };
   const ctx = await overrideContext($);
   if (!ctx) return { text: reason };
   const untouched = (dialog, extra = {}) => ({ text: reason, report: { ctx, dialog, ...extra } });

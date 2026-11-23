@@ -110,6 +110,19 @@ export function offersOverride(reason) {
   return typeof reason === 'string' && reason.includes(OVERRIDE_COMMAND);
 }
 
+// The opening sentence of the CLI's ADR-use question. On a blocked turn it
+// follows the judge's reason, so only a reason that starts with it is a pass.
+const ADR_QUESTION = 'Which of these ADRs did you use this turn?';
+
+/**
+ * Whether a deny is only the ADR-use question, which on a passing turn reaches
+ * Stop as a block meaning "continue once". Nothing was denied, so it raises no
+ * dialog and is not reported.
+ */
+export function isQuestionOnly(reason) {
+  return typeof reason === 'string' && reason.trimStart().startsWith(ADR_QUESTION) && !offersOverride(reason);
+}
+
 /**
  * The `check-override --claude-hook --list-blocking` call for `ctx`: the rules
  * `gate` is blocking now, recording nothing.
