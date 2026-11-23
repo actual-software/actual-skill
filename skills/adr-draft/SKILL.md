@@ -217,7 +217,12 @@ Signed in, `actual adr refresh` can list decision files under `docs/adr/` that a
 actual adr create --all --json
 ```
 
-Signed in, it sends every decision file under `docs/adr/` that Actual AI doesn't have yet, one at a time and keyed on its path, and nothing under `docs/adr/drafts/`. A file goes only when it has an ADR header and passes `actual adr check`. It skips and lists a file whose id is already one of the repository's decisions, one whose status doesn't govern and one that looks like a decision already there; `--allow-duplicate` sends a look-alike too, and only the person can ask for that. Each file keeps the status its header names. A draft or proposed file becomes a draft, and an accepted one is accepted at once only with a person at the terminal: from an agent's shell it's saved as a draft until the file is on the default branch, and the first run after that accepts it. The run stops at the first save whose outcome is unknown. Report what `--json` lists: the files `saved`, `skipped` and `not_saved`, and after a stop, the `stopped` file and the ones `not_sent`.
+Signed in, it sends every decision file under `docs/adr/` that Actual AI doesn't have yet, one at a time and keyed on its path, and nothing under `docs/adr/drafts/`. A file goes only when it has an ADR header and passes `actual adr check`. It skips and lists a file whose id is already one of the repository's decisions, one whose status retires it, such as superseded, deprecated, rejected or deferred, and one that looks like a decision already there; `--allow-duplicate` sends a look-alike too, and only the person can ask for that. Each file keeps the status its header names. A draft or proposed file becomes a draft, and an accepted one is accepted at once only with a person at the terminal: from an agent's shell it's saved as a draft until the file is on the default branch, and the first run after that accepts it. The run stops at the first save whose outcome is unknown. Report what `--json` lists:
+
+- `saved`, `skipped` and `not_saved`, with the reason for each file skipped or not saved.
+- `merged`, the drafts this run accepted because their files reached the default branch, so those decisions govern now. One marked `waits_for_merge` is still a draft, and its `publish_problem` says why.
+- After a stop, the `stopped` file and the ones `not_sent`.
+- `other_files`, markdown under `docs/adr/` with no ADR header, which `create` can't send.
 
 Signed out it sends nothing: the CLI refuses `--all` (exit 2), since sending needs `actual login`. The files need no sending there, because `actual adr check` checks them and `actual adr refresh` writes the rule file of each normalized one.
 

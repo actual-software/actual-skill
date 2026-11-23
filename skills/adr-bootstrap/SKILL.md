@@ -138,7 +138,7 @@ Hand the picked drafts to adr-draft in ranked order, as its "Drafts handed over 
 
 Add to adr-draft's report what the survey left: the drafts the person didn't pick, and anything it found that didn't warrant an ADR on its own, one line each. adr-draft can update or delete any of the new ADRs later.
 
-Signed in, when the survey found files under `docs/adr/` that Actual AI doesn't have, name them and ask whether to send them to Actual AI with `actual adr create --all`. Run it only after a yes, as adr-draft's "Files in docs/adr/ that Actual AI doesn't have" section describes, and report what it saved, skipped and didn't save.
+Signed in, when the survey found files under `docs/adr/` that Actual AI doesn't have, name them and ask whether to send them to Actual AI with `actual adr create --all`. Run it only after a yes and report its result, both as adr-draft's "Files in docs/adr/ that Actual AI doesn't have" section describes.
 
 ## Failure and completion
 
