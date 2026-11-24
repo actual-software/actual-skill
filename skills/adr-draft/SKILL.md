@@ -244,7 +244,7 @@ Signed in there's no file to check: Actual AI ran the save check as it saved the
 Tell the person what changed:
 
 - **Signed out.** The file in `docs/adr/` and its rule file in `.actual/rules/`, written, rewritten or removed, so the checks follow at once. Both are theirs to commit with the change.
-- **Signed in.** The decision's id and status in Actual AI. An accepted one's rule file in `.actual/rules/` is theirs to commit, or to delete before pulling the merge of Actual AI's sync pull request, which writes the same file. For a draft, say how to publish it.
+- **Signed in.** The decision's id and status in Actual AI. A create writes no local file: Actual AI's pull request writes an accepted decision's rule files. A rule file that `actual adr refresh` wrote into `.actual/rules/` is theirs to commit, or to delete before pulling the merge of Actual AI's sync pull request, which writes the same file. For a draft, say how to publish it.
 
 ## Failure and completion
 
