@@ -104,6 +104,7 @@ expect_reg "PostToolUse:request_user_input" '.hooks.PostToolUse[] | select(.matc
 expect_reg "Stop[0]" '.hooks.Stop[0].hooks[0]' plan-gate.sh 180
 expect_reg "Stop[1]" '.hooks.Stop[0].hooks[1]' impl-gate.sh 180
 expect_reg "Stop[2]" '.hooks.Stop[0].hooks[2]' session-summary.sh 5
+expect_reg "SessionEnd" '.hooks.SessionEnd[0].hooks[0]' session-end.sh 1
 
 if [ "$(cx_cmd '.hooks.SessionStart[0].matcher')" = "startup|resume|clear|compact|fork" ]; then
   pass "codex-hooks.json SessionStart covers every source, as hooks.json does"
@@ -122,7 +123,7 @@ extra=$(cx_cmd '[.hooks[][].hooks[] | keys[] | select(. != "type" and . != "comm
 groups=$(cx_cmd '[.hooks[][] | keys[] | select(. != "matcher" and . != "hooks")] | unique | join(",")')
 events=$(cx_cmd '.hooks | keys | join(",")')
 if [ -z "$bad" ] && [ -z "$extra" ] && [ -z "$groups" ] \
-   && [ "$events" = "PostToolUse,PreToolUse,SessionStart,Stop,UserPromptSubmit" ]; then
+   && [ "$events" = "PostToolUse,PreToolUse,SessionEnd,SessionStart,Stop,UserPromptSubmit" ]; then
   pass "every Codex command runs an executable hook script with ACTUAL_HOOK_HOST=codex, in Codex's shape"
 else
   fail "codex-hooks.json has a bad command, key or event" "bad=${bad} extra=${extra} groups=${groups} events=${events}"

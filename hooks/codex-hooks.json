@@ -80,6 +80,17 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ACTUAL_HOOK_HOST=codex \"${PLUGIN_ROOT}\"/hooks/session-end.sh",
+            "timeout": 1
+          }
+        ]
+      }
     ]
   }
 }
