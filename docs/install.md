@@ -1,4 +1,4 @@
-# Install the Actual.ai Skill
+# Install the Actual.AI Plugin
 
 ## Claude Code plugin
 
@@ -28,7 +28,7 @@ Step 4 — run the skill in your coding agent:
 /actual
 ```
 
-The first time you run it, the skill asks for your permission to install the Actual.ai CLI for you. For example:
+The first time you run it, the skill asks for your permission to install the Actual CLI for you. For example:
 
 ```
 /actual
@@ -118,7 +118,7 @@ ln -s ~/.local/share/actual-skill/skills/actual ~/.agents/skills/actual
 
 Link `skills/adr-draft` and `skills/adr-bootstrap` beside it the same way for the drafting skills, for example `ln -s ~/.local/share/actual-skill/skills/adr-draft ~/.claude/skills/adr-draft` and `ln -s ~/.local/share/actual-skill/skills/adr-bootstrap ~/.claude/skills/adr-bootstrap`.
 
-## Keep Actual.ai Skill up to date — Claude Code CLI
+## Keep the Actual.AI Plugin up to date — Claude Code CLI
 
 Claude Code updates the plugin for you once auto-update is on for the `actual-cli-skills` marketplace. It's off by default for a third-party marketplace like this one, so turn it on once: run `/plugin`, open the **Marketplaces** tab, select `actual-cli-skills`, and choose **Enable auto-update**.
 

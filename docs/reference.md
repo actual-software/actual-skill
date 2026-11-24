@@ -1,4 +1,4 @@
-# Actual.ai Skill reference
+# Actual.AI Plugin reference
 
 The plugin works in Claude Code and Codex, in any repository with architecture rules committed in `.actual/rules/`, and stays silent in repositories without them.
 
@@ -85,4 +85,4 @@ When something fails, the skill diagnoses it for you. It knows every error the C
 
 ## Documentation
 
-Getting started is in the [README](../README.md#getting-started), and installing and updating the plugin in the [install guide](install.md). The actual CLI's docs on GitHub cover each command with its flags and examples: [Getting Started](https://github.com/actual-software/actual-cli/blob/main/docs/GETTING_STARTED.md) for installation, runners and configuration, [Actual.ai Skill and CLI in depth](https://github.com/actual-software/actual-cli/blob/main/docs/HOW_IT_WORKS.md) for governance, rules in context, sign-in and troubleshooting, and [ADR commands](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) for writing and checking decisions.
+Getting started is in the [README](../README.md#getting-started), and installing and updating the plugin in the [install guide](install.md). The actual CLI's docs on GitHub cover each command with its flags and examples: [Getting Started](https://github.com/actual-software/actual-cli/blob/main/docs/GETTING_STARTED.md) for installation, runners and configuration, [Actual.AI Plugin in depth](https://github.com/actual-software/actual-cli/blob/main/docs/HOW_IT_WORKS.md) for governance, rules in context, sign-in and troubleshooting, and [ADR commands](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) for writing and checking decisions.

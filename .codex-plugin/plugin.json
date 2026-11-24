@@ -1,6 +1,6 @@
 {
   "name": "actual-cli",
-  "version": "1.13.0",
+  "version": "1.13.1",
   "description": "Run and troubleshoot the Actual CLI for ADR-powered coding-agent guidance.",
   "author": {
     "name": "Actual AI",
@@ -20,7 +20,7 @@
   "skills": "./skills/",
   "hooks": "./hooks/codex-hooks.json",
   "interface": {
-    "displayName": "Actual CLI",
+    "displayName": "Actual.AI Plugin",
     "shortDescription": "Add architecture guidance to coding agents.",
     "longDescription": "Run, configure, and troubleshoot the Actual CLI to generate tailored ADR guidance for Codex, Claude Code, Cursor, and other coding agents. In a repository with architecture rules in .actual/rules/, its hooks brief the agent on the rules that govern the files it reads and patches, check Plan-mode plans and each turn's changes against those rules, and show which ADRs the session used. Its adr-draft and adr-bootstrap skills write ADRs with you, one at a time or as a foundation set for a repository.",
     "developerName": "Actual AI",

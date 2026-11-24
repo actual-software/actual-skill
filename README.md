@@ -18,11 +18,11 @@
   <a href="https://github.com/actual-software/actual-skill/stargazers"><img src="https://img.shields.io/github/stars/actual-software/actual-skill?style=flat" alt="Stars"></a>
 </p>
 
-In Claude Code, the plugin checks your coding agent's work against the architecture rules committed in `.actual/rules/`: its plan before you see the approval dialog, and its changes at the end of every turn. A conflict goes back to the agent with the reason. As the agent reads a file, it's briefed on the rules that govern it, and you can override a denied rule from the session. The [actual CLI](https://github.com/actual-software/actual-cli) does the checking. The plugin's `actual` skill runs and troubleshoots it for your agent, and its `adr-draft` and `adr-bootstrap` skills write ADRs with you, one at a time or as a repository's first set. The same checks and briefing run in Codex, with [a few differences](docs/reference.md#governance-in-codex).
+In Claude Code, the Actual.AI Plugin checks your coding agent's work against the architecture rules committed in `.actual/rules/`: its plan before you see the approval dialog, and its changes at the end of every turn. A conflict goes back to the agent with the reason. As the agent reads a file, it's briefed on the rules that govern it, and you can override a denied rule from the session. The [actual CLI](https://github.com/actual-software/actual-cli) does the checking. The plugin's `actual` skill runs and troubleshoots it for your agent, and its `adr-draft` and `adr-bootstrap` skills write ADRs with you, one at a time or as a repository's first set. The same checks and briefing run in Codex, with [a few differences](docs/reference.md#governance-in-codex).
 
 ## Getting started
 
-1. Install the plugin in Claude Code:
+1. Install the Actual.AI Plugin in Claude Code:
 
    ```
    /plugin marketplace add actual-software/actual-skill
