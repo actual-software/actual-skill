@@ -66,6 +66,19 @@ It counts against the same rules directory as briefing, `ACTUAL_RULES_DIR` inclu
 
 Once briefing reaches its per-session cap, the count can include the ADRs of the one brief that didn't fit: the CLI records each brief before the mod checks it against the cap, and the mod holds that one back.
 
+## Drafting ADRs
+
+Two skills write ADRs with you, and neither writes anything before you agree.
+
+- **`adr-draft`** creates, changes or removes one ADR, from a decision you state or something you or your agent notice in the code. In Claude Code, `/actual-cli:adr-draft <decision>` runs it directly, and in Codex, `$adr-draft`. Your agent reads the ADRs the repository already has (and your decisions in Actual AI when you're signed in), drafts the ADR or the change, and shows it in full before it runs `actual adr create`, `update` or `delete`.
+- **`adr-bootstrap`** proposes a repository's foundation set. It surveys the code and any files under `docs/adr/` and, once you agree, your past Claude Code or Codex sessions in this checkout, drafts up to ten ADRs and asks which to create, and `adr-draft` creates each one you pick. `/actual-cli:adr-bootstrap` surveys the whole repository, `/actual-cli:adr-bootstrap 5` only the last five commits, and `/actual-cli:adr-bootstrap this session` only this session's work; in Codex, `$adr-bootstrap`. Your agent reads only this checkout's sessions, and reading them puts their text in its context, which reaches its model provider; no ADR quotes them. When `actual adr refresh` finds no decision governing a repository, it recommends `adr-bootstrap`, and your agent offers it to you and runs it only on a yes.
+
+Signed out, `actual adr create` writes each new ADR into `docs/adr/` as an accepted decision doc, laid out the way Actual AI's sync writes them, along with its rule file in `.actual/rules/`, so the checks enforce it at once, and `update` and `delete` change or remove both files together. There are no local drafts: drafts live in Actual AI. `actual adr check` checks each file the skills write and lists likely duplicates among the repository's ADRs. The files are yours to commit.
+
+Signed in, `actual adr create` saves each new ADR to Actual AI and writes no file into `docs/adr/`, and `update` and `delete` change or archive the decision there. You pick whether each new ADR is accepted or a draft, and your agent saves one as accepted only when you pick that. An accepted decision's rule file goes into `.actual/rules/` at once, and a draft governs once it's published (`actual adr publish <id>`, or in the web app). `actual login` opens a browser, so you run it yourself. The [actual CLI's ADR command reference](https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md) covers both pathways.
+
+Both skills need `actual` 0.17.0 or later, the first release whose `create`, `update` and `delete` work on `docs/adr/` signed out. They check `actual --version` and offer the upgrade on an older CLI.
+
 ## Troubleshooting
 
 When something fails, the skill diagnoses it for you. It knows every error the CLI can return and all five runners (`claude-cli`, `anthropic-api`, `openai-api`, `codex-cli`, `cursor-cli`), so it can find the cause and retry without you reading logs.

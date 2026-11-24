@@ -1,0 +1,8 @@
+interface:
+  display_name: "Bootstrap ADRs"
+  short_description: "Propose a repository's foundation ADRs and create your picks"
+  default_prompt: "Use $adr-bootstrap to survey this repository, or the last N commits if I give a number, and propose its foundation ADRs, then let me pick which to create."
+  brand_color: "#06E58B"
+
+policy:
+  allow_implicit_invocation: true
