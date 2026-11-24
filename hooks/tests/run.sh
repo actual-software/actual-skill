@@ -2858,6 +2858,17 @@ if [ "$(head -n 1 "$RCALLS")" = "$(refresh_call "$RREPO" 500)" ]; then
 else
   fail "ACTUAL_RULES_DIR's root was not passed on" "calls=$(tr '\n' ';' < "$RCALLS")"
 fi
+for rel in .actual/rules ./.actual/rules/; do
+  rm -f "$RCALLS"
+  run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$RREPO" \
+    ACTUAL_RULES_DIR="$rel" ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+  if [ -f "$RCALLS" ] && [ "$(head -n 1 "$RCALLS")" = "$(refresh_call "$RREPO" 500)" ]; then
+    pass "a relative ACTUAL_RULES_DIR ($rel) counts from the working directory"
+  else
+    fail "a relative ACTUAL_RULES_DIR ($rel) turned the refresh off or moved its root" \
+      "calls=$(tr '\n' ';' < "$RCALLS" 2>/dev/null)"
+  fi
+done
 rm -f "$RCALLS"
 run_hook_cwd "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" \
   "${REPO_WITH_RULES}/src/deep" ACTUAL_TEST_CALLS="$RCALLS" >/dev/null

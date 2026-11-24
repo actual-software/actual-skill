@@ -569,9 +569,14 @@ adr_refresh_step() {
   fi
 
   # The refresh writes <root>/.actual/rules/, so a rules directory moved
-  # elsewhere names its root only when it is such a folder itself.
+  # elsewhere names its root only when it is such a folder itself. A relative
+  # one counts from the working directory, as rules_present reads it.
   if [ -n "${ACTUAL_RULES_DIR:-}" ]; then
     rules=${ACTUAL_RULES_DIR%/}
+    case "$rules" in
+      /*) ;;
+      *) rules="${PWD%/}/${rules#./}" ;;
+    esac
     case "$rules" in
       */.actual/rules) ADR_REFRESH_ROOT=${rules%/.actual/rules} ;;
       *) return 1 ;;
