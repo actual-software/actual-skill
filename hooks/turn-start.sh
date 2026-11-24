@@ -10,8 +10,11 @@
 # prints nothing, and the Stop check then diffs against the commit the turn
 # started from instead.
 #
-# In Claude Code, silent on every path, because a UserPromptSubmit hook's stdout
-# is added to the prompt, so the CLI's output is discarded; Codex is below.
+# In Claude Code the check's own output is discarded on every path, because a
+# UserPromptSubmit hook's stdout is added to the prompt; Codex is below. What
+# this hook may add there is the news of the CLI's ADR refresh step, which runs
+# before anything else here, as in every hook (lib/bootstrap.sh): the turn's
+# tool-call hooks keep theirs on disk, and the next prompt hands it all over.
 # Nothing here can block a Claude Code prompt either. A missing CLI or any other failure only leaves the Stop check
 # diffing against HEAD as it did before this hook existed, and impl-gate.sh
 # already tells the user about a missing or outdated CLI.
@@ -48,9 +51,23 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
+# The CLI's ADR refresh runs first (lib/bootstrap.sh), asking a CLI again once a
+# prompt that the cache says has no refresh, as the v2 probe below does. This is
+# where the agent hears the refresh's news, with any the turn's other hooks kept:
+# every exit below goes through finish, but for a Codex reply of the CLI's own,
+# whose shape takes nothing beside it, so the news waits for the next prompt.
+adr_refresh_step turn recheck
+
+finish() {
+  local news
+  news=$(adr_refresh_news)
+  [ -n "$news" ] && emit_prompt_context_raw "$news"
+  exit 0
+}
+
 dir=$(rules_dir)
 if ! rules_present "$dir" || ! have_actual; then
-  exit 0
+  finish
 fi
 
 # ADR header v2 rule files this CLI cannot read: impl-gate.sh stands down, so
@@ -58,7 +75,7 @@ fi
 # refresh re-probes once a turn: an upgrade that keeps an older mtime (Homebrew's
 # does) is invisible to the cache's -nt test.
 if adr_v2_unsupported "$dir" refresh; then
-  exit 0
+  finish
 fi
 
 # Codex needs the codex-hook capability instead, which post-dates the dispatch.
@@ -69,7 +86,7 @@ if is_codex_host; then
       printf 'turn-start: skipped, actual plan-check --help does not name codex-hook\n' \
         2>/dev/null >>"$ACTUAL_TURN_START_LOG"
     fi
-    exit 0
+    finish
   fi
 # The ACTUAL_TURN_START_LOG trace described below records this skip too.
 elif ! have_turn_start; then
@@ -77,7 +94,7 @@ elif ! have_turn_start; then
     printf 'turn-start: skipped, actual impl-check --help does not name UserPromptSubmit\n' \
       2>/dev/null >>"$ACTUAL_TURN_START_LOG"
   fi
-  exit 0
+  finish
 fi
 
 # Resolve --rules-dir and the root exactly as impl-gate.sh does. The CLI keys
@@ -99,7 +116,10 @@ if is_codex_host; then
     printf '%s\nturn-start: exit=%s rules-dir=%s\n' "$reply" "$status" "$dir" \
       2>/dev/null >>"$ACTUAL_TURN_START_LOG"
   fi
-  [ "$status" -eq 0 ] && forward_codex_reply "$reply" "stop context"
+  if [ "$status" -eq 0 ] && forward_codex_reply "$reply" "stop context"; then
+    adr_refresh_keep_news
+    exit 0
+  fi
 elif [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
   {
     printf '%s' "$payload" 2>/dev/null | actual impl-check "$(hook_flag)" --rules-dir "$dir" 2>&1
@@ -108,4 +128,4 @@ elif [ -n "${ACTUAL_TURN_START_LOG:-}" ]; then
 else
   printf '%s' "$payload" 2>/dev/null | actual impl-check "$(hook_flag)" --rules-dir "$dir" >/dev/null 2>&1
 fi
-exit 0
+finish

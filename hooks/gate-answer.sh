@@ -32,6 +32,10 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
+# The CLI's ADR refresh runs first, on a tool call's time box, as in every Codex
+# hook (lib/bootstrap.sh). Its news waits for the next prompt.
+adr_refresh_first tool
+
 # A picker the agent showed for some other reason is not ours, and costs no
 # CLI spawn: only the gates' question ids are answered.
 case "$payload" in

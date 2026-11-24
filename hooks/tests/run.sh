@@ -1050,6 +1050,12 @@ min_major=${MIN%%.*} min_rest=${MIN#*.}
 min_minor=${min_rest%%.*}
 NUMERIC="${min_major}.$((min_minor + 10)).0"
 CALLS="${WORK}/calls"
+# What a hook asked the CLI for after the ADR refresh step, which every hook but
+# session-end.sh makes first and "The ADR refresh step" below covers on its own.
+cli_calls() {
+  [ -f "$CALLS" ] || return 0
+  awk 'NR == 1 && /^adr refresh / { next } { print }' "$CALLS"
+}
 INTERRUPT='worth interrupting|do not continue this task|regardless of what else is in progress'
 
 for v in "$MIN" "$NUMERIC" "${MIN}-rc.1" "unreadable"; do
@@ -1072,10 +1078,10 @@ done
 
 rm -f "$CALLS"
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_CALLS="$CALLS")
-if [ "$st" = "0" ] && [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
-  pass "rules + CLI at or above the minimum: one CLI spawn, \`actual --version\`"
+if [ "$st" = "0" ] && [ "$(cli_calls)" = "--version" ]; then
+  pass "rules + CLI at or above the minimum: past the refresh, one CLI spawn, \`actual --version\`"
 else
-  fail "healthy preflight spawned more than actual --version" "calls=$(cat "$CALLS" 2>/dev/null)"
+  fail "healthy preflight spawned more than actual --version" "calls=$(cli_calls)"
 fi
 
 rm -f "$CALLS"
@@ -1103,10 +1109,10 @@ else
   fail "below-gates offer in a governed repo lost the interrupt-and-wait wording" "$ctx"
 fi
 
-if [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
+if [ "$(cli_calls)" = "$(printf -- '--version\nversion --json')" ]; then
   pass "below the minimum: \`actual --version\`, then \`actual version --json\` without --check, so no registry request"
 else
-  fail "below-minimum preflight made the wrong CLI calls" "calls=$(cat "$CALLS" 2>/dev/null)"
+  fail "below-minimum preflight made the wrong CLI calls" "calls=$(cli_calls)"
 fi
 
 # From GATES up to the minimum every check runs, so a governed repository keeps
@@ -1124,10 +1130,10 @@ for v in "$GATES" "$BELOW"; do
      && printf '%s' "$ctx" | grep -q "brew upgrade actual-software/actual/actual" \
      && printf '%s' "$ctx" | grep -q "AskUserQuestion" \
      && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT" \
-     && [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
+     && [ "$(cli_calls)" = "$(printf -- '--version\nversion --json')" ]; then
     pass "rules + CLI reporting ${v}: governance active, then the upgrade offer at a pause, without interrupting the task"
   else
-    fail "rules + CLI reporting ${v}: expected governance active and an offer at a pause" "status=$st ctx=$ctx calls=$(cat "$CALLS" 2>/dev/null)"
+    fail "rules + CLI reporting ${v}: expected governance active and an offer at a pause" "status=$st ctx=$ctx calls=$(cli_calls)"
   fi
 done
 
@@ -1184,14 +1190,14 @@ for channel in unsafe escaped foreign suffixed; do
 done
 
 # Nothing is checked where no rules are committed, so an old CLI there is not
-# the plugin's business: no offer, and no `actual` call at all.
+# the plugin's business: no offer, and no `actual` call past the refresh step.
 for v in "$BELOW" "$BELOW_GATES"; do
   rm -f "$CALLS"
   st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$v" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS")
-  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "$CALLS" ]; then
-    pass "no rules + CLI reporting ${v}: silent, and \`actual\` is never run"
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ -z "$(cli_calls)" ]; then
+    pass "no rules + CLI reporting ${v}: silent, and \`actual\` runs only the refresh"
   else
-    fail "no rules + CLI reporting ${v}: expected silence and no CLI call" "status=$st stdout=$(cat "${WORK}/out") calls=$(cat "$CALLS" 2>/dev/null)"
+    fail "no rules + CLI reporting ${v}: expected silence and no CLI call past the refresh" "status=$st stdout=$(cat "${WORK}/out") calls=$(cli_calls)"
   fi
 done
 
@@ -1243,10 +1249,10 @@ for src in resume clear compact fork nosource; do
      && printf '%s' "$ctx" | grep -q "already declined it in this session, don't ask again" \
      && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT" \
      && ! printf '%s' "$ctx" | grep -q "governance is active" \
-     && [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --json')" ]; then
+     && [ "$(cli_calls)" = "$(printf -- '--version\nversion --json')" ]; then
     pass "rules + CLI below ${GATES}, SessionStart ${label}: the same news, offered at a pause and not again after a no"
   else
-    fail "rules + CLI below ${GATES}, SessionStart ${label}: expected the offer at a pause" "status=$st ctx=$ctx calls=$(cat "$CALLS" 2>/dev/null)"
+    fail "rules + CLI below ${GATES}, SessionStart ${label}: expected the offer at a pause" "status=$st ctx=$ctx calls=$(cli_calls)"
   fi
 done
 
@@ -1316,18 +1322,18 @@ for code in 1 127; do
     fail "rules + \`actual --version\` exits ${code}: the reinstall offer lost the interrupt-and-wait wording" "$ctx"
   fi
 
-  if [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
+  if [ "$(cli_calls)" = "--version" ]; then
     pass "\`actual --version\` exits ${code}: no \`actual version --json\` after it, which that CLI cannot answer either"
   else
-    fail "\`actual --version\` exits ${code}: wrong CLI calls" "calls=$(cat "$CALLS" 2>/dev/null)"
+    fail "\`actual --version\` exits ${code}: wrong CLI calls" "calls=$(cli_calls)"
   fi
 
   rm -f "$CALLS"
   st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_MODE=cannot-run ACTUAL_TEST_EXIT="$code" ACTUAL_TEST_CALLS="$CALLS")
-  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ ! -s "$CALLS" ]; then
-    pass "no rules + a CLI whose \`--version\` exits ${code}: silent, and \`actual\` is never run"
+  if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ] && [ -z "$(cli_calls)" ]; then
+    pass "no rules + a CLI whose \`--version\` exits ${code}: silent, and \`actual\` runs only the refresh"
   else
-    fail "no rules + \`actual --version\` exits ${code}: expected silence and no CLI call" "status=$st stdout=$(cat "${WORK}/out") calls=$(cat "$CALLS" 2>/dev/null)"
+    fail "no rules + \`actual --version\` exits ${code}: expected silence and no CLI call past the refresh" "status=$st stdout=$(cat "${WORK}/out") calls=$(cli_calls)"
   fi
 done
 
@@ -2747,6 +2753,370 @@ if [ "$st" = "0" ] && [ ! -s "${WORK}/out" ]; then
   pass "ACTUAL_PLAN_GATE=off turns the allow hook off too"
 else
   fail "the allow hook must honor ACTUAL_PLAN_GATE=off" "status=$st stdout=$(cat "${WORK}/out")"
+fi
+
+echo
+echo "=== The ADR refresh step ==="
+
+# A repository whose docs/adr/ holds one decision file while .actual/rules/
+# holds none: the state the refresh is for.
+RREPO="${WORK}/refresh-repo"
+mkdir -p "${RREPO}/docs/adr" "${REPO_WITH_RULES}/src/deep"
+git -C "$RREPO" init -q
+printf -- '---\nversion: 2\nid: fake-adr-0001\nstatus: accepted\n---\n# Fake ADR\n' > "${RREPO}/docs/adr/0001-fake.md"
+RCALLS="${WORK}/refresh-calls"
+refresh_call() { printf 'adr refresh --json --root %s --timeout-ms %s' "$1" "$2"; }
+refreshes() {
+  if [ -f "$RCALLS" ]; then grep -c '^adr refresh ' "$RCALLS"; else printf 0; fi
+}
+printf '{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}' \
+  > "${WORK}/refresh-bash.json"
+TS_PAYLOAD="${RESOLVED}/userpromptsubmit-turn.json"
+prompt_context() { jq -r 'select(.hookSpecificOutput.hookEventName == "UserPromptSubmit") | .hookSpecificOutput.additionalContext' < "${WORK}/out" 2>/dev/null; }
+
+# Every registration in hooks.json, by script, with the time box its refresh
+# gets: half a second on a tool call, the CLI's default at a turn's boundary.
+covered=""
+while IFS='|' read -r script payload ms extra; do
+  covered="${covered} ${script}"
+  rm -f "$RCALLS"
+  # shellcheck disable=SC2086 # $extra is one optional assignment or nothing
+  run_hook "${HOOKS_DIR}/${script}" "$payload" "$REPO_WITH_RULES" ACTUAL_TEST_CALLS="$RCALLS" $extra >/dev/null
+  if [ "$(head -n 1 "$RCALLS" 2>/dev/null)" = "$(refresh_call "$REPO_WITH_RULES" "$ms")" ]; then
+    pass "${script} on ${payload##*/}${extra:+ (${extra})}: the refresh is its first CLI call, with a ${ms} ms time box"
+  else
+    fail "${script} on ${payload##*/}${extra:+ (${extra})}: expected the refresh first" "calls=$(tr '\n' ';' < "$RCALLS" 2>/dev/null)"
+  fi
+done <<EOF
+preflight.sh|${RESOLVED}/sessionstart-startup.json|1000|
+turn-start.sh|${TS_PAYLOAD}|1000|
+plan-gate.sh|${RESOLVED}/pretooluse-plan-file.json|1000|
+plan-approval.sh|${RESOLVED}/permissionrequest-plan.json|1000|
+plan-approval.sh|${RESOLVED}/permissionrequest-plan.json|1000|ACTUAL_UNATTENDED=on
+impl-gate.sh|${RESOLVED}/stop-turn.json|1000|
+rules-brief.sh|${RESOLVED}/posttooluse-read-governed.json|500|
+rules-brief.sh|${RESOLVED}/pretooluse-edit-governed.json|500|
+report-use-allow.sh|${WORK}/refresh-bash.json|500|
+EOF
+missing=""
+for script in $(jq -r '.hooks[][].hooks[].command' "${HOOKS_DIR}/hooks.json" | sed 's|.*/hooks/||' | sort -u); do
+  [ "$script" = session-end.sh ] && continue
+  case " ${covered} " in *" ${script} "*) ;; *) missing="${missing} ${script}" ;; esac
+done
+if [ -z "$missing" ]; then
+  pass "every script hooks.json registers but session-end.sh is covered above"
+else
+  fail "hooks.json registers a script no refresh test runs" "missing:${missing}"
+fi
+
+rm -f "$RCALLS"
+printf '{"session_id":"s","hook_event_name":"SessionEnd","reason":"exit"}' > "${WORK}/refresh-end.json"
+run_hook "${HOOKS_DIR}/session-end.sh" "${WORK}/refresh-end.json" "$REPO_WITH_RULES" ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+if [ "$(refreshes)" = 0 ] && grep -q '^__session-ended' "$RCALLS"; then
+  pass "session-end.sh keeps to its one call: no refresh inside the shutdown budget"
+else
+  fail "session-end.sh ran the refresh" "calls=$(tr '\n' ';' < "$RCALLS" 2>/dev/null)"
+fi
+
+# The call that writes the first rule file is already governed by it.
+rm -rf "${RREPO}/.actual"; rm -f "$RCALLS"
+st=$(run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$RREPO" ACTUAL_TEST_REFRESH=write ACTUAL_TEST_CALLS="$RCALLS")
+if [ "$st" = 0 ] && [ "$(head -n 1 "$RCALLS")" = "$(refresh_call "$RREPO" 1000)" ] \
+   && grep -q '^impl-check --claude-hook' "$RCALLS"; then
+  pass "docs/adr/ and no rule files: the Stop call whose refresh writes one checks the turn"
+else
+  fail "the refresh's rule file did not govern its own Stop call" "status=$st calls=$(tr '\n' ';' < "$RCALLS")"
+fi
+rm -rf "${RREPO}/.actual"
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$RREPO" ACTUAL_TEST_REFRESH=write)
+ctx=$(session_context)
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -q "governance is active: 1 rule file" \
+   && printf '%s' "$ctx" | grep -qF "Updated .actual/rules/ from docs/adr/: wrote 1 rule file."; then
+  pass "a session start whose refresh writes the rule file says governance is active, then the news"
+else
+  fail "preflight after a writing refresh" "status=$st ctx=$ctx"
+fi
+rm -rf "${RREPO}/.actual"
+
+# The switches, and a rules directory the refresh doesn't write.
+for off in ACTUAL_ADR_REFRESH=off ACTUAL_PLAN_GATE=off ACTUAL_CLI_SUBPROCESS=1 ACTUAL_RULES_DIR="${WORK}/elsewhere/rules"; do
+  for pair in "rules-brief.sh:${RESOLVED}/posttooluse-read-governed.json" "turn-start.sh:${TS_PAYLOAD}"; do
+    rm -f "$RCALLS"
+    run_hook "${HOOKS_DIR}/${pair%%:*}" "${pair#*:}" "$REPO_WITH_RULES" ACTUAL_TEST_CALLS="$RCALLS" "$off" >/dev/null
+    if [ "$(refreshes)" = 0 ]; then
+      pass "${pair%%:*} with ${off#"${WORK}/"}: no refresh"
+    else
+      fail "${pair%%:*} refreshed with ${off}" "calls=$(tr '\n' ';' < "$RCALLS")"
+    fi
+  done
+done
+rm -f "$RCALLS"
+run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" \
+  ACTUAL_RULES_DIR="${RREPO}/.actual/rules/" ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+if [ "$(head -n 1 "$RCALLS")" = "$(refresh_call "$RREPO" 500)" ]; then
+  pass "ACTUAL_RULES_DIR naming a .actual/rules/ elsewhere: the refresh's root is the folder holding it"
+else
+  fail "ACTUAL_RULES_DIR's root was not passed on" "calls=$(tr '\n' ';' < "$RCALLS")"
+fi
+rm -f "$RCALLS"
+run_hook_cwd "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" \
+  "${REPO_WITH_RULES}/src/deep" ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+if [ "$(head -n 1 "$RCALLS")" = "$(refresh_call "$REPO_WITH_RULES" 500)" ]; then
+  pass "from a subdirectory the refresh gets the repository root, which it would not look for itself"
+else
+  fail "the refresh ran against the working directory" "calls=$(tr '\n' ';' < "$RCALLS")"
+fi
+
+st=$(run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" \
+  ACTUAL_TEST_REFRESH=crash ACTUAL_TEST_MODE=brief ACTUAL_HOOK_DEBUG=1)
+if [ "$st" = 0 ] && grep -qxF "actual-rules-brief: refresh state=failed exit=101 root=${REPO_WITH_RULES}" "${WORK}/err" \
+   && [ -n "$(rb_ctx)" ]; then
+  pass "ACTUAL_HOOK_DEBUG: a failed refresh is traced on stderr, and the brief still goes out"
+else
+  fail "ACTUAL_HOOK_DEBUG did not trace the refresh" "status=$st err=$(cat "${WORK}/err")"
+fi
+
+# A CLI without the command answers once, and the answer is kept per binary.
+for old in old no-adr; do
+  rm -rf "${WORK}/cache"; rm -f "$RCALLS"
+  for _ in 1 2; do
+    KEEP_CACHE=1 run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" \
+      ACTUAL_TEST_REFRESH="$old" ACTUAL_TEST_MODE=brief ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+  done
+  briefed=$(rb_ctx)
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" \
+    ACTUAL_TEST_REFRESH="$old" ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+  if [ "$(refreshes)" = 2 ] && [ -n "$briefed" ] && [ ! -s "${WORK}/out" ] \
+     && [ "$(cat "${WORK}"/cache/adr-refresh-* 2>/dev/null)" = unsupported ]; then
+    pass "ACTUAL_TEST_REFRESH=${old}: one refresh across two Reads, which still brief, and one more at the next prompt"
+  else
+    fail "ACTUAL_TEST_REFRESH=${old}: the missing command was not cached" "refreshes=$(refreshes) briefed=${briefed} out=$(cat "${WORK}/out")"
+  fi
+done
+rm -rf "${WORK}/cache"; rm -f "$RCALLS"
+for _ in 1 2; do
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" \
+    ACTUAL_TEST_REFRESH=usage ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+done
+if [ "$(refreshes)" = 2 ] && ! ls "${WORK}"/cache/adr-refresh-* >/dev/null 2>&1; then
+  pass "an exit 2 that isn't the missing command is not cached"
+else
+  fail "a usage error was cached as a missing command" "refreshes=$(refreshes)"
+fi
+rm -rf "${WORK}/cache"
+KEEP_CACHE=1 run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=old >/dev/null
+KEEP_CACHE=1 run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" >/dev/null
+rm -f "$RCALLS"
+KEEP_CACHE=1 run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+if [ "$(refreshes)" = 1 ] && ! ls "${WORK}"/cache/adr-refresh-* >/dev/null 2>&1; then
+  pass "a prompt's recheck that finds the command drops the cached answer, so tool calls refresh again"
+else
+  fail "a CLI upgraded in place kept its cached 'no refresh'" "refreshes=$(refreshes)"
+fi
+
+# News: handed to the agent at a session start or a prompt, kept until then
+# by every other hook, and said once.
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=news)
+ctx=$(session_context)
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -q "governance is active" \
+   && printf '%s' "$ctx" | grep -qF "has news for the user:" \
+   && printf '%s' "$ctx" | grep -qF "Updated .actual/rules/ from docs/adr/: wrote 1 rule file." \
+   && printf '%s' "$ctx" | grep -q "Pass this on to the user in your next reply"; then
+  pass "session start: the refresh's news follows the governance line"
+else
+  fail "session start lost the refresh's news" "status=$st ctx=$ctx"
+fi
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=news)
+if [ "$st" = 0 ] && [ "$(jq -r '.hookSpecificOutput | keys | join(",")' < "${WORK}/out" 2>/dev/null)" = additionalContext,hookEventName ] \
+   && prompt_context | grep -qF "wrote 1 rule file."; then
+  pass "prompt: the news is UserPromptSubmit context, the one thing this hook prints"
+else
+  fail "turn-start did not hand on the news" "status=$st out=$(cat "${WORK}/out")"
+fi
+for pair in "rules-brief.sh:${RESOLVED}/posttooluse-read-governed.json" "rules-brief.sh:${RESOLVED}/pretooluse-edit-governed.json" \
+            "report-use-allow.sh:${WORK}/refresh-bash.json" "plan-gate.sh:${RESOLVED}/pretooluse-plan-file.json" \
+            "plan-approval.sh:${RESOLVED}/permissionrequest-plan.json" "impl-gate.sh:${RESOLVED}/stop-turn.json"; do
+  rm -rf "${WORK}/cache"
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/${pair%%:*}" "${pair#*:}" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=news >/dev/null
+  kept_out=$(cat "${WORK}/out")
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" >/dev/null
+  first=$(prompt_context)
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" >/dev/null
+  if ! printf '%s' "$kept_out" | grep -q "wrote 1 rule file" \
+     && printf '%s' "$first" | grep -qF "wrote 1 rule file." && [ ! -s "${WORK}/out" ]; then
+    pass "${pair%%:*} keeps the news; the next prompt hands it on, and the one after says nothing"
+  else
+    fail "${pair%%:*}: the news was not kept for the next prompt, or was handed on twice" "kept_out=${kept_out} first=${first} second=$(cat "${WORK}/out")"
+  fi
+done
+rm -rf "${WORK}/cache"
+for _ in 1 2 3; do
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=news >/dev/null
+done
+KEEP_CACHE=1 run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=news >/dev/null
+if [ "$(prompt_context | grep -c 'wrote 1 rule file')" = 1 ]; then
+  pass "the same news kept three times and seen once more is said once"
+else
+  fail "repeated news was not said once" "$(prompt_context)"
+fi
+rm -rf "${WORK}/cache"
+st=$(run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_NO_RULES" ACTUAL_TEST_REFRESH=bootstrap)
+ctx=$(prompt_context)
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -qF "No decision under docs/adr/ governs yet." \
+   && printf '%s' "$ctx" | grep -qF "start it only if they say yes" \
+   && printf '%s' "$ctx" | grep -qF "don't offer it again this session"; then
+  pass "a repository no decision governs: the adr-bootstrap recommendation, worded as one offer, even with no rules"
+else
+  fail "the recommendation did not reach the agent as an offer" "status=$st ctx=$ctx"
+fi
+run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=quoted >/dev/null
+if jq -e . < "${WORK}/out" >/dev/null 2>&1 \
+   && prompt_context | grep -qxF '  docs/adr/0002 "draft".md: It has no ADR header.'; then
+  pass "a message holding quotes, backticks and newlines arrives as the CLI wrote it"
+else
+  fail "the quoted message did not survive" "out=$(cat "${WORK}/out")"
+fi
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=problems)
+ctx=$(session_context)
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -qF -- "- Actual AI didn't answer within 1000 ms" \
+   && printf '%s' "$ctx" | grep -qF -- "- Your sign-in is being renewed in the background"; then
+  pass "session start relays the refresh's problems"
+else
+  fail "session start dropped the refresh's problems" "status=$st ctx=$ctx"
+fi
+run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=problems >/dev/null
+if [ ! -s "${WORK}/out" ]; then
+  pass "a prompt leaves out problems, which come back on every call"
+else
+  fail "turn-start relayed problems" "$(cat "${WORK}/out")"
+fi
+for broken in crash garbage hang; do
+  case "$broken" in
+    crash) label=crashes ;;
+    garbage) label="prints no JSON" ;;
+    *) label="never answers in time" ;;
+  esac
+  rm -rf "${WORK}/cache"
+  started=$SECONDS
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/posttooluse-read-governed.json" "$REPO_WITH_RULES" \
+    ACTUAL_TEST_REFRESH="$broken" ACTUAL_TEST_HANG_SECONDS=6 ACTUAL_TEST_MODE=brief >/dev/null
+  took=$((SECONDS - started))
+  briefed=$(rb_ctx)
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" >/dev/null
+  # The watchdog stops a tool call's refresh at one second; whole-second
+  # rounding and a slow runner's spawns stay well under the six it would hang.
+  if [ -n "$briefed" ] && [ "$took" -le 3 ] && [ ! -s "${WORK}/out" ]; then
+    pass "a refresh that ${label}: the Read is still briefed, within ${took} s, and nothing is kept"
+  else
+    fail "a refresh that ${label} broke the hook" "took=${took} briefed=${briefed} next=$(cat "${WORK}/out")"
+  fi
+done
+rm -rf "${WORK}/cache"
+
+# docs/adr/ with decision files and no rule files: a session start says so.
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$RREPO")
+ctx=$(session_context)
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -qF "keeps 1 decision file(s) under docs/adr/" \
+   && printf '%s' "$ctx" | grep -qF "actual adr check" && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT"; then
+  pass "docs/adr/ and no rule files after a refresh: the session start names what a file needs"
+else
+  fail "the docs/adr/ notice is missing" "status=$st ctx=$ctx"
+fi
+st=$(run_hook_no_cli "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$RREPO")
+ctx=$(session_context)
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -qF "is not on PATH" \
+   && printf '%s' "$ctx" | grep -qF "npm install -g @actualai/actual" \
+   && printf '%s' "$ctx" | grep -q "AskUserQuestion" && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT"; then
+  pass "docs/adr/, no rule files, no CLI: the install offer at a pause"
+else
+  fail "the no-CLI docs/adr/ notice is wrong" "status=$st ctx=$ctx"
+fi
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$RREPO" ACTUAL_TEST_REFRESH=old ACTUAL_TEST_VERSION=0.16.0 ACTUAL_TEST_CHANNEL=npm)
+ctx=$(session_context)
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -qF "CLI (0.16.0) doesn't have yet" \
+   && printf '%s' "$ctx" | grep -qF "npm install -g @actualai/actual@latest" && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT"; then
+  pass "docs/adr/, no rule files, a CLI without the refresh: the upgrade offer at a pause, naming the version"
+else
+  fail "the old-CLI docs/adr/ notice is wrong" "status=$st ctx=$ctx"
+fi
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$RREPO" ACTUAL_ADR_REFRESH=off)
+ctx=$(session_context)
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -qF "keeps 1 decision file(s)" \
+   && printf '%s' "$ctx" | grep -qF "ACTUAL_ADR_REFRESH=off keeps this plugin's hooks from writing rule files"; then
+  pass "docs/adr/, no rule files, ACTUAL_ADR_REFRESH=off: the notice says the switch is why"
+else
+  fail "the switched-off docs/adr/ notice is wrong" "status=$st ctx=$ctx"
+fi
+OREPO="${WORK}/refresh-no-decisions"
+mkdir -p "${OREPO}/docs/adr/drafts"
+git -C "$OREPO" init -q
+printf '# ADRs\n' > "${OREPO}/docs/adr/README.md"
+printf '# Template\n' > "${OREPO}/docs/adr/adr-template.md"
+printf '# Draft\n' > "${OREPO}/docs/adr/drafts/0001-draft.md"
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$OREPO")
+if [ "$st" = 0 ] && [ ! -s "${WORK}/out" ]; then
+  pass "a docs/adr/ holding only a README, a template and a draft: silent, as the refresh reads none of them"
+else
+  fail "files the refresh skips raised the notice" "$(cat "${WORK}/out")"
+fi
+
+# Codex, with codex.sh's helpers (sourced above): every registration in
+# codex-hooks.json, and its replies' exact keys.
+covered=""
+while IFS='|' read -r script payload ms; do
+  covered="${covered} ${script}"
+  rm -f "$RCALLS"
+  run_codex "${HOOKS_DIR}/${script}" "$payload" "$CX_REPO" ACTUAL_TEST_CALLS="$RCALLS" >/dev/null
+  if [ "$(head -n 1 "$RCALLS" 2>/dev/null)" = "$(refresh_call "$CX_REPO" "$ms")" ]; then
+    pass "Codex ${script} on ${payload##*/}: the refresh is its first CLI call, with a ${ms} ms time box"
+  else
+    fail "Codex ${script} on ${payload##*/}: expected the refresh first" "calls=$(tr '\n' ';' < "$RCALLS" 2>/dev/null)"
+  fi
+done <<EOF
+preflight.sh|${CX_START}|1000
+turn-start.sh|${CX_PROMPT}|1000
+rules-brief.sh|${CX_PATCH}|500
+rules-brief.sh|${CX_READ}|500
+gate-answer.sh|$(cx_answer actual_choice_abcd1234)|500
+plan-gate.sh|${CX_STOP_PLAN}|1000
+impl-gate.sh|${CX_STOP}|1000
+session-summary.sh|${CX_STOP}|1000
+EOF
+missing=""
+for script in $(jq -r '.hooks[][].hooks[].command' "${HOOKS_DIR}/codex-hooks.json" | sed 's|.*/hooks/||' | sort -u); do
+  case " ${covered} " in *" ${script} "*) ;; *) missing="${missing} ${script}" ;; esac
+done
+if [ -z "$missing" ]; then
+  pass "every script codex-hooks.json registers is covered above"
+else
+  fail "codex-hooks.json registers a script no refresh test runs" "missing:${missing}"
+fi
+st=$(run_codex "$TS" "$CX_PROMPT" "$CX_REPO" ACTUAL_TEST_REFRESH=news)
+if [ "$st" = 0 ] && [ "$(out_keys)" = hookSpecificOutput ] && [ "$(hso_keys)" = additionalContext,hookEventName ] \
+   && prompt_context | grep -qF "wrote 1 rule file."; then
+  pass "Codex prompt: the news is UserPromptSubmit context, keys exactly as Codex takes them"
+else
+  fail "Codex turn-start did not hand on the news" "status=$st out=$(cat "${WORK}/out")"
+fi
+rm -rf "${WORK}/cache"
+KEEP_CACHE=1 run_codex "$TS" "$CX_PROMPT" "$CX_REPO" ACTUAL_TEST_REFRESH=news ACTUAL_TEST_MODE=codex-context >/dev/null
+cli_reply=$(cat "${WORK}/out")
+KEEP_CACHE=1 run_codex "$TS" "$CX_PROMPT" "$CX_REPO" >/dev/null
+if printf '%s' "$cli_reply" | grep -q '"additionalContext":"Your last turn was stopped' \
+   && ! printf '%s' "$cli_reply" | grep -q "wrote 1 rule file" \
+   && prompt_context | grep -qF "wrote 1 rule file."; then
+  pass "Codex prompt with a reply of the CLI's own: that reply alone, and the news at the next prompt"
+else
+  fail "Codex turn-start mixed the news into the CLI's reply, or lost it" "first=${cli_reply} second=$(cat "${WORK}/out")"
+fi
+rm -rf "${WORK}/cache"
+st=$(run_codex "$PF" "$CX_START" "$RREPO" ACTUAL_TEST_REFRESH=old ACTUAL_TEST_VERSION=0.16.0 ACTUAL_TEST_CHANNEL=npm)
+ctx=$(session_context)
+if [ "$st" = 0 ] && [ "$(out_keys)" = hookSpecificOutput ] && printf '%s' "$ctx" | grep -qF "doesn't have yet" \
+   && ! printf '%s' "$ctx" | grep -qE 'AskUserQuestion|Bash tool'; then
+  pass "Codex docs/adr/ notice: the upgrade offer names no Claude Code tool"
+else
+  fail "Codex docs/adr/ notice names a Claude Code tool" "status=$st ctx=$ctx"
 fi
 
 echo

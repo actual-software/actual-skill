@@ -3,9 +3,10 @@
 #
 # Sourced by plan-gate.sh, plan-approval.sh, impl-gate.sh, report-use-allow.sh,
 # rules-brief.sh, preflight.sh, turn-start.sh, session-end.sh, session-summary.sh
-# and gate-answer.sh, under Claude Code and under Codex (see "Host" below). The
-# only write is the capability cache under
-# ~/.cache/actual-skill (see have_adr_v2).
+# and gate-answer.sh, under Claude Code and under Codex (see "Host" below). Its
+# own writes are the capability cache and the refresh's kept news, both under
+# ~/.cache/actual-skill (see have_adr_v2 and adr_refresh_keep_news); the CLI's
+# refresh step writes .actual/rules/ itself (see adr_refresh_step).
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
 # beyond bash builtins, `command`, `git`, and the POSIX `cat`, `mktemp`, `sleep`
@@ -235,15 +236,22 @@ CLI_CALL_TIMEOUT=2
 # killed launcher would leave that child holding a pipe open. A CLI killed by
 # SIGKILL from elsewhere, or a temp file that cannot be made, also gives 124.
 run_actual() {
-  local out pid watchdog status
+  run_actual_within "$CLI_CALL_TIMEOUT" /dev/null "$@"
+}
+
+# run_actual with the caller's limit ($1, whole seconds) and with stderr going
+# to the file $2 rather than nowhere.
+run_actual_within() {
+  local limit="$1" errfile="$2" out pid watchdog status
+  shift 2
   out=$(mktemp "${TMPDIR:-/tmp}/actual-preflight.XXXXXX") || return 124
-  actual "$@" </dev/null >"$out" 2>/dev/null &
+  actual "$@" </dev/null >"$out" 2>"$errfile" &
   pid=$!
   # The watchdog kills its own sleep when it is stopped, so a call that answers
   # in time leaves no process behind.
   ( sleeper=""
     trap '[ -n "$sleeper" ] && kill "$sleeper"; exit 0' TERM
-    sleep "$CLI_CALL_TIMEOUT" &
+    sleep "$limit" &
     sleeper=$!
     wait "$sleeper" && kill -KILL "$pid" ) </dev/null >/dev/null 2>&1 &
   watchdog=$!
@@ -359,21 +367,39 @@ ADR_V2_MIN_CLI=0.9.0
 # stale entry to one turn, and only a definite answer is stored. A cache that cannot be read or written is
 # a miss, never an error: the probe runs and the hook proceeds.
 #
-# The same cache holds the Codex capability (have_codex_hook), under a name of its
-# own: $1 is that name, adr-v2 when omitted.
+# The same cache holds the Codex capability (have_codex_hook) and a CLI's lack of
+# `adr refresh` (adr_refresh_step), each under a name of its own: $1 is that
+# name, adr-v2 when omitted.
 adr_v2_cache_file() {
-  local base="${ACTUAL_HOOK_CACHE_DIR:-}" bin
-  if [ -z "$base" ]; then
-    [ -n "${XDG_CACHE_HOME:-${HOME:-}}" ] || return 1
-    base="${XDG_CACHE_HOME:-$HOME/.cache}/actual-skill"
-  fi
+  local bin
   bin=$(command -v actual) || return 1
   [ -n "$bin" ] || return 1
   # PATH may name a relative directory; two working directories would share a key.
   case "$bin" in /*) ;; *) bin="$PWD/${bin#./}" ;; esac
+  cache_path "${1:-adr-v2}" "$bin"
+}
+
+# Print the cache entry named $1 for the absolute path $2, under
+# ACTUAL_HOOK_CACHE_DIR or else actual-skill in the user's cache directory.
+# Fails when neither can be named.
+cache_path() {
+  local base="${ACTUAL_HOOK_CACHE_DIR:-}" key
+  if [ -z "$base" ]; then
+    [ -n "${XDG_CACHE_HOME:-${HOME:-}}" ] || return 1
+    base="${XDG_CACHE_HOME:-$HOME/.cache}/actual-skill"
+  fi
   # `_` -> `_u`, `/` -> `_s`: unambiguous, so distinct paths never share a key.
-  bin=${bin//_/_u}
-  printf '%s/%s-%s' "$base" "${1:-adr-v2}" "${bin//\//_s}"
+  key=${2//_/_u}
+  printf '%s/%s-%s' "$base" "$1" "${key//\//_s}"
+}
+
+# Write verdict $2 to cache entry $1. Owner-only directory, atomic replace:
+# best effort, every failure ignored.
+store_cli_verdict() {
+  local file="$1" verdict="$2" dir="${1%/*}" tmp="$1.$$"
+  { mkdir -p "$dir" && chmod 700 "$dir" 2>/dev/null; [ -O "$dir" ] \
+    && printf '%s\n' "$verdict" >"$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null \
+    || rm -f "$tmp" 2>/dev/null
 }
 
 # $1 = refresh skips the read and rewrites the entry. Returns 0 when the CLI names
@@ -407,13 +433,7 @@ have_cli_marker() {
     *"$marker"*) verdict=supported ;;
     *) verdict=unsupported ;;
   esac
-  if [ -n "$file" ]; then
-    # Owner-only directory, atomic replace: best effort, every failure ignored.
-    local dir="${file%/*}" tmp="$file.$$"
-    { mkdir -p "$dir" && chmod 700 "$dir" 2>/dev/null; [ -O "$dir" ] \
-      && printf '%s\n' "$verdict" >"$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null \
-      || rm -f "$tmp" 2>/dev/null
-  fi
+  [ -n "$file" ] && store_cli_verdict "$file" "$verdict"
   [ "$verdict" = supported ]
 }
 
@@ -482,6 +502,323 @@ CODEX_HOOK_MIN_CLI=0.15.0
 # $1 = refresh, as for have_adr_v2.
 have_codex_hook() {
   have_cli_marker codex-hook codex-hook "${1:-}" plan-check --help
+}
+
+# --- The ADR refresh step (`actual adr refresh`) ---
+#
+# Every hook here but session-end.sh runs this before anything else, so each one
+# reads rule files that are in step: signed out the CLI rewrites .actual/rules/
+# from the accepted, normalized files in docs/adr/, and signed in from the
+# repository's decisions in Actual AI, keeping the last good copy when the API is
+# slow. A repository whose docs/adr/ holds decisions and no rule files is
+# governed from its first hook call. `rules brief`, `plan-check` and
+# `impl-check` never refresh by themselves, so a check run directly, as a review
+# does, still judges the rule files committed at its head.
+#
+# The CLI exits 0 whatever happens once its arguments parse, and prints a JSON
+# report whose `message` is set only when a person should hear something
+# (rule files changed, the list of unnormalized files changed, a recommendation)
+# and is recorded as said. So the hooks that can hand context to the agent
+# (preflight.sh and turn-start.sh) pass it on, and the rest keep it on disk
+# until one of them runs (adr_refresh_keep_news). Its `problems` (a slow API, a
+# sign-in being renewed) come back on every call, so only a session start
+# relays them.
+#
+# A CLI without the command (every release before it) answers with clap's
+# "unrecognized subcommand", exit 2. That answer is cached per binary like the
+# capability markers above, so such a CLI costs one spawn and then none until
+# the binary changes or a session start or prompt asks again. A version
+# comparison would not do: a build from actual-cli's main reports the last
+# release's number and has the command.
+
+# The time box, by where the step runs. --timeout-ms bounds only the read from
+# Actual AI; the docs/adr/ scan and the CLI's lock on its record (up to 500 ms)
+# come on top, so each call also runs under a watchdog of whole seconds. A tool
+# call's hook may have 2 seconds in all (rules-brief.sh), so its refresh gets
+# half a second and is stopped at one. A turn's boundary gets the CLI's default.
+ADR_REFRESH_TOOL_MS=500
+ADR_REFRESH_TOOL_LIMIT=1
+ADR_REFRESH_TURN_MS=1000
+ADR_REFRESH_TURN_LIMIT=2
+
+# What the last adr_refresh_step did: ran, off (a switch, or ACTUAL_RULES_DIR
+# outside a .actual/rules/ the refresh writes), no-cli, unsupported or failed.
+ADR_REFRESH_STATE=""
+# The CLI's JSON report when it ran, trimmed.
+ADR_REFRESH_REPORT=""
+# The root the refresh reads and writes: the repository root, or the directory
+# holding ACTUAL_RULES_DIR's .actual/rules/. Empty when none applies.
+ADR_REFRESH_ROOT=""
+# resolve_repo_root's answer when the step asked for it, for a hook that needs
+# the same answer and would otherwise spawn `git rev-parse` again.
+ADR_REFRESH_REPO_ROOT=""
+
+# Run the refresh for this hook. $1 is tool or turn (the time box above); $2 =
+# recheck asks a CLI again that the cache says has no refresh, which preflight.sh
+# does once a session and turn-start.sh once a prompt, as they re-probe the
+# capability markers. Returns 0 when the refresh ran and its report is in
+# ADR_REFRESH_REPORT, 1 otherwise; a failure of any kind leaves the hook to go on
+# exactly as it would have. ADR_REFRESH_EXIT holds the CLI's exit status when it
+# ran at all, for rules-brief.sh's ACTUAL_HOOK_DEBUG trace.
+ADR_REFRESH_EXIT=""
+adr_refresh_step() {
+  local tier="$1" mode="${2:-}" ms limit errfile status file="" verdict="" rules
+  ADR_REFRESH_STATE=off ADR_REFRESH_REPORT="" ADR_REFRESH_ROOT="" ADR_REFRESH_REPO_ROOT="" ADR_REFRESH_EXIT=""
+  if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
+    return 1
+  fi
+
+  # The refresh writes <root>/.actual/rules/, so a rules directory moved
+  # elsewhere names its root only when it is such a folder itself.
+  if [ -n "${ACTUAL_RULES_DIR:-}" ]; then
+    rules=${ACTUAL_RULES_DIR%/}
+    case "$rules" in
+      */.actual/rules) ADR_REFRESH_ROOT=${rules%/.actual/rules} ;;
+      *) return 1 ;;
+    esac
+    [ -n "$ADR_REFRESH_ROOT" ] || ADR_REFRESH_ROOT=/
+  else
+    ADR_REFRESH_REPO_ROOT=$(resolve_repo_root)
+    ADR_REFRESH_ROOT=$ADR_REFRESH_REPO_ROOT
+  fi
+
+  [ "${ACTUAL_ADR_REFRESH:-on}" = "off" ] && return 1
+  ADR_REFRESH_STATE=no-cli
+  have_actual || return 1
+
+  # The cached "no refresh", read the way have_cli_marker reads its entries:
+  # only while it is newer than the binary.
+  ADR_REFRESH_STATE=unsupported
+  file=$(adr_v2_cache_file adr-refresh) || file=""
+  if [ -n "$file" ] && [ "$mode" != recheck ] && [ -f "$file" ] \
+     && [ "$file" -nt "$(command -v actual)" ]; then
+    IFS= read -r verdict <"$file" || true
+    [ "$verdict" = unsupported ] && return 1
+  fi
+
+  ADR_REFRESH_STATE=failed
+  ms=$ADR_REFRESH_TURN_MS limit=$ADR_REFRESH_TURN_LIMIT
+  if [ "$tier" = tool ]; then
+    ms=$ADR_REFRESH_TOOL_MS limit=$ADR_REFRESH_TOOL_LIMIT
+  fi
+  errfile=$(mktemp "${TMPDIR:-/tmp}/actual-adr-refresh.XXXXXX") || return 1
+  ADR_REFRESH_REPORT=$(run_actual_within "$limit" "$errfile" \
+    adr refresh --json --root "$ADR_REFRESH_ROOT" --timeout-ms "$ms")
+  status=$?
+  ADR_REFRESH_EXIT=$status
+  if [ "$status" -eq 2 ] && is_unrecognized_adr_refresh "$errfile"; then
+    rm -f "$errfile"
+    ADR_REFRESH_STATE=unsupported ADR_REFRESH_REPORT=""
+    [ -n "$file" ] && store_cli_verdict "$file" unsupported
+    return 1
+  fi
+  rm -f "$errfile"
+  ADR_REFRESH_REPORT=${ADR_REFRESH_REPORT#"${ADR_REFRESH_REPORT%%[![:space:]]*}"}
+  ADR_REFRESH_REPORT=${ADR_REFRESH_REPORT%"${ADR_REFRESH_REPORT##*[![:space:]]}"}
+  case "$status:$ADR_REFRESH_REPORT" in
+    '0:{'*'}') ;;
+    *) ADR_REFRESH_REPORT=""; return 1 ;;
+  esac
+  ADR_REFRESH_STATE=ran
+  # A cached "no refresh" this run disproves goes, so no later hook skips it.
+  [ -n "$file" ] && [ -f "$file" ] && rm -f "$file" 2>/dev/null
+  return 0
+}
+
+# The step as the hooks run it that cannot hand context to the agent: its news
+# waits on disk for one that can.
+adr_refresh_first() {
+  adr_refresh_step "$1" && adr_refresh_keep_news
+  return 0
+}
+
+# True when stderr ($1) is clap refusing the command itself: `refresh` on a CLI
+# with `adr` (0.14.0 to 0.16.0), or `adr` on one older than that.
+is_unrecognized_adr_refresh() {
+  local err
+  err=$(<"$1") || return 1
+  case "$err" in
+    *"unrecognized subcommand 'refresh'"*|*"unrecognized subcommand 'adr'"*) return 0 ;;
+  esac
+  return 1
+}
+
+# True when report $1 has a message. Its `message` key is always there, null
+# when nothing is news, and the CLI pretty-prints it, so a glob decides without
+# scanning a long report byte by byte on a tool call's budget.
+adr_refresh_has_news() {
+  case "$1" in
+    *'"message": null'*|*'"message":null'*) return 1 ;;
+    *'"message"'*) return 0 ;;
+  esac
+  return 1
+}
+
+# The directory where reports with news wait for preflight.sh or turn-start.sh:
+# one per checkout, keyed by its root, under the plugin's cache directory.
+adr_refresh_news_dir() {
+  [ -n "$1" ] || return 1
+  cache_path adr-refresh-news "$1"
+}
+
+# Keep the last step's report for the next hook that hands news to the agent,
+# when it has any. A file per report, written whole and then renamed, so
+# concurrent hooks never mix two. At most 20 wait for one checkout: a refresh
+# that repeats itself on every call (its record can't be saved) stops adding.
+adr_refresh_keep_news() {
+  local dir f n=0 tmp
+  [ "$ADR_REFRESH_STATE" = ran ] && adr_refresh_has_news "$ADR_REFRESH_REPORT" || return 0
+  dir=$(adr_refresh_news_dir "$ADR_REFRESH_ROOT") || return 0
+  for f in "$dir"/report.*; do
+    [ -e "$f" ] && n=$((n + 1))
+  done
+  [ "$n" -lt 20 ] || return 0
+  { mkdir -p "$dir" && chmod 700 "$dir"; } 2>/dev/null
+  [ -O "$dir" ] || return 0
+  tmp=$(mktemp "$dir/.report.XXXXXX" 2>/dev/null) || return 0
+  { printf '%s\n' "$ADR_REFRESH_REPORT" >"$tmp" && mv -f "$tmp" "$dir/report.${tmp##*.}"; } 2>/dev/null \
+    || rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# The refresh's news as the agent reads it, JSON-string-escaped for a hook's
+# context: every report kept for this checkout, oldest first, then the last
+# step's own, each message said once. A kept report is taken by renaming it
+# first, so two hooks never both hand it on. $1 = problems adds the last step's
+# problems, which only preflight.sh passes. Prints nothing when there is no news.
+#
+# Built in escaped form throughout: the messages come out of the CLI's JSON
+# still escaped (extract_json_string_field), so they go back into JSON as they
+# are, and only this function's own sentences pass through json_escape.
+adr_refresh_news() {
+  local LC_ALL=C with_problems="${1:-}" dir f g taken report msg body="" seen=$'\n' recommends="" problems="" item
+  local -a kept=()
+  if dir=$(adr_refresh_news_dir "$ADR_REFRESH_ROOT"); then
+    for f in "$dir"/report.*; do
+      [ -e "$f" ] || continue
+      taken="$dir/.taken.${f##*.}.$$"
+      mv -f "$f" "$taken" 2>/dev/null || continue
+      # Insertion by age, with test's builtin -nt; a handful at most.
+      local -a sorted=()
+      local placed=0
+      for g in ${kept[@]+"${kept[@]}"}; do
+        if [ "$placed" = 0 ] && [ "$g" -nt "$taken" ]; then
+          sorted+=("$taken")
+          placed=1
+        fi
+        sorted+=("$g")
+      done
+      [ "$placed" = 1 ] || sorted+=("$taken")
+      kept=("${sorted[@]}")
+    done
+  fi
+
+  for f in ${kept[@]+"${kept[@]}"} -; do
+    if [ "$f" = - ]; then
+      [ "$ADR_REFRESH_STATE" = ran ] || continue
+      report=$ADR_REFRESH_REPORT
+    else
+      report=$(<"$f") || report=""
+      rm -f "$f" 2>/dev/null
+    fi
+    msg=$(extract_json_string_field "$report" message) || continue
+    [ -n "$msg" ] || continue
+    case "$seen" in *$'\n'"$msg"$'\n'*) continue ;; esac
+    seen="${seen}${msg}"$'\n'
+    body="${body:+${body}\\n\\n}${msg}"
+    if [ "$(extract_json_string_field "$report" recommendation)" = adr-bootstrap ]; then
+      recommends=1
+    fi
+  done
+
+  if [ "$with_problems" = problems ] && [ "$ADR_REFRESH_STATE" = ran ]; then
+    while IFS= read -r item; do
+      [ -n "$item" ] && problems="${problems}\\n- ${item}"
+    done <<EOF
+$(json_string_array_items "$ADR_REFRESH_REPORT" problems)
+EOF
+  fi
+  [ -n "$body" ] || [ -n "$problems" ] || return 0
+
+  local text lead="The actual CLI's ADR refresh, which this plugin runs before each of its hooks,"
+  if [ -n "$body" ]; then
+    text="$(json_escape "${lead} has news for the user:")\\n\\n${body}"
+    [ -n "$problems" ] && text="${text}\\n\\n$(json_escape "It also reported:")${problems}"
+  else
+    text="$(json_escape "${lead} reported:")${problems}"
+  fi
+  if [ -n "$recommends" ]; then
+    text="${text}\\n\\n$(json_escape "The adr-bootstrap skill it names drafts a first set of ADRs for this repository. Ask the user once, at the end of your next reply, whether they want it, and start it only if they say yes. After a no, don't offer it again this session.")"
+  fi
+  printf '%s' "${text}\\n\\n$(json_escape "Pass this on to the user in your next reply, briefly and in your own words, then carry on with what they asked. Don't edit docs/adr/ or .actual/rules/ because of it unless they ask you to.")"
+}
+
+# The string items of the first "<field>" array in a JSON document, one per
+# line, each still JSON-string-escaped the way extract_json_string_field leaves
+# a value (an escaped string holds no raw newline, so the lines are
+# unambiguous). A byte scan, never a parse; prints nothing and fails when the
+# field is absent or is not an array of strings.
+json_string_array_items() {
+  local LC_ALL=C key="\"$2\"" rest c i len out="" items=""
+  rest=${1#*"$key"}
+  [ "$rest" != "$1" ] || return 1
+  i=0 len=${#rest}
+  while [ "$i" -lt "$len" ]; do
+    case "${rest:$i:1}" in
+      ' '|$'\t'|$'\n'|$'\r') i=$((i + 1)) ;;
+      ':') i=$((i + 1)); break ;;
+      *) return 1 ;;
+    esac
+  done
+  while [ "$i" -lt "$len" ]; do
+    case "${rest:$i:1}" in
+      ' '|$'\t'|$'\n'|$'\r') i=$((i + 1)) ;;
+      '[') i=$((i + 1)); break ;;
+      *) return 1 ;;
+    esac
+  done
+  while [ "$i" -lt "$len" ]; do
+    c="${rest:$i:1}"
+    case "$c" in
+      ' '|$'\t'|$'\n'|$'\r'|,) i=$((i + 1)); continue ;;
+      ']') printf '%s' "$items"; return 0 ;;
+      '"') i=$((i + 1)) ;;
+      *) return 1 ;;
+    esac
+    out=""
+    while :; do
+      [ "$i" -lt "$len" ] || return 1
+      c="${rest:$i:1}"
+      if [ "$c" = '\' ]; then
+        out="${out}${c}${rest:$((i + 1)):1}"
+        i=$((i + 2))
+        continue
+      fi
+      i=$((i + 1))
+      [ "$c" = '"' ] && break
+      out="${out}${c}"
+    done
+    items="${items}${out}"$'\n'
+  done
+  return 1
+}
+
+# How many files under $1/docs/adr/ could be decisions, by the walk the CLI's
+# refresh makes: Markdown up to three levels down, leaving out docs/adr/drafts/
+# and an index, a README or a template by its name. Builtins only.
+docs_adr_decision_files() {
+  local dir="$1/docs/adr" f n=0
+  if [ -d "$dir" ]; then
+    for f in "$dir"/*.md "$dir"/*/*.md "$dir"/*/*/*.md; do
+      [ -f "$f" ] || continue
+      case "$f" in "$dir"/drafts/*) continue ;; esac
+      case "${f##*/}" in
+        [Rr][Ee][Aa][Dd][Mm][Ee].md|[Ii][Nn][Dd][Ee][Xx].md|*[Tt][Ee][Mm][Pp][Ll][Aa][Tt][Ee].md) continue ;;
+      esac
+      n=$((n + 1))
+    done
+  fi
+  printf '%s' "$n"
 }
 
 # --- Operator-facing messages ---
@@ -718,6 +1055,74 @@ ${how}
 Then verify with: actual --version. If they decline, don't run anything --
 upgrading stays optional.
 EOF
+}
+
+# For a repository whose docs/adr/ holds decision files while .actual/rules/
+# holds none, where a session start used to say nothing: no check reads those
+# decisions, and the refresh is what writes their rule files. $1 is how many
+# files (docs_adr_decision_files), $2 the refresh step's state and $3 the
+# installed version, which the upgrade offer names. Offered at a pause, as
+# min_version_offer is: the session loses nothing it had before.
+docs_adr_without_rules_notice() {
+  local n="$1" state="$2" installed="${3:-}" how lead
+  lead="This repository keeps ${n} decision file(s) under docs/adr/, but .actual/rules/
+holds no rule files, so no plan or diff is checked against those decisions."
+  case "$state" in
+    no-cli)
+      cat <<EOF
+${lead} The
+\`actual\` CLI writes a rule file for each accepted, normalized ADR there, and it
+is not on PATH.
+
+This does not need to interrupt the task in progress. At a natural pause, such as
+the end of your next reply, mention it once and offer to install it,
+asking with an interactive question tool (e.g.
+AskUserQuestion). If the user already declined it in this session, don't ask again.
+
+If they agree, run one of these with the Bash tool:
+  npm install -g @actualai/actual
+  brew install actual-software/actual/actual
+
+Then verify with: actual adr --help (it should name refresh). If they decline,
+don't run anything -- installation stays optional.
+EOF
+      ;;
+    unsupported)
+      how=$(upgrade_instructions)
+      cat <<EOF
+${lead} This
+plugin's hooks write them with \`actual adr refresh\`, which the installed
+\`actual\` CLI${installed:+ (${installed})} doesn't have yet.
+
+This does not need to interrupt the task in progress. At a natural pause, such as
+the end of your next reply, mention it once and offer to upgrade,
+asking with an interactive question tool (e.g.
+AskUserQuestion). If the user already declined it in this session, don't ask again.
+
+${how}
+
+Then verify with: actual adr --help (it should name refresh). If they decline,
+don't run anything -- upgrading stays optional.
+EOF
+      ;;
+    *)
+      cat <<EOF
+${lead}
+Signed out, a file gets a rule file once it is accepted and \`actual adr check\`
+passes it, and that check names what each file still needs; signed in, rule
+files come from this repository's decisions in Actual AI instead. Mention this
+to the user once, at a natural pause, and change none of those files without
+their yes.
+EOF
+      if [ "$state" = off ]; then
+        cat <<'EOF'
+
+ACTUAL_ADR_REFRESH=off keeps this plugin's hooks from writing rule files;
+`actual adr refresh` writes them when it is run by hand.
+EOF
+      fi
+      ;;
+  esac
 }
 
 # Codex's counterparts of min_version_interrupt and min_version_reminder, for a
@@ -1038,12 +1443,26 @@ emit_pretooluse_notice() {
 }
 
 # Valid on both hosts as it is. Under Codex the text is rewritten first, since it
-# is the channel the install and upgrade offers reach the agent through.
+# is the channel the install and upgrade offers reach the agent through. $2, when
+# given, is more context that is already JSON-string-escaped (adr_refresh_news)
+# and follows the text; either one may be empty.
 emit_sessionstart_context() {
-  local text="$1"
+  local text="$1" more="${2:-}"
   is_codex_host && text=$(codex_phrasing "$text")
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
-    "$(json_escape "$text")"
+  text=$(json_escape "$text")
+  if [ -n "$text" ] && [ -n "$more" ]; then
+    text="${text}\\n\\n${more}"
+  else
+    text="${text}${more}"
+  fi
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$text"
+}
+
+# Context the agent reads with the user's prompt, from turn-start.sh: $1 is
+# already JSON-string-escaped. Codex takes the same shape, which is the one its
+# CLI replies in (forward_codex_reply's context).
+emit_prompt_context_raw() {
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$1"
 }
 
 # Whether the span of $1 after the prefix $2, up to a closing suffix of $3

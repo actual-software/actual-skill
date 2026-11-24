@@ -39,6 +39,10 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
+# The CLI's ADR refresh runs first, on a tool call's time box, as in every hook
+# but session-end.sh (lib/bootstrap.sh). Its news waits for the next prompt.
+adr_refresh_first tool
+
 # Larger than any answer the CLI asks for, and small enough that the scan
 # below stays well inside the hook's timeout.
 REPORT_USE_MAX_PAYLOAD=8192

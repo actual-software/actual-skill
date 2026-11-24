@@ -31,6 +31,11 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # 1. Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
 
+# The CLI's ADR refresh runs first, as in every hook but session-end.sh, whether
+# or not this one answers (lib/bootstrap.sh). A permission answer carries no
+# context, so its news waits for the next prompt.
+adr_refresh_first turn
+
 # 2. Off unless asked for; ACTUAL_PLAN_GATE=off turns this hook off with the rest,
 #    and actual-cli's own subprocesses never plan.
 if ! unattended_on || [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
