@@ -2,11 +2,10 @@
 name: actual
 description: >-
   Companion for the actual CLI's architecture governance. Runs and
-  troubleshoots plan-check and impl-check, which check a plan or a diff
-  against the ADR rules committed in .actual/rules/ (in Claude Code this
-  plugin runs them on every plan and every turn), the rules commands that
-  show which rules govern a file or a plan (rules ls, select, brief and
-  index), check-override, the human-only way to clear a denied rule,
+  troubleshoots plan-check and impl-check against ADR rules in .actual/rules/
+  (the Claude Code plugin checks every plan and turn), the commands that
+  find rules for a file or plan (rules ls, select, brief and index),
+  check-override, the human-only way to clear a denied rule,
   signing in with login, whoami and logout, and the actual adr commands
   for ADR files and decisions in Actual AI. Use when checking a plan or
   changes against the repository's architecture rules, finding the rules
