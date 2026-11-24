@@ -11,10 +11,10 @@ description: >-
   picks. Use when asked to draft, write, capture or record an ADR or an
   architecture decision, to change or remove one, or when a decision
   settled in the session warrants one. To find several decisions across a
-  repository, its recent commits or this session, use adr-bootstrap, which
-  creates the ones the user picks through this skill. Don't use it to list,
-  publish, archive, accept or reject decisions (the actual skill covers
-  those commands), or to review code.
+  repository, its recent commits, this session or the last seven days of
+  sessions, use adr-bootstrap, which creates the ones the user picks through
+  this skill. Don't use it to list, publish, archive, accept or reject
+  decisions (the actual skill covers those commands), or to review code.
 ---
 
 # Draft an ADR
@@ -40,7 +40,7 @@ Read the request as one of three:
 - **Update.** A change to an ADR the repository has: its title, its context, a policy or its level, or the paths it covers.
 - **Delete.** Removing one.
 
-This skill handles one ADR at a time. When the request holds several decisions, draft the one it centres on and name the others, which the person can draft next. To survey a repository, its recent commits or this session for several decisions, use the adr-bootstrap skill.
+This skill handles one ADR at a time. When the request holds several decisions, draft the one it centres on and name the others, which the person can draft next. To survey a repository, its recent commits, this session or the last seven days of this checkout's coding-agent sessions for several decisions, use the adr-bootstrap skill.
 
 ## Read the decisions the repository has
 

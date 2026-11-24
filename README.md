@@ -46,7 +46,7 @@ In Claude Code, the Actual.AI Plugin checks your coding agent's work against the
    actual adr create "Use Postgres for storage" --policy "MUST: Services store relational data in Postgres."
    ```
 
-   Signed in, the same command saves the decision to Actual AI and writes an accepted one's rule file under `.actual/rules/`. The sync pull request [app.actual.ai](https://app.actual.ai) opens also writes both files for each accepted decision. You can have your agent draft decisions with you too: `/actual-cli:adr-draft <a decision>` for one, or `/actual-cli:adr-bootstrap` to propose a foundation set from the code. `actual rules ls` lists the rule files the checks read and marks a draft as not enforced.
+   Signed in, the same command saves the decision to Actual AI and writes an accepted one's rule file under `.actual/rules/`. The sync pull request [app.actual.ai](https://app.actual.ai) opens also writes both files for each accepted decision. You can have your agent draft decisions with you too: `/actual-cli:adr-draft <a decision>` for one, `/actual-cli:adr-bootstrap` to propose a foundation set from the code, or `/actual-cli:adr-bootstrap sessions` to propose up to five from your coding sessions of the last seven days. `actual rules ls` lists the rule files the checks read and marks a draft as not enforced.
 
 From then on, every plan and every turn in that repository is checked against those decisions.
 
