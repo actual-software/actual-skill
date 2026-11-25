@@ -1104,5 +1104,5 @@ For anything not covered by this skill or its reference files, fetch the CLI doc
 - **Getting Started**: https://github.com/actual-software/actual-cli/blob/main/docs/GETTING_STARTED.md — installation, runners, the full command list, config keys and environment variable overrides
 - **Actual.AI Plugin in depth**: https://github.com/actual-software/actual-cli/blob/main/docs/HOW_IT_WORKS.md — the checks and `check-override`, `rules`, sign-in and troubleshooting, each with a Direct CLI section
 - **ADR commands**: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md — writing and checking decisions with `actual adr`, and managing them in Actual AI
-- **LLM summary**: https://cli.actual.ai/llms.txt — concise machine-readable overview
+- **docs.actual.ai index**: https://docs.actual.ai/llms.txt — one line per page of the docs for released versions, each linking the page's markdown
 - **adr-bot and the Advisor**: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md — their full reference

@@ -537,7 +537,7 @@ If they agree, run one of these with the Bash tool:
 Then verify with: actual --version. If they decline, don't run anything --
 installation stays optional -- but only resume the original task once they have
 actually answered either way.
-Docs: https://cli.actual.ai
+Docs: https://docs.actual.ai/install-cli
 EOF
 }
 
