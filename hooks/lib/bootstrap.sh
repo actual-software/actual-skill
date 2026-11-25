@@ -4,12 +4,12 @@
 # Sourced by plan-gate.sh, plan-approval.sh, impl-gate.sh, report-use-allow.sh,
 # rules-brief.sh, preflight.sh, turn-start.sh, session-end.sh, session-summary.sh
 # and gate-answer.sh, under Claude Code and under Codex (see "Host" below). The
-# only write is the capability cache under
-# ~/.cache/actual-skill (see have_adr_v2).
+# only writes are the capability cache and the daily update-check stamp under
+# ~/.cache/actual-skill (see have_adr_v2 and newer_cli_check).
 #
 # Portability: bash 3.2+ (stock macOS) and Linux. Deliberately depends on NOTHING
-# beyond bash builtins, `command`, `git`, and the POSIX `cat`, `mktemp`, `sleep`
-# and `rm`. In particular it never parses JSON,
+# beyond bash builtins, `command`, `git`, and the POSIX `cat`, `date`, `mktemp`,
+# `sleep` and `rm`. In particular it never parses JSON,
 # so `jq` and `python3` are not required -- neither ships on stock macOS. JSON is
 # only ever *written* here, which is trivial. Parsing the hook envelope is the
 # CLI's job (see `actual plan-check --claude-hook`).
@@ -228,6 +228,10 @@ GATES_MIN_CLI_VERSION=0.7.0
 # gives each of its own spawns (SPAWN_TIMEOUT_MS in register.js).
 CLI_CALL_TIMEOUT=2
 
+# Seconds the once-a-day `actual version --check` may take (newer_cli_check):
+# the CLI's own 3-second registry lookup, plus starting the CLI.
+UPDATE_CHECK_TIMEOUT=4
+
 # Run `actual "$@"` with stdin closed and print its stdout. A call still running
 # after CLI_CALL_TIMEOUT seconds is killed and fails with status 124, as
 # timeout(1) does, which stock macOS lacks. Output goes through a file because
@@ -360,7 +364,8 @@ ADR_V2_MIN_CLI=0.9.0
 # a miss, never an error: the probe runs and the hook proceeds.
 #
 # The same cache holds the Codex capability (have_codex_hook), under a name of its
-# own: $1 is that name, adr-v2 when omitted.
+# own: $1 is that name, adr-v2 when omitted. It also holds the daily stamp of
+# newer_cli_check (cli-update-check), which is a date, not a capability.
 adr_v2_cache_file() {
   local base="${ACTUAL_HOOK_CACHE_DIR:-}" bin
   if [ -z "$base" ]; then
@@ -374,6 +379,15 @@ adr_v2_cache_file() {
   # `_` -> `_u`, `/` -> `_s`: unambiguous, so distinct paths never share a key.
   bin=${bin//_/_u}
   printf '%s/%s-%s' "$base" "${1:-adr-v2}" "${bin//\//_s}"
+}
+
+# Write $2 as the whole of cache entry $1: owner-only directory, atomic replace,
+# best effort, every failure ignored.
+cache_write() {
+  local dir="${1%/*}" tmp="$1.$$"
+  { mkdir -p "$dir" && chmod 700 "$dir" 2>/dev/null; [ -O "$dir" ] \
+    && printf '%s\n' "$2" >"$tmp" && mv -f "$tmp" "$1"; } 2>/dev/null \
+    || rm -f "$tmp" 2>/dev/null
 }
 
 # $1 = refresh skips the read and rewrites the entry. Returns 0 when the CLI names
@@ -407,13 +421,7 @@ have_cli_marker() {
     *"$marker"*) verdict=supported ;;
     *) verdict=unsupported ;;
   esac
-  if [ -n "$file" ]; then
-    # Owner-only directory, atomic replace: best effort, every failure ignored.
-    local dir="${file%/*}" tmp="$file.$$"
-    { mkdir -p "$dir" && chmod 700 "$dir" 2>/dev/null; [ -O "$dir" ] \
-      && printf '%s\n' "$verdict" >"$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null \
-      || rm -f "$tmp" 2>/dev/null
-  fi
+  [ -n "$file" ] && cache_write "$file" "$verdict"
   [ "$verdict" = supported ]
 }
 
@@ -701,23 +709,89 @@ adr_v2_standdown_notice() {
 # upgrade at a pause rather than stopping the task. preflight.sh appends this
 # to the message that governance is active.
 min_version_offer() {
-  local installed="$1" how
-  how=$(upgrade_instructions)
+  local installed="$1"
   cat <<EOF
 The installed \`actual\` CLI is ${installed}, and the actual plugin loaded in this
 session needs ${MIN_CLI_VERSION} or later, so some of what it adds may not work as
-documented.
+documented. Every check above runs on this version.
 
-Every check above runs on this version, so this does not need to interrupt the
-task in progress. At a natural pause, such as the end of your next reply, mention
-it once and offer to upgrade, asking with an interactive question tool (e.g.
+$(upgrade_offer_at_pause "$(upgrade_instructions)")
+EOF
+}
+
+# For a CLI that meets every minimum while a newer release is out, at most once
+# a day (newer_cli_check). Nothing is wrong, so it says so and waits for a pause.
+# $1 is the installed version and $2 the latest, both already checked to be
+# digits and dots, and $3 the `actual version --check --json` answer they came
+# from, for the upgrade command.
+newer_cli_offer() {
+  cat <<EOF
+A newer \`actual\` CLI is out: ${2}. The installed one is ${1}, which keeps
+working; upgrading is optional. What changed: https://github.com/actual-software/actual-cli/blob/main/CHANGELOG.md
+
+$(upgrade_offer_at_pause "$(upgrade_instructions "$3")")
+
+If they would rather not hear about new releases, ACTUAL_NO_UPDATE_CHECK=1 or
+\`actual config set update_check.enabled false\` turns this notice off.
+EOF
+}
+
+# The at-a-pause tail min_version_offer and newer_cli_offer share: when and how
+# to ask, the command ($1, from upgrade_instructions), and how to check.
+# codex_phrasing matches its line breaks. min_version_reminder and
+# codex_min_version_reminder keep their own copy of the same paragraph.
+upgrade_offer_at_pause() {
+  cat <<EOF
+This does not need to interrupt the task in progress. At a natural pause, such as
+the end of your next reply, mention it once and offer to upgrade,
+asking with an interactive question tool (e.g.
 AskUserQuestion). If the user already declined it in this session, don't ask again.
 
-${how}
+$1
 
 Then verify with: actual --version. If they decline, don't run anything --
 upgrading stays optional.
 EOF
+}
+
+# The newer-release offer, at most once a day: prints newer_cli_offer when
+# `actual version --check --json` (actual-cli 0.9.0) reports update_available,
+# and nothing otherwise. The CLI's own daily notice prints only at a terminal,
+# so someone who runs actual only through this plugin would never hear of a
+# release. The CLI makes the one registry request, with its own 3-second
+# timeout, and honours its opt-outs (ACTUAL_NO_UPDATE_CHECK, update_check.enabled
+# false in its config), answering null then. Like the CLI's notice it stays out
+# of CI, and out of an unattended session, which nobody reads.
+#
+# A stamp kept beside the capability cache, keyed by the binary the same way,
+# records the day's answer as the local date. A call that fails or times out
+# (offline, a registry that never answers, a CLI without `version`), or answers
+# null, does not use up the day: it stamps the hour instead, so a network that
+# drops the request costs one wait an hour rather than one every session. Only
+# digits-and-dots versions reach the offer, since the agent acts on that text.
+newer_cli_check() {
+  local stamp now today last="" out="" update="" latest current re='^[0-9]+\.[0-9]+\.[0-9]+$'
+  [ -n "${CI:-}" ] && return 0
+  unattended_on && return 0
+  stamp=$(adr_v2_cache_file cli-update-check) || return 0
+  now=$(date +%Y-%m-%dT%H 2>/dev/null) || return 0
+  today=${now%T*}
+  [ -f "$stamp" ] && { IFS= read -r last <"$stamp" || true; }
+  case "$last" in "$today"|"$now") return 0 ;; esac
+
+  out=$(CLI_CALL_TIMEOUT=$UPDATE_CHECK_TIMEOUT run_actual version --check --json) || out=""
+  if [ -n "$out" ] && ! has_unicode_escape "$out"; then
+    update=$(json_member_value "$out" update_available) || update=""
+  fi
+  case "$update" in
+    true|false) cache_write "$stamp" "$today" ;;
+    *) cache_write "$stamp" "$now"; return 0 ;;
+  esac
+  [ "$update" = true ] || return 0
+  latest=$(extract_json_string_field "$out" latest_version) || return 0
+  current=$(extract_json_string_field "$out" current_version) || return 0
+  [[ $latest =~ $re ]] && [[ $current =~ $re ]] || return 0
+  newer_cli_offer "$current" "$latest" "$out"
 }
 
 # Codex's counterparts of min_version_interrupt and min_version_reminder, for a
@@ -802,19 +876,22 @@ reply."}
 
 # How to upgrade, for the messages above. `actual version --json` names the
 # command for the channel that installed this CLI, which it reads from its own
-# path. Without --check it answers from local facts, so a session start never
-# waits on the registry. A CLI older than that subcommand gets both commands,
-# and a way to tell which applies: running the other would leave a second
-# `actual` on PATH.
+# path. Without --check it answers from local facts, so this never waits on the
+# registry; only newer_cli_check asks it, at most once a day. A CLI older than
+# that subcommand gets both commands, and a way to tell which applies: running
+# the other would leave a second `actual` on PATH.
 #
 # The agent runs this command on the user's yes, so it is passed on only when
 # it is one actual-cli names for its two channels, compared whole: a prefix
 # match would also pass `npm install -g @actualai/actual @someone/else`. A CLI
 # installed some other way always gets the release page below, which is also
 # the release_url actual-cli reports.
+#
+# $1, when given, is an `actual version` answer already in hand (newer_cli_check
+# has one), so the CLI is not run a second time.
 upgrade_instructions() {
-  local out="" channel="" cmd=""
-  out=$(run_actual version --json) || out=""
+  local out="${1:-}" channel="" cmd=""
+  [ -n "$out" ] || out=$(run_actual version --json) || out=""
   if [ -n "$out" ] && ! has_unicode_escape "$out"; then
     channel=$(extract_json_string_field "$out" channel) || channel=""
     cmd=$(extract_json_string_field "$out" upgrade_command) || cmd=""

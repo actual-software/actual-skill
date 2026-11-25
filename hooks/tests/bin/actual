@@ -139,8 +139,14 @@
 #                        that must not be passed on: unsafe carries shell
 #                        syntax, escaped a \uXXXX escape, foreign another
 #                        package, and suffixed npm's command with a second
-#                        package after it. --check is refused outright: it asks
-#                        the npm registry, which no hook may do.
+#                        package after it.
+#   ACTUAL_TEST_LATEST   what `version --check` finds as the latest release:
+#                        latest_version, and update_available whenever it
+#                        differs from the installed version. Empty, both are
+#                        null, as when the registry didn't answer or update
+#                        checks are off. Unset, --check is refused (exit 3):
+#                        only a case that expects the daily check may ask the
+#                        registry. Without --check both are always null.
 #   ACTUAL_TEST_RELEASE_URL  the release_url `version --json` reports, by
 #                        default the release page actual-cli always names.
 #   ACTUAL_TEST_HANG     --version or version: that call prints its answer and
@@ -177,12 +183,16 @@ if [ "${1:-}" = "--version" ]; then
 fi
 
 if [ "${1:-}" = "version" ]; then
+  check=0
   for arg in "$@"; do
-    if [ "$arg" = "--check" ]; then
-      echo "fake actual: version --check asks the npm registry" >&2
-      exit 3
-    fi
+    [ "$arg" = "--check" ] && check=1
   done
+  # Only the preflight's daily check may ask the registry, so --check answers
+  # only a case that says what it finds, even nothing (ACTUAL_TEST_LATEST=).
+  if [ "$check" -eq 1 ] && [ -z "${ACTUAL_TEST_LATEST+set}" ]; then
+    echo "fake actual: version --check asks the npm registry" >&2
+    exit 3
+  fi
   case "${ACTUAL_TEST_CHANNEL:-}" in
     homebrew) channel='"homebrew"' command='"brew upgrade actual-software/actual/actual"' ;;
     npm)      channel='"npm"' command='"npm install -g @actualai/actual@latest"' ;;
@@ -196,9 +206,14 @@ if [ "${1:-}" = "version" ]; then
       echo "error: unrecognized subcommand 'version'" >&2
       exit 2 ;;
   esac
+  current="${ACTUAL_TEST_VERSION:-99.0.0-test}" latest=null update=null
+  if [ "$check" -eq 1 ] && [ -n "${ACTUAL_TEST_LATEST:-}" ]; then
+    latest="\"${ACTUAL_TEST_LATEST}\"" update=false
+    [ "$ACTUAL_TEST_LATEST" = "$current" ] || update=true
+  fi
   # Pretty-printed, as actual-cli's own documentation shows it.
-  printf '{\n  "current_version": "%s",\n  "latest_version": null,\n  "update_available": null,\n  "channel": %s,\n  "upgrade_command": %s,\n  "release_url": "%s"\n}\n' \
-    "${ACTUAL_TEST_VERSION:-99.0.0-test}" "$channel" "$command" \
+  printf '{\n  "current_version": "%s",\n  "latest_version": %s,\n  "update_available": %s,\n  "channel": %s,\n  "upgrade_command": %s,\n  "release_url": "%s"\n}\n' \
+    "$current" "$latest" "$update" "$channel" "$command" \
     "${ACTUAL_TEST_RELEASE_URL:-https://github.com/actual-software/actual-releases/releases/latest}"
   hang_if_asked version
   exit 0
