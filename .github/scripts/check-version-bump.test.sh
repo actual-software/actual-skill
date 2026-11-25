@@ -64,6 +64,17 @@ commit "$W/pr"
 expect "docs, tests and CI only: passes without a bump" 0 "No shipped plugin files changed"
 
 fresh 1.13.2
+echo x >"$W/pr/docs/café guide.md"
+commit "$W/pr"
+expect "a docs file with a non-ASCII name: passes" 0 "No shipped plugin files changed"
+
+fresh 1.13.2
+echo more >>"$W/pr/skills/actual/SKILL.md"
+set_version "$W/pr" 1.14
+commit "$W/pr"
+expect "a version that isn't three numbers: fails" 1 "such as 1.14.0 (it is \"1.14\")"
+
+fresh 1.13.2
 mkdir -p "$W/pr/scripts" && echo s >"$W/pr/scripts/helper.sh"
 commit "$W/pr"
 expect "a new top-level path counts as shipped: fails" 1 "scripts/helper.sh"

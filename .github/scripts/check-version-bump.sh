@@ -4,7 +4,7 @@
 #
 # Claude Code and Codex update an installed plugin only when `version` in its manifest
 # changes, so a shipped change merged without a higher version reaches nobody who already
-# has the plugin. See CONTRIBUTING.md, which lists the same paths as is_shipped.
+# has the plugin. See CONTRIBUTING.md.
 #
 # Run from a checkout of the pull request's head with history (fetch-depth: 0). Fetches
 # main each run, so a re-run compares against main as it is then, not as it was when the
@@ -33,9 +33,10 @@ main_ref=FETCH_HEAD
 base=$(git merge-base "$main_ref" HEAD)
 
 shipped=()
-while IFS= read -r path; do
+# NUL-separated, so git doesn't quote names with non-ASCII characters out of their pattern.
+while IFS= read -r -d '' path; do
   if is_shipped "$path"; then shipped+=("$path"); fi
-done < <(git diff --name-only --no-renames "$base" HEAD)
+done < <(git diff -z --name-only --no-renames "$base" HEAD)
 
 if [ "${#shipped[@]}" -eq 0 ]; then
   echo "No shipped plugin files changed, so the version doesn't need to change."
@@ -47,12 +48,14 @@ pr_version=$(jq -r '.version' "$MANIFEST")
 codex_version=$(jq -r '.version' "$CODEX_MANIFEST")
 
 semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-for v in "$main_version" "$pr_version"; do
-  if ! [[ $v =~ $semver ]]; then
-    echo "::error file=$MANIFEST::version \"$v\" isn't in MAJOR.MINOR.PATCH form."
-    exit 1
-  fi
-done
+if ! [[ $main_version =~ $semver ]]; then
+  echo "::error::main's version \"$main_version\" isn't three numbers, such as 1.14.0. Fix it on main first."
+  exit 1
+fi
+if ! [[ $pr_version =~ $semver ]]; then
+  echo "::error file=$MANIFEST::Set version to three numbers above main's $main_version, such as 1.14.0 (it is \"$pr_version\")."
+  exit 1
+fi
 
 # Succeeds when $1 > $2, compared as MAJOR.MINOR.PATCH numbers.
 newer() {

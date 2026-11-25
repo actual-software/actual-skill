@@ -22,6 +22,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Test the check
-        run: bash .github/scripts/check-version-bump.test.sh
+        run: |
+          if [ ! -f .github/scripts/check-version-bump.sh ]; then
+            echo "::error::Update this branch from main to run the Plugin version check."
+            exit 1
+          fi
+          bash .github/scripts/check-version-bump.test.sh
       - name: Compare the plugin version with main's
         run: bash .github/scripts/check-version-bump.sh
