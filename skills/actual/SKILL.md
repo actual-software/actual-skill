@@ -648,8 +648,9 @@ compares `actual --version` with it at `SessionStart` and on an older CLI asks t
 agent to offer the upgrade. The command comes from `actual version --json`, which
 names the one for the channel that installed the CLI without making a network
 request. The agent runs it on a yes, so it is passed on only when it is one of the
-two actual-cli uses, compared whole: `brew upgrade actual-software/actual/actual`, or
-`npm install -g @actualai/actual` with or without `@latest`. Any other answer, and a
+ones actual-cli uses, compared whole: `brew upgrade actual-software/actual/actual`
+with or without `brew update && ` before it, or `npm install -g @actualai/actual`
+with or without `@latest`. Any other answer, and a
 CLI older than that subcommand, gets both the npm and Homebrew commands, with a way
 to tell which one installed it, since running the other would leave a second copy on
 `PATH`. A CLI installed some other way gets the actual-releases page.

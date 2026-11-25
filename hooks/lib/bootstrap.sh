@@ -809,7 +809,10 @@ reply."}
 #
 # The agent runs this command on the user's yes, so it is passed on only when
 # it is one actual-cli names for its two channels, compared whole: a prefix
-# match would also pass `npm install -g @actualai/actual @someone/else`. A CLI
+# match would also pass `npm install -g @actualai/actual @someone/else`.
+# Homebrew's runs `brew update` first from actual-cli 0.18.0 on, since a tap
+# read up to a day stale can report the latest release as missing; older
+# CLIs name the bare `brew upgrade`, so both stay accepted. A CLI
 # installed some other way always gets the release page below, which is also
 # the release_url actual-cli reports.
 upgrade_instructions() {
@@ -821,6 +824,7 @@ upgrade_instructions() {
   fi
   case "$cmd" in
     'brew upgrade actual-software/actual/actual') ;;
+    'brew update && brew upgrade actual-software/actual/actual') ;;
     'npm install -g @actualai/actual'|'npm install -g @actualai/actual@latest') ;;
     *) cmd="" ;;
   esac

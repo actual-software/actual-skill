@@ -1131,9 +1131,10 @@ for v in "$GATES" "$BELOW"; do
   fi
 done
 
-for channel in homebrew npm npm-bare; do
+for channel in homebrew homebrew-update npm npm-bare; do
   case "$channel" in
     homebrew) want="brew upgrade actual-software/actual/actual" wrong="npm install" ;;
+    homebrew-update) want="brew update && brew upgrade actual-software/actual/actual" wrong="npm install" ;;
     npm)      want="npm install -g @actualai/actual@latest" wrong="brew upgrade" ;;
     npm-bare) want="npm install -g @actualai/actual" wrong="brew upgrade" ;;
   esac
@@ -1171,7 +1172,7 @@ fi
 
 # foreign and suffixed are made of plain characters, so only comparing the whole
 # command keeps them out; suffixed would pass a prefix match.
-for channel in unsafe escaped foreign suffixed; do
+for channel in unsafe escaped foreign suffixed chained; do
   st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW" ACTUAL_TEST_CHANNEL="$channel")
   ctx=$(session_context)
   if [ "$st" = "0" ] && ! printf '%s' "$ctx" | grep -q "injected" \
