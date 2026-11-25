@@ -30,7 +30,9 @@ In Claude Code, the Actual.AI Plugin checks your coding agent's work against the
    /reload-plugins
    ```
 
-2. Install the actual CLI, which runs the checks:
+2. Switch on auto-update, so you get each new version of the plugin without updating it yourself. It's off for this marketplace until you turn it on: run `/plugin`, open the **Marketplaces** tab, select `actual-cli-skills` and choose **Enable auto-update**. If you add the marketplace again later, auto-update turns off, so switch it back on. [Updates in Claude Code](https://docs.actual.ai/install-plugin#updates-in-claude-code).
+
+3. Install the actual CLI, which runs the checks:
 
    ```bash
    npm install -g @actualai/actual
@@ -38,9 +40,9 @@ In Claude Code, the Actual.AI Plugin checks your coding agent's work against the
 
    [Homebrew and other install options](docs/install.md).
 
-3. Optionally, run `actual login` to sign in to Actual AI. The checks, `actual rules` and drafting ADRs run signed out. Signed in, new ADRs go to Actual AI instead of `docs/adr/`.
+4. Optionally, run `actual login` to sign in to Actual AI. The checks, `actual rules` and drafting ADRs run signed out. Signed in, new ADRs go to Actual AI instead of `docs/adr/`.
 
-4. Add your team's architecture decisions. Signed out, `actual adr create` (CLI 0.17.0 or later; `new` is its alias) writes each one into `docs/adr/` as accepted, along with the rule file under `.actual/rules/` that the checks read:
+5. Add your team's architecture decisions. Signed out, `actual adr create` (CLI 0.17.0 or later; `new` is its alias) writes each one into `docs/adr/` as accepted, along with the rule file under `.actual/rules/` that the checks read:
 
    ```bash
    actual adr create "Use Postgres for storage" --policy "MUST: Services store relational data in Postgres."
