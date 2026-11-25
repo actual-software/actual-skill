@@ -30,7 +30,7 @@ In Claude Code, the Actual.AI Plugin checks your coding agent's work against the
    /reload-plugins
    ```
 
-2. Switch on auto-update, so you get each new version of the plugin without updating it yourself. It's off for this marketplace until you turn it on: run `/plugin`, open the **Marketplaces** tab, select `actual-cli-skills` and choose **Enable auto-update**. If you add the marketplace again later, auto-update turns off, so switch it back on. [Updates in Claude Code](https://docs.actual.ai/install-plugin#updates-in-claude-code).
+2. Switch on auto-update, so you get each new version of the plugin without updating it yourself. It's off for this marketplace until you turn it on: run `/plugin`, open the **Marketplaces** tab, select `actual-cli-skills` and choose **Turn on auto-update** (**Enable auto-update** in older versions of Claude Code). [Updates in Claude Code](https://docs.actual.ai/install-plugin#updates-in-claude-code).
 
 3. Install the actual CLI, which runs the checks:
 
