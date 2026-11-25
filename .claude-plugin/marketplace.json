@@ -2,7 +2,7 @@
   "name": "actual-cli-skills",
   "owner": {
     "name": "actual-software",
-    "email": "poile@actual.ai"
+    "email": "austin@actual.ai"
   },
   "metadata": {
     "description": "Align coding agents with your architecture decisions: the Actual.AI Plugin for Claude Code"
