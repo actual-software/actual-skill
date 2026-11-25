@@ -20,6 +20,12 @@
 # that. A CLI whose `--version` fails runs no check at all, so it gets an
 # interrupt of its own, offering a reinstall.
 #
+# A CLI that meets every minimum is then asked, at most once a day, whether a
+# newer release is out (newer_cli_check): `actual version --check --json`, the
+# one call here that reaches the network, through the CLI, bounded by
+# UPDATE_CHECK_TIMEOUT and silent when it fails. A newer release is offered at
+# a pause, after the message that governance is active, under both hosts.
+#
 # Registered for startup, resume, clear, compact, and fork so the reminder is
 # restored after compaction.
 #
@@ -111,6 +117,13 @@ if is_codex_host; then
   msg="Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against the plan a Plan-mode turn proposes, when that turn ends, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."
 else
   msg="Actual plan- and implementation-stage governance is active: ${count} rule file(s) in ${dir} will be checked against your implementation plan when you exit plan mode, and against your accumulated diff at the end of each turn. Set ACTUAL_PLAN_GATE=off to disable."
+fi
+# A CLI that meets every minimum may still be behind the latest release. Asked
+# last, right before the message goes out, because it stamps the day: nothing
+# that could still hold the hook up runs between that stamp and the output. A
+# CLI whose version could not be read in time is not asked again.
+if [ -z "$offer" ] && [ -n "$installed" ]; then
+  offer=$(newer_cli_check)
 fi
 if [ -n "$offer" ]; then
   msg="${msg}

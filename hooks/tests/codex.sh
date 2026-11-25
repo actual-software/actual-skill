@@ -144,11 +144,12 @@ phrasing_out=$(
     . "$1"
     for m in install_message upgrade_message reinstall_interrupt adr_v2_upgrade_message \
              "min_version_interrupt 0.6.0" "min_version_reminder 0.6.0" "min_version_offer 0.7.5" \
-             "codex_min_version_interrupt 0.12.0" "codex_min_version_reminder 0.12.0"; do
+             "codex_min_version_interrupt 0.12.0" "codex_min_version_reminder 0.12.0" \
+             "newer_cli_offer 0.16.0 0.17.0"; do
       emit_sessionstart_context "$($m)"
     done' _ "${HOOKS_DIR}/lib/bootstrap.sh")
 lines=$(printf '%s\n' "$phrasing_out" | grep -c '^{"hookSpecificOutput"')
-if [ "$lines" = 9 ] && ! printf '%s' "$phrasing_out" | grep -qE 'AskUserQuestion|interactive question tool|Bash tool'; then
+if [ "$lines" = 10 ] && ! printf '%s' "$phrasing_out" | grep -qE 'AskUserQuestion|interactive question tool|Bash tool'; then
   pass "under Codex no offer names AskUserQuestion, a question tool or the Bash tool"
 else
   fail "a Codex offer names a Claude Code tool" "$(printf '%s' "$phrasing_out" | grep -oE '.{40}(AskUserQuestion|question tool|Bash tool).{20}' | head -3)"
@@ -234,6 +235,18 @@ if [ "$st" = 0 ] && [[ $ctx == *"governance is active"* ]] && [[ $ctx != *"upgra
   pass "Codex SessionStart: a CLI with codex-hook skips the Claude Code version ladder"
 else
   fail "Codex preflight applied the Claude Code ladder" "ctx=$ctx"
+fi
+rm -f "$CX_CALLS"
+st=$(run_codex "$PF" "$CX_START" "$CX_REPO" ACTUAL_TEST_VERSION=0.16.0 ACTUAL_TEST_LATEST=0.17.0 ACTUAL_TEST_CHANNEL=homebrew ACTUAL_TEST_CALLS="$CX_CALLS")
+ctx=$(jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null)
+if [ "$st" = 0 ] && [ "$(out_keys)" = hookSpecificOutput ] && [[ $ctx == *"governance is active"* ]] \
+   && [[ $ctx == *"CLI is out: 0.17.0. The installed one is 0.16.0"* ]] \
+   && [[ $ctx == *"brew upgrade actual-software/actual/actual"* ]] && [[ $ctx == *"asking the user in your"* ]] \
+   && [[ $ctx != *AskUserQuestion* ]] && [[ $ctx != *"Bash tool"* ]] \
+   && grep -qx -- 'version --check --json' "$CX_CALLS"; then
+  pass "Codex SessionStart, a newer CLI release: the offer at a pause, in Codex's words"
+else
+  fail "Codex newer-release offer wrong" "st=$st ctx=$ctx calls=$(tr '\n' ';' < "$CX_CALLS")"
 fi
 st=$(run_codex "$PF" "$CX_START" "$CX_REPO" ACTUAL_TEST_MODE=cannot-run)
 if [ "$st" = 0 ] && grep -q 'does not run' "${WORK}/out"; then

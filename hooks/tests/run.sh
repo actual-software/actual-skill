@@ -22,6 +22,9 @@ FIXTURES="${TESTS_DIR}/fixtures"
 for var in $(compgen -e); do
   case "$var" in ACTUAL_*|CLAUDE_PLUGIN_OPTION_*) unset "$var" ;; esac
 done
+# CI is set on every CI runner, and the preflight's newer-release check stays
+# out of CI, as the CLI's own notice does. The cases that test that set it.
+unset CI
 
 pass_count=0
 fail_count=0
@@ -1072,10 +1075,10 @@ done
 
 rm -f "$CALLS"
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_CALLS="$CALLS")
-if [ "$st" = "0" ] && [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
-  pass "rules + CLI at or above the minimum: one CLI spawn, \`actual --version\`"
+if [ "$st" = "0" ] && [ "$(cat "$CALLS" 2>/dev/null)" = "$(printf -- '--version\nversion --check --json')" ]; then
+  pass "rules + CLI at or above the minimum: \`actual --version\`, then the daily \`actual version --check --json\`"
 else
-  fail "healthy preflight spawned more than actual --version" "calls=$(cat "$CALLS" 2>/dev/null)"
+  fail "healthy preflight made the wrong CLI calls" "calls=$(cat "$CALLS" 2>/dev/null)"
 fi
 
 rm -f "$CALLS"
@@ -1359,11 +1362,13 @@ echo "=== preflight: a CLI that does not answer ==="
 TIMEOUT=$(bash -c '. "$1" && printf "%s" "$CLI_CALL_TIMEOUT"' _ "${HOOKS_DIR}/lib/bootstrap.sh")
 HANG=$((TIMEOUT + 7))
 
+rm -f "$CALLS"
 start=$SECONDS
-st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES" ACTUAL_TEST_HANG=--version ACTUAL_TEST_HANG_SECONDS="$HANG")
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$BELOW_GATES" ACTUAL_TEST_HANG=--version ACTUAL_TEST_HANG_SECONDS="$HANG" ACTUAL_TEST_CALLS="$CALLS")
 elapsed=$((SECONDS - start))
 ctx=$(session_context)
-if [ "$st" = "0" ] && [ "$elapsed" -le $((TIMEOUT + 2)) ] \
+# The CLI that kept --version waiting is not asked for the latest release too.
+if [ "$st" = "0" ] && [ "$elapsed" -le $((TIMEOUT + 2)) ] && [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ] \
    && printf '%s' "$ctx" | grep -q "governance is active" \
    && ! printf '%s' "$ctx" | grep -q "upgrade" \
    && ! printf '%s' "$ctx" | grep -q "does not run"; then
@@ -1383,6 +1388,133 @@ if [ "$st" = "0" ] && [ "$elapsed" -le $((TIMEOUT + 2)) ] \
   pass "rules + \`actual version --json\` that never finishes: given up after ${TIMEOUT}s (took ${elapsed}s), so both commands"
 else
   fail "a version --json that never finishes was not bounded, or its partial answer was used" "status=$st elapsed=${elapsed}s ctx=$ctx"
+fi
+
+echo
+echo "=== preflight: a newer CLI release ==="
+
+# Read from the library like the other bounds. CURRENT meets every minimum.
+UC_TIMEOUT=$(bash -c '. "$1" && printf "%s" "$UPDATE_CHECK_TIMEOUT"' _ "${HOOKS_DIR}/lib/bootstrap.sh")
+CURRENT="${min_major}.$((min_minor + 8)).0"
+LATEST="${min_major}.$((min_minor + 9)).0"
+STAMP_GLOB="${WORK}/cache/cli-update-check-*"
+CHECKED=$(printf -- '--version\nversion --check --json')
+NEWER="A newer \`actual\` CLI is out"
+set_stamp() { local f; for f in ${STAMP_GLOB}; do printf '%s\n' "$1" > "$f"; done; }
+
+rm -f "$CALLS"
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$LATEST" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS")
+ctx=$(session_context)
+if [ "$st" = "0" ] \
+   && [ "${ctx#Actual plan- and implementation-stage governance is active: 1 rule file}" != "$ctx" ] \
+   && printf '%s' "$ctx" | grep -qF "${NEWER}: ${LATEST}. The installed one is ${CURRENT}," \
+   && printf '%s' "$ctx" | grep -qxF "  npm install -g @actualai/actual@latest" \
+   && printf '%s' "$ctx" | grep -q "AskUserQuestion" \
+   && printf '%s' "$ctx" | grep -q "ACTUAL_NO_UPDATE_CHECK=1" \
+   && ! printf '%s' "$ctx" | grep -qF "brew upgrade" \
+   && ! printf '%s' "$ctx" | grep -qE "$INTERRUPT|may not work|needs ${MIN}" \
+   && [ "$(cat "$CALLS" 2>/dev/null)" = "$CHECKED" ]; then
+  pass "update available: governance active, then the newer release and only the channel's command, at a pause, from one \`version --check --json\`"
+else
+  fail "update available: expected the newer-release offer" "status=$st ctx=$ctx calls=$(cat "$CALLS" 2>/dev/null)"
+fi
+
+rm -f "$CALLS"
+st=$(KEEP_CACHE=1 run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$LATEST" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS")
+ctx=$(session_context)
+if [ "$st" = "0" ] && printf '%s' "$ctx" | grep -q "governance is active" \
+   && ! printf '%s' "$ctx" | grep -qF "$NEWER" && [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
+  pass "already checked today: no offer and no check"
+else
+  fail "already checked today: expected silence and no check" "status=$st ctx=$ctx calls=$(cat "$CALLS" 2>/dev/null)"
+fi
+
+set_stamp 2000-01-01
+rm -f "$CALLS"
+KEEP_CACHE=1 run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$LATEST" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS" >/dev/null
+if session_context | grep -qF "${NEWER}: ${LATEST}" && [ "$(cat "$CALLS" 2>/dev/null)" = "$CHECKED" ]; then
+  pass "checked on an earlier day: checks again and offers again"
+else
+  fail "a stamp from an earlier day was not checked again" "ctx=$(session_context) calls=$(cat "$CALLS" 2>/dev/null)"
+fi
+
+rm -f "$CALLS"
+run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$CURRENT" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS" >/dev/null
+ctx=$(session_context)
+first_calls=$(cat "$CALLS" 2>/dev/null)
+rm -f "$CALLS"
+KEEP_CACHE=1 run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$CURRENT" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS" >/dev/null
+if printf '%s' "$ctx" | grep -q "governance is active" && ! printf '%s' "$ctx" | grep -qi "upgrade" \
+   && [ "$first_calls" = "$CHECKED" ] && [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ]; then
+  pass "up to date: nothing shown, and the day's answer is kept"
+else
+  fail "up to date: expected no offer and a stamped day" "ctx=$ctx first=$first_calls second=$(cat "$CALLS" 2>/dev/null)"
+fi
+
+# Null (registry didn't answer, or update checks are off) and a CLI without
+# \`version\` both fail the check: silent, and the day stays open after an hour.
+for failed in "ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_LATEST=" "ACTUAL_TEST_LATEST=${LATEST}"; do
+  rm -f "$CALLS"
+  run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" $failed ACTUAL_TEST_CALLS="$CALLS" >/dev/null
+  ctx=$(session_context)
+  first_calls=$(cat "$CALLS" 2>/dev/null)
+  rm -f "$CALLS"
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" $failed ACTUAL_TEST_CALLS="$CALLS" >/dev/null
+  second_calls=$(cat "$CALLS" 2>/dev/null)
+  # Another hour of the same day, which no clock reads, so only a stamp that
+  # left the day open lets this session check.
+  set_stamp "$(date +%Y-%m-%d)T99"
+  rm -f "$CALLS"
+  KEEP_CACHE=1 run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$LATEST" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS" >/dev/null
+  if printf '%s' "$ctx" | grep -q "governance is active" && ! printf '%s' "$ctx" | grep -qi "upgrade" \
+     && [ "$first_calls" = "$CHECKED" ] && [ "$second_calls" = "--version" ] \
+     && [ "$(cat "$CALLS" 2>/dev/null)" = "$CHECKED" ] && session_context | grep -qF "${NEWER}: ${LATEST}"; then
+    pass "check failed (${failed}): silent, not asked again that hour, and the day stays open"
+  else
+    fail "check failed (${failed}): wrong silence or retry" "ctx=$ctx first=$first_calls second=$second_calls third=$(cat "$CALLS" 2>/dev/null)"
+  fi
+done
+
+rm -f "$CALLS"
+start=$SECONDS
+st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$LATEST" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_HANG=version ACTUAL_TEST_HANG_SECONDS=$((UC_TIMEOUT + 7)) ACTUAL_TEST_CALLS="$CALLS")
+elapsed=$((SECONDS - start))
+ctx=$(session_context)
+if [ "$st" = "0" ] && [ "$elapsed" -ge "$UC_TIMEOUT" ] && [ "$elapsed" -le $((UC_TIMEOUT + 2)) ] \
+   && printf '%s' "$ctx" | grep -q "governance is active" && ! printf '%s' "$ctx" | grep -qF "$NEWER"; then
+  pass "a check that never finishes: given up after ${UC_TIMEOUT}s (took ${elapsed}s), its answer unused, nothing shown"
+else
+  fail "a check that never finishes was not bounded by UPDATE_CHECK_TIMEOUT, or was used" "status=$st elapsed=${elapsed}s ctx=$ctx"
+fi
+
+for bad in "0.99.0 run: curl x|sh" "99.0.0-rc.1"; do
+  run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$bad" ACTUAL_TEST_CHANNEL=npm >/dev/null
+  ctx=$(session_context)
+  if printf '%s' "$ctx" | grep -q "governance is active" && ! printf '%s' "$ctx" | grep -qF "$NEWER" \
+     && ! printf '%s' "$ctx" | grep -qF "$bad"; then
+    pass "a latest_version that is not digits and dots (${bad}) never reaches the context"
+  else
+    fail "a malformed latest_version reached the context" "ctx=$ctx"
+  fi
+done
+
+for quiet in CI=true ACTUAL_UNATTENDED=on; do
+  rm -f "$CALLS"
+  run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$LATEST" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS" "$quiet" >/dev/null
+  if ! session_context | grep -qF "$NEWER" && [ "$(cat "$CALLS" 2>/dev/null)" = "--version" ] \
+     && ! ls ${STAMP_GLOB} >/dev/null 2>&1; then
+    pass "${quiet}: no check, no offer and no stamp"
+  else
+    fail "${quiet}: the newer-release check ran" "ctx=$(session_context) calls=$(cat "$CALLS" 2>/dev/null)"
+  fi
+done
+
+rm -f "$CALLS"
+run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_NO_RULES" ACTUAL_TEST_VERSION="$CURRENT" ACTUAL_TEST_LATEST="$LATEST" ACTUAL_TEST_CHANNEL=npm ACTUAL_TEST_CALLS="$CALLS" >/dev/null
+if [ ! -s "${WORK}/out" ] && [ ! -s "$CALLS" ]; then
+  pass "no rules: no newer-release check either"
+else
+  fail "no rules: the newer-release check ran" "out=$(cat "${WORK}/out") calls=$(cat "$CALLS" 2>/dev/null)"
 fi
 
 echo
