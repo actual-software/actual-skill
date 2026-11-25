@@ -101,8 +101,8 @@ expect_reg "UserPromptSubmit" '.hooks.UserPromptSubmit[0].hooks[0]' turn-start.s
 expect_reg "PreToolUse:Edit|Write" '.hooks.PreToolUse[] | select(.matcher=="Edit|Write") | .hooks[0]' rules-brief.sh 3
 expect_reg "PostToolUse:Bash" '.hooks.PostToolUse[] | select(.matcher=="Bash") | .hooks[0]' rules-brief.sh 3
 expect_reg "PostToolUse:request_user_input" '.hooks.PostToolUse[] | select(.matcher=="request_user_input") | .hooks[0]' gate-answer.sh 10
-expect_reg "Stop[0]" '.hooks.Stop[0].hooks[0]' plan-gate.sh 180
-expect_reg "Stop[1]" '.hooks.Stop[0].hooks[1]' impl-gate.sh 180
+expect_reg "Stop[0]" '.hooks.Stop[0].hooks[0]' plan-gate.sh 200
+expect_reg "Stop[1]" '.hooks.Stop[0].hooks[1]' impl-gate.sh 200
 expect_reg "Stop[2]" '.hooks.Stop[0].hooks[2]' session-summary.sh 5
 
 if [ "$(cx_cmd '.hooks.SessionStart[0].matcher')" = "startup|resume|clear|compact|fork" ]; then
@@ -397,6 +397,21 @@ for gate in PG IG; do
     pass "Codex ${gate}: --codex-ask by default, not when unattended or with the dialog off"
   else
     fail "Codex ${gate} --codex-ask wrong" "default=$asked unattended=$unattended dialog_off=$dialog_off"
+  fi
+  rm -f "${CX_CAPTURE}"*
+  run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CX_CAPTURE" \
+    ACTUAL_GATE_RANK=off >/dev/null
+  rank_off=$(grep -cx -- '--no-rank' "${CX_CAPTURE}.argv" 2>/dev/null)
+  if [ "$rank_off" = 1 ]; then
+    pass "Codex ${gate}: --no-rank under ACTUAL_GATE_RANK=off"
+  else
+    fail "Codex ${gate} --no-rank wrong" "off=$rank_off"
+  fi
+  rank_default=$(rm -f "${CX_CAPTURE}"*; run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CX_CAPTURE" >/dev/null; grep -cx -- '--no-rank' "${CX_CAPTURE}.argv" 2>/dev/null)
+  if [ "$rank_default" = 0 ]; then
+    pass "Codex ${gate}: no --no-rank by default"
+  else
+    fail "Codex ${gate} passed --no-rank by default" "count=$rank_default"
   fi
   st=$(run_codex "$script" "$CX_STOP_PLAN" "$CX_REPO" ACTUAL_TEST_MODE=codex-stop)
   if [ "$st" = 0 ] && [ "$(out_keys)" = continue,stopReason ] && [ "$(jq -r .continue < "${WORK}/out")" = false ]; then

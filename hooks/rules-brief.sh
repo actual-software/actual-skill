@@ -113,7 +113,7 @@ fi
 
 # Resolve the repo root ONCE and derive everything else from it. The gates call
 # rules_present, rules_dir and resolve_repo_root separately and pay for three
-# `git rev-parse` spawns; on a 180-second plan or Stop boundary that is noise,
+# `git rev-parse` spawns; on a 200-second plan or Stop boundary that is noise,
 # but this hook runs on every single Read inside a 2-second timeout, and a git
 # spawn measured ~12ms here against a warm checkout. Resolve before the cd, for
 # the reason plan-gate.sh gives: root resolution reads cwd, so moving first

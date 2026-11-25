@@ -373,6 +373,16 @@ else
   fail "missing --claude-hook / --rules-dir" "argv=$(cat "${CAPTURE}.argv" 2>/dev/null)"
 fi
 
+# The CLI ranks before it judges unless told not to; ACTUAL_GATE_RANK=off says so.
+CAPTURE_NORANK="${WORK}/captured-norank.json"
+run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-file.json" "$REPO_WITH_RULES" \
+  ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_NORANK" ACTUAL_GATE_RANK=off >/dev/null
+if ! grep -Fxq -- '--no-rank' "${CAPTURE}.argv" && grep -Fxq -- '--no-rank' "${CAPTURE_NORANK}.argv"; then
+  pass "plan-gate: no --no-rank by default, --no-rank under ACTUAL_GATE_RANK=off"
+else
+  fail "plan-gate --no-rank wrong" "default=$(tr '\n' ' ' < "${CAPTURE}.argv") off=$(tr '\n' ' ' < "${CAPTURE_NORANK}.argv" 2>/dev/null)"
+fi
+
 CAPTURE_INJECTED="${WORK}/captured-injected.json"
 st=$(run_hook "${HOOKS_DIR}/plan-gate.sh" "${RESOLVED}/pretooluse-plan-injected.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_INJECTED")
 injected_plan=$(jq -r '.tool_input.plan // ""' "$CAPTURE_INJECTED" 2>/dev/null)
@@ -780,6 +790,15 @@ if grep -Fxq -- '--claude-hook' "${CAPTURE_STOP}.argv" \
   pass "CLI is invoked as impl-check --claude-hook --rules-dir pointing at the repo rules"
 else
   fail "missing --claude-hook / --rules-dir" "argv=$(cat "${CAPTURE_STOP}.argv" 2>/dev/null)"
+fi
+
+CAPTURE_STOP_NORANK="${WORK}/captured-stop-norank.json"
+run_hook "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES" \
+  ACTUAL_TEST_MODE=allow ACTUAL_TEST_CAPTURE="$CAPTURE_STOP_NORANK" ACTUAL_GATE_RANK=off >/dev/null
+if ! grep -Fxq -- '--no-rank' "${CAPTURE_STOP}.argv" && grep -Fxq -- '--no-rank' "${CAPTURE_STOP_NORANK}.argv"; then
+  pass "impl-gate: no --no-rank by default, --no-rank under ACTUAL_GATE_RANK=off"
+else
+  fail "impl-gate --no-rank wrong" "default=$(tr '\n' ' ' < "${CAPTURE_STOP}.argv") off=$(tr '\n' ' ' < "${CAPTURE_STOP_NORANK}.argv" 2>/dev/null)"
 fi
 
 echo
@@ -1726,7 +1745,7 @@ fi
 
 # This hook runs on every Read inside a 2-second timeout, so the repo root is
 # resolved once and reused. Each resolution spawns `git rev-parse`; calling
-# rules_present, rules_dir and resolve_repo_root separately (as the 180-second
+# rules_present, rules_dir and resolve_repo_root separately (as the 200-second
 # gates do) spawns three. Counted with a shim ahead of the real git on PATH.
 GITSHIM="${WORK}/gitshim"
 mkdir -p "$GITSHIM"
