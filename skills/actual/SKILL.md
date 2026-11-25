@@ -1106,3 +1106,4 @@ For anything not covered by this skill or its reference files, fetch the CLI doc
 - **ADR commands**: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_COMMANDS.md — writing and checking decisions with `actual adr`, and managing them in Actual AI
 - **LLM summary**: https://cli.actual.ai/llms.txt — concise machine-readable overview
 - **adr-bot and the Advisor**: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md — their full reference
+
