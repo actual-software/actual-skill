@@ -29,6 +29,13 @@ test "$(wc -l < "$CAPTURE.args" | tr -d ' ')" = 3
 test "$(sort -u "$CAPTURE.args")" = '__session-ended'
 test "$(cat "$CAPTURE.stdin")" = "$payload$payload$payload"
 rm "$CAPTURE.args" "$CAPTURE.stdin"
+codex_payload='{"session_id":"c1","transcript_path":"/private/rollout.jsonl","cwd":"/repo","hook_event_name":"SessionEnd","reason":"other"}'
+printf '%s' "$codex_payload" | env PATH="$WORK/bin:$PATH" ACTUAL_HOOK_HOST=codex bash "$ROOT/session-end.sh" > "$WORK/out" 2> "$WORK/err"
+test "$(cat "$CAPTURE.args")" = '__session-ended'
+test "$(cat "$CAPTURE.stdin")" = "$codex_payload"
+test ! -s "$WORK/out"
+test ! -s "$WORK/err"
+rm "$CAPTURE.args" "$CAPTURE.stdin"
 for setting in ACTUAL_PLAN_GATE=off ACTUAL_CLI_SUBPROCESS=1; do
   printf '%s' "$payload" | env PATH="$WORK/bin:$PATH" "$setting" bash "$ROOT/session-end.sh" > "$WORK/out" 2> "$WORK/err"
   test ! -e "$CAPTURE.args"
