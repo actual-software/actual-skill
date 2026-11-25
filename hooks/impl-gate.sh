@@ -121,9 +121,11 @@ cd "$repo_root" 2>/dev/null || true
 # Codex only: end the turn on a conflict and ask the user (see codex_ask_flag).
 ask=""
 is_codex_host && ask=$(codex_ask_flag)
-# Split on purpose: codex_ask_flag prints fixed flags.
+# ACTUAL_GATE_RANK=off skips the stage-2 rank before the judge (see rank_flag).
+rank=$(rank_flag)
+# Split on purpose: codex_ask_flag and rank_flag print fixed flags.
 # shellcheck disable=SC2086
-verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" $ask --rules-dir "$dir" 2>"$stderr_file")
+verdict=$(printf '%s' "$payload" | actual impl-check "$(hook_flag)" $ask $rank --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 take_telemetry_debug_line "$stderr_file"
 

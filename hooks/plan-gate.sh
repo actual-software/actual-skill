@@ -56,9 +56,10 @@ if is_codex_host; then
   cd "$repo_root" 2>/dev/null || true
 
   ask=$(codex_ask_flag)
-  # Split on purpose: codex_ask_flag prints fixed flags.
+  rank=$(rank_flag)
+  # Split on purpose: codex_ask_flag and rank_flag print fixed flags.
   # shellcheck disable=SC2086
-  verdict=$(printf '%s' "$payload" | actual plan-check --codex-hook $ask --rules-dir "$dir" 2>"$stderr_file")
+  verdict=$(printf '%s' "$payload" | actual plan-check --codex-hook $ask $rank --rules-dir "$dir" 2>"$stderr_file")
   status=$?
   case "$status" in
     0) forward_codex_reply "$verdict" "block notice stop" ;;
@@ -120,7 +121,11 @@ trap 'rm -f "$stderr_file"' EXIT
 repo_root=$(resolve_repo_root)
 cd "$repo_root" 2>/dev/null || true
 
-verdict=$(printf '%s' "$payload" | actual plan-check --claude-hook --rules-dir "$dir" 2>"$stderr_file")
+# ACTUAL_GATE_RANK=off skips the stage-2 rank before the judge (see rank_flag).
+rank=$(rank_flag)
+# Split on purpose: rank_flag prints a fixed flag or nothing.
+# shellcheck disable=SC2086
+verdict=$(printf '%s' "$payload" | actual plan-check --claude-hook $rank --rules-dir "$dir" 2>"$stderr_file")
 status=$?
 take_telemetry_debug_line "$stderr_file"
 

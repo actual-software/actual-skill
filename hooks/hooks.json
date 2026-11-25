@@ -34,7 +34,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/plan-gate.sh",
-            "timeout": 180,
+            "timeout": 200,
             "statusMessage": "Checking plan against architecture rules..."
           }
         ]
@@ -90,7 +90,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/impl-gate.sh",
-            "timeout": 180,
+            "timeout": 200,
             "statusMessage": "Checking implementation against architecture rules..."
           }
         ]

@@ -1178,6 +1178,17 @@ codex_ask_flag() {
   fi
 }
 
+# The flag that turns off a gate's stage-2 rank. A CLI that ranks in a hook
+# scores the candidate rules before its judge, whenever its first pass finds
+# more than it keeps, inside a 15-second deadline. ACTUAL_GATE_RANK=off leaves
+# the judge as the gate's only model call, to save that time and the model
+# quota. Every CLI the gates support takes --no-rank, and one too old to rank
+# in a hook never does there anyway.
+rank_flag() {
+  [ "${ACTUAL_GATE_RANK:-on}" = "off" ] && printf '%s' --no-rank
+  return 0
+}
+
 # --- Stop hook output (impl-gate.sh) ---
 #
 # Stop's decision control is NOT hookSpecificOutput.permissionDecision -- it is
