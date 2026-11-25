@@ -182,7 +182,7 @@ Pass `--status accepted` only for an ADR the person chose to accept. Without it,
 
 Create one ADR per command, and read each result before the next:
 
-- **Exit 0.** `adr_id` is the decision's id in Actual AI and `status` how it was saved. An accepted save also writes its rule file into `.actual/rules/` (`rule_file`), so the checks enforce it at once; when that write fails, the save still stands and `files_problem` says why. A draft governs once someone publishes it (`actual adr publish <id>`, or in the web app).
+- **Exit 0.** `adr_id` is the decision's id in Actual AI and `status` how it was saved. The decision is saved to Actual AI; this command writes no local file. For an accepted decision, Actual AI opens a pull request that writes its rule files. A draft governs once someone publishes it (`actual adr publish <id>`, or in the web app).
 - **Exit 1.** Nothing was saved: Actual AI refused the content and the error lists the reasons, or it looks like one the repository already has and the error names the match. Re-run with `--allow-duplicate` only when the person says to keep it after seeing that match.
 - **Exit 2.** The sign-in lapsed, there's no access to the organization, or no connected repository matches the checkout's `origin` remote. Hand the sign-in back to the person, or ask which connected repository to use and pass `--repo <name, owner/name or id>`.
 - **Exit 3, saying the decision may have been saved.** Don't run `create` again: a second run can save a second copy. Run `actual adr list --json` and look for the title first.
@@ -244,7 +244,7 @@ Signed in there's no file to check: Actual AI ran the save check as it saved the
 Tell the person what changed:
 
 - **Signed out.** The file in `docs/adr/` and its rule file in `.actual/rules/`, written, rewritten or removed, so the checks follow at once. Both are theirs to commit with the change.
-- **Signed in.** The decision's id and status in Actual AI. An accepted one's rule file in `.actual/rules/` is theirs to commit, or to delete before pulling the merge of Actual AI's sync pull request, which writes the same file. For a draft, say how to publish it.
+- **Signed in.** The decision's id and status in Actual AI. A create writes no local file: Actual AI's pull request writes an accepted decision's rule files. A rule file that `actual adr refresh` wrote into `.actual/rules/` is theirs to commit, or to delete before pulling the merge of Actual AI's sync pull request, which writes the same file. For a draft, say how to publish it.
 
 ## Failure and completion
 
