@@ -148,3 +148,4 @@ Signed in, when the survey found files under `docs/adr/` that Actual AI doesn't 
 - Git, an ADR listing or a session folder isn't available: say so and survey what you can. Never invent history, sessions or existing ADRs.
 
 The skill is done when nothing warranted an ADR and you said so, when the person declined, or when every picked ADR is created through adr-draft and reported.
+
