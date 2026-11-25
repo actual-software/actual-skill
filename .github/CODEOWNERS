@@ -1,0 +1,9 @@
+# Merging to main is the release, but installed copies update only when the
+# plugin version moves. So a pull request that changes the plugin manifests,
+# where the version lives, needs a review from one of these owners; every other
+# change can merge without one. See CONTRIBUTING.md.
+/.claude-plugin/ @austinborn @backlineint @benw5483 @audiojak @davidmiuraactualai @max-winderbaum
+/.codex-plugin/ @austinborn @backlineint @benw5483 @audiojak @davidmiuraactualai @max-winderbaum
+
+# Changing who owns what needs a review too.
+/.github/CODEOWNERS @austinborn @backlineint @benw5483 @audiojak @davidmiuraactualai @max-winderbaum

@@ -17,6 +17,8 @@ When the plugin gains another component either agent loads, such as an `agents/`
 
 Everything else can merge without a bump, because none of it changes what runs in a session. That covers the tests that sit under `hooks/` (`hooks/tests/` and the `*.test.ts` files) and the docs.
 
+A pull request that raises the version needs an approving review from a teammate, because [`.github/CODEOWNERS`](.github/CODEOWNERS) owns `.claude-plugin/` and `.codex-plugin/`. A pull request that leaves them alone can merge without one.
+
 ### Every Codex release asks users to trust the hooks again
 
 Codex runs a plugin's hooks only once the user has trusted them in `/hooks`, and the trust it records covers the plugin's whole content. After an update every hook shows as modified and stays off until the user reviews it again, whatever the release changed. So a release costs Codex users a review: group small changes into one release rather than shipping each on its own, and say in the release notes when hooks changed.
