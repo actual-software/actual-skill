@@ -20,7 +20,7 @@ FIXTURES="${TESTS_DIR}/fixtures"
 # agent shell's ACTUAL_UNATTENDED=on, or a saved plugin option (CLAUDE_PLUGIN_OPTION_*),
 # would otherwise reach every case that expects the default.
 for var in $(compgen -e); do
-  case "$var" in ACTUAL_*|CLAUDE_PLUGIN_OPTION_*) unset "$var" ;; esac
+  case "$var" in ACTUAL_*|CLAUDE_PLUGIN_OPTION_*|CLAUDE_PLUGIN_ROOT|CLAUDE_PLUGIN_DATA) unset "$var" ;; esac
 done
 
 pass_count=0
@@ -1287,6 +1287,125 @@ for src in resume clear compact fork nosource; do
 done
 
 echo
+echo "=== preflight: marketplace auto-update note (AK-1193) ==="
+
+# A marketplace install as Claude Code 2.1.331 lays it out: the plugin under
+# plugins/cache/<marketplace>/, the marketplace in user settings and
+# known_marketplaces.json with no autoUpdate until the user turns it on, and a
+# CLAUDE_PLUGIN_DATA directory the plugin keeps across versions.
+AU="${WORK}/auto-update"
+AU_CONFIG="${AU}/config"
+AU_ROOT="${AU_CONFIG}/plugins/cache/actual-cli-skills/actual-cli/1.13.2"
+mkdir -p "$AU_ROOT"
+au_settings() {  # $1: the entry's autoUpdate member, such as ', "autoUpdate": true', or empty
+  printf '{\n  "extraKnownMarketplaces": {\n    "actual-cli-skills": {\n      "source": {\n        "source": "github",\n        "repo": "actual-software/actual-skill"\n      }%s\n    }\n  },\n  "enabledPlugins": {\n    "actual-cli@actual-cli-skills": true\n  }\n}\n' "$1" > "${AU_CONFIG}/settings.json"
+}
+au_known() {
+  printf '{\n  "actual-cli-skills": {\n    "source": {\n      "source": "github",\n      "repo": "actual-software/actual-skill"\n    },\n    "installLocation": "%s/plugins/marketplaces/actual-cli-skills",\n    "lastUpdated": "2026-11-25T14:58:53.020Z"%s\n  }\n}\n' "$AU_CONFIG" "$1" > "${AU_CONFIG}/plugins/known_marketplaces.json"
+}
+# A fresh data directory per case unless AU_DATA is kept; the updater switches
+# are emptied so the caller's environment cannot decide a case.
+au_run() {
+  run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_MODE=allow \
+    CLAUDE_CONFIG_DIR="$AU_CONFIG" CLAUDE_PLUGIN_ROOT="$AU_ROOT" CLAUDE_PLUGIN_DATA="$AU_DATA" \
+    DISABLE_AUTOUPDATER= DISABLE_UPDATES= CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC= FORCE_AUTOUPDATE_PLUGINS= "$@"
+}
+au_ctx() { jq -r '.hookSpecificOutput.additionalContext // ""' < "${WORK}/out" 2>/dev/null; }
+au_noted() { au_ctx | grep -q 'Turn on auto-update'; }
+au_governed() { au_ctx | grep -q 'governance is active'; }
+au_case() {  # $1: expect note|silent, $2: label, rest: au_run arguments
+  local want=$1 label=$2 st
+  shift 2
+  st=$(au_run "$@")
+  if [ "$st" = "0" ] && au_governed && { if [ "$want" = note ]; then au_noted; else ! au_noted; fi; }; then
+    pass "$label"
+  else
+    fail "$label" "status=$st ctx=$(au_ctx)"
+  fi
+}
+
+au_settings ""; au_known ""
+AU_DATA="${AU}/data-off"
+au_case note "auto-update off on a fresh install: the note follows the governance message"
+if [ -f "${AU_DATA}/auto-update-notice-shown" ]; then
+  pass "the note stamps CLAUDE_PLUGIN_DATA"
+else
+  fail "the note left no stamp in CLAUDE_PLUGIN_DATA" "$(ls -la "$AU_DATA" 2>&1)"
+fi
+au_case silent "already told: the next session start says nothing"
+AU_ROOT="${AU_CONFIG}/plugins/cache/actual-cli-skills/actual-cli/1.14.0"
+mkdir -p "$AU_ROOT"
+au_case silent "already told: still nothing after the plugin updates to a new version folder"
+
+AU_DATA="${AU}/data-on-toggle"
+au_settings ', "autoUpdate": true'; au_known ', "autoUpdate": true'
+au_case silent "turned on in /plugin (both files): no note"
+if [ ! -e "${AU_DATA}/auto-update-notice-shown" ]; then
+  pass "with auto-update on, no stamp is written, so turning it off later still gets the note"
+else
+  fail "a stamp was written although auto-update is on" ""
+fi
+
+AU_DATA="${AU}/data-on-known"
+au_settings ""; au_known ', "autoUpdate": true'
+au_case silent "on in known_marketplaces.json alone (after the marketplace was added again): no note"
+
+AU_DATA="${AU}/data-on-settings"
+au_settings ', "autoUpdate": true'; rm -f "${AU_CONFIG}/plugins/known_marketplaces.json"
+au_case silent "on in user settings alone: no note"
+
+AU_DATA="${AU}/data-settings-off"
+au_settings ', "autoUpdate": false'; au_known ', "autoUpdate": true'
+au_case note "settings turn it off over known_marketplaces.json: the note"
+
+AU_DATA="${AU}/data-project-on"
+au_settings ""; au_known ""
+mkdir -p "${REPO_WITH_RULES}/.claude"
+printf '{"extraKnownMarketplaces":{"actual-cli-skills":{"source":{"source":"github","repo":"actual-software/actual-skill"},"autoUpdate":true}}}\n' \
+  > "${REPO_WITH_RULES}/.claude/settings.json"
+au_case silent "on in the project's settings: no note"
+rm -rf "${REPO_WITH_RULES}/.claude"
+
+AU_DATA="${AU}/data-plugin-dir"
+au_case silent "plugin loaded from a checkout (--plugin-dir), not the marketplace: no note" CLAUDE_PLUGIN_ROOT="${AU}/checkout"
+
+AU_DATA="${AU}/data-disabled"
+au_case silent "DISABLE_AUTOUPDATER hides the toggle: no note" DISABLE_AUTOUPDATER=1
+au_case silent "DISABLE_UPDATES hides the toggle: no note" DISABLE_UPDATES=1
+au_case silent "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC hides the toggle: no note" CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+printf '{\n  "numStartups": 3,\n  "autoUpdates": false\n}\n' > "${AU_CONFIG}/.claude.json"
+au_case silent "autoUpdates false in the global config hides the toggle: no note"
+AU_DATA="${AU}/data-native"
+printf '{\n  "installMethod": "native",\n  "autoUpdates": false,\n  "autoUpdatesProtectedForNative": true\n}\n' > "${AU_CONFIG}/.claude.json"
+au_case note "the native installer's autoUpdates false, which leaves the toggle shown: the note"
+printf '{\n  "numStartups": 3,\n  "autoUpdates": false\n}\n' > "${AU_CONFIG}/.claude.json"
+AU_DATA="${AU}/data-forced"
+au_case note "DISABLE_AUTOUPDATER and autoUpdates false, with FORCE_AUTOUPDATE_PLUGINS: the note" DISABLE_AUTOUPDATER=1 FORCE_AUTOUPDATE_PLUGINS=1
+rm -f "${AU_CONFIG}/.claude.json"
+
+# Codex runs preflight.sh too, from a cache path of the same shape, but has no
+# such toggle. Called directly, since the Codex preflight needs a CLI with
+# codex-hook before it gets this far.
+AU_DATA="${AU}/data-codex"
+au_codex=$(cd "$REPO_WITH_RULES" && env ACTUAL_HOOK_HOST=codex CLAUDE_CONFIG_DIR="$AU_CONFIG" CLAUDE_PLUGIN_ROOT="$AU_ROOT" \
+  CLAUDE_PLUGIN_DATA="$AU_DATA" DISABLE_AUTOUPDATER= DISABLE_UPDATES= CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC= FORCE_AUTOUPDATE_PLUGINS= \
+  bash -c '. "$1/lib/bootstrap.sh"; . "$1/lib/auto-update.sh"; auto_update_notice' _ "$HOOKS_DIR")
+au_claude=$(cd "$REPO_WITH_RULES" && env CLAUDE_CONFIG_DIR="$AU_CONFIG" CLAUDE_PLUGIN_ROOT="$AU_ROOT" \
+  CLAUDE_PLUGIN_DATA="${AU}/data-codex-control" DISABLE_AUTOUPDATER= DISABLE_UPDATES= CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC= FORCE_AUTOUPDATE_PLUGINS= \
+  bash -c '. "$1/lib/bootstrap.sh"; . "$1/lib/auto-update.sh"; auto_update_notice' _ "$HOOKS_DIR")
+if [ -z "$au_codex" ] && [ ! -e "${AU_DATA}/auto-update-notice-shown" ] && printf '%s' "$au_claude" | grep -q 'Turn on auto-update'; then
+  pass "Codex: no note, where the same install in Claude Code gets one"
+else
+  fail "Codex must get no auto-update note" "codex=$au_codex claude=$au_claude"
+fi
+
+printf 'not a directory' > "${AU}/data-file"
+AU_DATA="${AU}/data-file/sub"
+au_case silent "a CLAUDE_PLUGIN_DATA that cannot be written: no note, rather than one every session"
+AU_DATA=""
+au_case silent "no CLAUDE_PLUGIN_DATA: no note"
+
+echo
 echo "=== preflight: a CLI that cannot run ==="
 
 # 1 is npm's launcher without its platform package, or on a platform it does
@@ -2048,7 +2167,7 @@ fi
 echo
 echo "=== dependency hygiene ==="
 if grep -nE '(^|[^-_[:alnum:]])(jq|python3?|node)([^-_[:alnum:]]|$)' \
-     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/session-end.sh" "${HOOKS_DIR}/session-summary.sh" "${HOOKS_DIR}/turn-start.sh" "${HOOKS_DIR}/gate-answer.sh" "${HOOKS_DIR}/report-use-allow.sh" "${HOOKS_DIR}/lib/bootstrap.sh" \
+     "${HOOKS_DIR}/plan-gate.sh" "${HOOKS_DIR}/impl-gate.sh" "${HOOKS_DIR}/preflight.sh" "${HOOKS_DIR}/rules-brief.sh" "${HOOKS_DIR}/session-end.sh" "${HOOKS_DIR}/session-summary.sh" "${HOOKS_DIR}/turn-start.sh" "${HOOKS_DIR}/gate-answer.sh" "${HOOKS_DIR}/report-use-allow.sh" "${HOOKS_DIR}/lib/bootstrap.sh" "${HOOKS_DIR}/lib/auto-update.sh" \
      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' > "${WORK}/deps" 2>/dev/null; then
   fail "shipped hooks reference a JSON/runtime dependency" "$(cat "${WORK}/deps")"
 else

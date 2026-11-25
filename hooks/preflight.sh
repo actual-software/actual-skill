@@ -20,6 +20,9 @@
 # that. A CLI whose `--version` fails runs no check at all, so it gets an
 # interrupt of its own, offering a reinstall.
 #
+# Once per install, it also tells a Claude Code user whose marketplace
+# auto-update is off how to turn it on (lib/auto-update.sh).
+#
 # Registered for startup, resume, clear, compact, and fork so the reminder is
 # restored after compaction.
 #
@@ -36,6 +39,8 @@ set -uo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib/bootstrap.sh
 . "${SCRIPT_DIR}/lib/bootstrap.sh"
+# shellcheck source=lib/auto-update.sh
+. "${SCRIPT_DIR}/lib/auto-update.sh"
 
 # Read the envelope before any early exit, so the caller never sees SIGPIPE.
 envelope=$(cat)
@@ -116,5 +121,11 @@ if [ -n "$offer" ]; then
   msg="${msg}
 
 ${offer}"
+fi
+notice=$(auto_update_notice)
+if [ -n "$notice" ]; then
+  msg="${msg}
+
+${notice}"
 fi
 emit_sessionstart_context "$msg"
