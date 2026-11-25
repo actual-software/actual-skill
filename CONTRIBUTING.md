@@ -28,3 +28,16 @@ Raise the minor number for something new, such as a hook, a mod feature or a ski
 ### Check the number again before you merge
 
 Two pull requests that raise the version to the same number merge without a conflict, because git sees the same edit on both sides. The second to merge ships under a version people may already have. Anyone who updated between the two merges doesn't get it until the version moves again. So before you merge, compare your `version` with the one on `main`, and raise it again if `main` already has it.
+
+## Record each user-facing change in CHANGELOG.md
+
+[CHANGELOG.md](CHANGELOG.md) uses the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format, as actual-cli's does. Each pull request that the [documentation ADR](docs/adr/dd50a7e0-9a6a-4e55-abdf-8dd77dfba656-update-docs-actual-ai-with-every-user-facing-plugin-change.md) covers adds a line under `## [Unreleased]`, in an `Added`, `Changed` or `Fixed` group. The line says what changed for someone using the plugin and links the docs.actual.ai page that its docs pull request updates:
+
+```markdown
+### Changed
+- <What changed, for someone using the plugin>. See [<Page title>](https://docs.actual.ai/plugin/<page>)
+```
+
+A change that needs a newer Actual CLI names that minimum version in the same line.
+
+Merging to `main` is the release, so the commit that bumps the version also moves the lines under `## [Unreleased]` to a heading for the new version, `## [X.Y.Z] - YYYY-MM-DD`, dated the day it merges. When you raise the number again before merging, change the heading with it.

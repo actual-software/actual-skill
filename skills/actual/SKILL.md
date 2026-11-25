@@ -2,20 +2,21 @@
 name: actual
 description: >-
   Companion for the actual CLI's architecture governance. Runs and
-  troubleshoots plan-check and impl-check, which check a plan or a diff
-  against the ADR rules committed in .actual/rules/ (in Claude Code this
-  plugin runs them on every plan and every turn), the rules commands that
-  show which rules govern a file or a plan (rules ls, select, brief and
-  index), check-override, the human-only way to clear a denied rule,
+  troubleshoots plan-check and impl-check against ADR rules in .actual/rules/
+  (the Claude Code plugin checks every plan and turn), the commands that
+  find rules for a file or plan (rules ls, select, brief and index),
+  check-override, the human-only way to clear a denied rule,
   signing in with login, whoami and logout, and the actual adr commands
   for ADR files and decisions in Actual AI. Use when checking a plan or
   changes against the repository's architecture rules, finding the rules
   for a file, explaining a denial or how to override it, signing in to
-  Actual AI, listing or changing decisions, installing or upgrading the
-  CLI, configuring runners or models, or troubleshooting the CLI and its
-  hooks. Runs actual adr-bot (CLAUDE.md, AGENTS.md and Cursor rules
-  written from ADRs) and the advisor (org-scoped architecture Q&A) only
-  when the user asks for them.
+  Actual AI, installing or upgrading the CLI, configuring runners or
+  models, troubleshooting the CLI and its hooks, or finding and normalizing
+  ADRs in docs/adr/ written outside Actual (adr discover, adr normalize).
+  Runs actual adr-bot
+  (CLAUDE.md, AGENTS.md and Cursor rules written from ADRs) and the
+  advisor (org-scoped architecture Q&A) only when the user asks for them.
+
 ---
 
 # actual CLI Companion
@@ -63,6 +64,8 @@ release.
 | `actual rules brief` | The rules governing one file, as briefing delivers them | `--file <path>`, `--repo <path>`, `--rules-dir <dir>`, `--limit`, `--rules-per-decision`, `--max-chars`, `--min-score`; `--claude-hook` is the hooks' mode |
 | `actual rules index` | Build or refresh the scope index the checks and `rules select` prefilter with | `[PATH]`, `--rebuild`, `--clear`, `--json` |
 | `actual check-override` | A human explicitly clears a rule that `plan-check` or `impl-check` denied for a session. From inside the session the user picks an override in the dialog a denial raises, or types `/actual-cli:override <rule-id\|all> [code] [reason]` (a bare `/override` is an unknown command in Claude Code); the plugin's mod records either through `--claude-hook`, which refuses any process carrying `CLAUDECODE`, as every agent command does. The agent never invokes it. From a terminal it refuses to run non-interactively. `plan-check-override` still works as a backward-compatible alias | `--session <id>`, `--rule <doc-slug>::<rule-id>` (repeatable) — required unless `--claude-hook`; `--reason "<text>"` required through v0.12.0, optional in later builds (verify with `actual check-override --help`); `--reason-code <code>` (0.14.0 or later) sets the code, one of `misread`, `not-here`, `adr-wrong`, `adr-outdated` or `accepted`, and a `--reason` without it is stored as `other`; `--repo`/`--rules-dir` optional, defaulting to the current directory |
+| `actual adr discover` | Sort every ADR under `docs/adr/` by state: synced by Actual AI, managed by the CLI, stale, or written elsewhere and not yet governing. See ADRs Written Outside Actual | `--json`, `--no-cloud`, `--root <path>` |
+| `actual adr normalize` | Convert ADRs written elsewhere to Actual's format and write their `.actual/rules/` files, or re-index stale ones | `[FILE]...` or `--all`, `--dry-run`, `--extracted <json>`, `--answers <json>`, `--yes`, `--no-model`, `--legacy`, `--rename`, `--push`, `--json` |
 | `actual login` | Sign in to Actual AI (browser OAuth) | `--org <id>`, `--api-url <url>`, `--no-browser` |
 | `actual whoami` | Show the signed-in Actual AI identity (no network) | (none) |
 | `actual logout` | Sign out of Actual AI and clear local credentials | (none) |
@@ -148,7 +151,7 @@ actual adr create --all --json                         # signed in only, after t
 
 Signed out, it writes the decision doc (`docs/adr/<id>-<title>.md`) under a new local id, in the layout Actual AI's sync uses, and its rule file (`.actual/rules/cross-cutting-<topic>-<hash>.md`), so `plan-check` and `impl-check` enforce it at once. It runs Actual AI's save check first and writes nothing when the decision would be refused (exit `1`), and it never replaces a file. Every decision it writes is accepted: `--status draft` is refused (exit `2`, naming `actual login`), since drafts live in Actual AI. `--deciders` fills the Deciders line. `--file`, `--all`, `--repo` and `--allow-duplicate` need a sign-in and are refused with the reason (exit `2`). `--json`: `adr_id`, `status`, `decision_file` and `rule_file`.
 
-Signed in, it saves a decision to Actual AI from flags or from a file, and writes no file into `docs/adr/`. It refuses a file that doesn't parse, or flags with no `--policy`, before anything is sent, and refuses a likely duplicate of the repository's decisions (exit `1`) unless `--allow-duplicate` is passed. It then sends the decision once and never retries. Actual AI runs the save check as it saves, and a refusal exits `1` with the reasons. Flags save in one request, as the web app's New Decision does, and an accepted save also writes its rule file into `.actual/rules/`, so the checks enforce it at once. A file saves as a draft, as the web app's Import does, and `create` then sets the scope in the file's header and, for an accepted save, publishes it; if either step fails, the decision stays a saved draft and `scope_problem` or `publish_problem` gives the command that finishes the job. With `--file` it renames both files to the names the sync uses for the new id, so the next sync updates them in place. With no terminal it saves a draft unless `--status accepted` is passed; pass that only when the user asks. `--deciders` is refused signed in, so a decision saved to Actual AI has no Deciders line. On exit `3` saying the decision may have been saved, look with `actual adr list` before running `create` again. `--json`: `adr_id`, `status` as saved, `title`, `repo_unique_id`, `rule_file` when an accepted save from flags wrote one or `files_problem` when it couldn't, and with `--file`, `files.renamed` (`from`, `to`), `local_status_was` when the local status changed, and `scope_problem` or `publish_problem` when a step after the save failed.
+Signed in, it saves a decision to Actual AI from flags or from a file, and writes no file into `docs/adr/`. It refuses a file that doesn't parse, or flags with no `--policy`, before anything is sent, and refuses a likely duplicate of the repository's decisions (exit `1`) unless `--allow-duplicate` is passed. It then sends the decision once and never retries. Actual AI runs the save check as it saves, and a refusal exits `1` with the reasons. Flags save in one request, as the web app's New Decision does, and write no local file; for an accepted save, Actual AI opens a pull request that writes its rule files. A file saves as a draft, as the web app's Import does, and `create` then sets the scope in the file's header and, for an accepted save, publishes it; if either step fails, the decision stays a saved draft and `scope_problem` or `publish_problem` gives the command that finishes the job. With `--file` it renames both files to the names the sync uses for the new id, so the next sync updates them in place. With no terminal it saves a draft unless `--status accepted` is passed; pass that only when the user asks. `--deciders` is refused signed in, so a decision saved to Actual AI has no Deciders line. On exit `3` saying the decision may have been saved, look with `actual adr list` before running `create` again. `--json`: `adr_id`, `status` as saved, `title`, `repo_unique_id`, and with `--file`, `files.renamed` (`from`, `to`), `local_status_was` when the local status changed, and `scope_problem` or `publish_problem` when a step after the save failed.
 
 Signed in, `--all` sends every decision file under `docs/adr/` that Actual AI doesn't have yet, one at a time and keyed on its path, and nothing under `docs/adr/drafts/`. Those are the user's files. Never run it on your own, from the refresh's list or for any other reason: ask the user first, naming the files and saying they go to Actual AI, and run it only after a yes. A file goes when it has an ADR header and passes `actual adr check`, and one whose id is already one of the repository's decisions, whose status retires it (such as superseded, deprecated, rejected or deferred), or that looks like a decision already there is skipped and listed (`--allow-duplicate` sends a look-alike too). Each keeps the status its header names. A draft or proposed file becomes a draft, and an accepted one is accepted at once only with a person at the terminal; from an agent's shell it's saved as a draft until it's on the default branch, and the first run after that accepts it. The run stops at the first save whose outcome is unknown (exit `3`) and exits `1` when a file wasn't saved. `--json`: `files`, `saved`, `merged` (drafts accepted now that their files are on the default branch), `skipped`, `not_saved`, `stopped` and `not_sent` after a stop, and `other_files` (markdown with no ADR header). Signed out, `--all` sends nothing (exit `2`): the files need no sending, because `adr check` checks them and `adr refresh` writes the rule file of each normalized one.
 
@@ -841,6 +844,16 @@ The CLI auto-selects a runner from the model name:
 
 > For deep runner details (install steps, compatibility, special behaviors), see `references/runner-guide.md`.
 
+## ADRs Written Outside Actual
+
+The checks read only `.actual/rules/`, so an ADR a person or an agent writes into `docs/adr/` governs nothing until it has a rule file there. When the user asks to import, adopt, normalize or index existing ADRs, or asks why one isn't enforced, run `actual adr discover --json` and follow `references/adr-discovery.md`. In short:
+
+1. Discover, then preview with `actual adr normalize --all --dry-run --json`. Get the user's go-ahead before writing without `--dry-run`: it rewrites docs in place.
+2. For an ADR whose decision is prose, write the extraction yourself (`--extracted`, with `--no-model`) instead of letting the CLI start a model, keep the JSON files outside the repository, and flag your extracted policies for the user to review.
+3. Ask the user every question the report returns (`needs-input`) and pass the answers with `--answers`. Never answer for them, and use `--yes` only when they ask for an unattended run: it writes undecided decisions as drafts.
+
+Never normalize a `synced` or `synced-edited` decision, since Actual AI's sync owns it. Convert `legacy` (adr-bot) ADRs only on request. Ask before `--push`, which saves the decisions to the user's Actual AI organization. All of this works without an Actual AI account.
+
 ## adr-bot and the Advisor (on request)
 
 Run `actual adr-bot` only when the user asks for it, or for ADR guidance written into `CLAUDE.md`, `AGENTS.md` or Cursor rules, and `actual advisor` only when the user asks for the Advisor. Neither is part of governance. Their full reference is in the actual-cli docs: https://github.com/actual-software/actual-cli/blob/main/docs/ADR_BOT_AND_ADVISOR.md. The adr-bot workflow follows in Non-Interactive Environments, Sync Quick Reference and Operational Workflow: Running Sync, with its files in Output Formats.
@@ -1082,6 +1095,7 @@ Load these only when you need deeper detail on a specific topic:
 | `references/config-reference.md` | Looking up config keys, validation rules, dotpath syntax |
 | `references/output-formats.md` | Output format questions, managed section behavior, merge logic |
 | `references/platform-advisor.md` | Login/OAuth flow, scopes, multi-org selection, advisor poll model, org/repo scoping |
+| `references/adr-discovery.md` | Discovering ADRs in `docs/adr/` that Actual didn't write, normalizing and re-indexing them, the states `adr discover` reports |
 
 ## Additional Resources
 
