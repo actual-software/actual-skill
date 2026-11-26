@@ -364,11 +364,11 @@ These paths are reachable only by the platform commands; `adr-bot`'s `ApiError` 
 
 ### AdrNotAllowed
 
-**Cause**: The decision's state doesn't allow the change, so nothing was sent or written: publishing a decision that's already active, restoring one that isn't archived, changing an archived one, or signed out, updating a file that isn't accepted or that holds text `update` would drop.
+**Cause**: The decision's state doesn't allow the change, so nothing was written: publishing a decision that's already active, restoring one that isn't archived or that only the web app can restore, changing an archived one, or signed out, updating a file that isn't accepted or that holds text `update` would drop.
 
 **Display**: What the state allows, such as "Only a draft can be published; this decision is active." or "An archived decision can't be changed; `actual adr restore <id>` brings it back first."
 
-**Fix**: Run what the message names first, such as `actual adr restore <id>` or `actual adr publish <id>`, once the user agrees, or leave the decision as it is. For a file `update` won't write back, edit the file itself; the next `actual adr refresh` brings its rule file in step.
+**Fix**: Run what the message names first, such as `actual adr restore <id>` or `actual adr publish <id>`, once the user agrees, or leave the decision as it is. When the message names the web app, tell the user to restore the decision from the Archived list there. For a file `update` won't write back, edit the file itself; the next `actual adr refresh` brings its rule file in step.
 
 ### AdrNotSaved
 
