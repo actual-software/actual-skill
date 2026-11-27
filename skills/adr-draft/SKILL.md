@@ -114,7 +114,7 @@ Check the draft against these rules before you show it, and revise it if it fail
 
 ## Draft the change
 
-For an update, start from `actual adr show <id> --json`, which lists each policy with its id: signed out, the rule id its rule file prints (such as `R-0B6F-001`), and signed in, the policy's id in Actual AI. Build the change from these flags:
+For an update, start from `actual adr show <id> --json`, which lists each policy with its id: signed out, the rule id its rule file prints (such as `R-0B6F2A1E-001`), and signed in, the policy's id in Actual AI. Build the change from these flags:
 
 - `--title "<title>"`.
 - `--context "<point>"`, once per bullet. It replaces the whole context, and `--context ''` clears it.
