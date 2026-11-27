@@ -649,23 +649,20 @@ adr_refresh_step() {
 # clock builtin, so there it costs one `date`. A stamp that can't be read or
 # written never stops a refresh. A clock set back past the stamp starts over.
 adr_refresh_stamp() {
-  local every="${ACTUAL_ADR_REFRESH_EVERY:-$ADR_REFRESH_TOOL_EVERY_DEFAULT}" file now last="" dir tmp
+  local every="${ACTUAL_ADR_REFRESH_EVERY:-$ADR_REFRESH_TOOL_EVERY_DEFAULT}" file now last=""
   case "$every" in ''|*[!0-9]*) every=$ADR_REFRESH_TOOL_EVERY_DEFAULT ;; esac
   file=$(cache_path refreshed-at "$ADR_REFRESH_ROOT") || return 0
   printf -v now '%(%s)T' -1 2>/dev/null || now=$(date +%s 2>/dev/null) || return 0
   case "$now" in ''|*[!0-9]*) return 0 ;; esac
   if [ "$1" = tool ] && [ "$every" -gt 0 ] && [ -f "$file" ]; then
     IFS= read -r last <"$file" 2>/dev/null || true
+    # A leading zero would read as octal in $(( )); this hook never writes one.
     case "$last" in
-      ''|*[!0-9]*) ;;
+      ''|*[!0-9]*|0*) ;;
       *) [ "$last" -le "$now" ] && [ $((now - last)) -lt "$every" ] && return 1 ;;
     esac
   fi
-  dir=${file%/*}
-  { mkdir -p "$dir" && chmod 700 "$dir"; } 2>/dev/null
-  [ -O "$dir" ] || return 0
-  tmp="$file.$$"
-  { printf '%s\n' "$now" >"$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  store_cli_verdict "$file" "$now"
   return 0
 }
 
@@ -776,8 +773,13 @@ adr_refresh_news() {
   done
 
   if [ "$with_problems" = problems ] && [ "$ADR_REFRESH_STATE" = ran ]; then
+    # Only what the person can act on: a sign-in to redo, a repository that
+    # isn't connected. A slow Actual AI or a renewal in the background mends
+    # itself, and the rule files stay as they were meanwhile.
     while IFS= read -r item; do
-      [ -n "$item" ] && problems="${problems}\\n- ${item}"
+      case "$item" in
+        *'`actual login`'*|'No connected repository'*) problems="${problems}\\n- ${item}" ;;
+      esac
     done <<EOF
 $(json_string_array_items "$ADR_REFRESH_REPORT" problems)
 EOF

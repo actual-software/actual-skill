@@ -2954,7 +2954,7 @@ fi
 # Both sides of the window's edge, and stamps that must never stop a refresh.
 now=$(date +%s)
 for case in "$((now - 290)):0:ten seconds inside the window" "$((now - 310)):1:ten seconds past the window" \
-            "garbage:1:a stamp that isn't a time" "$((now + 3600)):1:a stamp in the future (a clock set back)"; do
+            "garbage:1:a stamp that isn't a time" "0999:1:a stamp with a leading zero" "$((now + 3600)):1:a stamp in the future (a clock set back)"; do
   stamp=${case%%:*} rest=${case#*:}
   want=${rest%%:*} label=${rest#*:}
   stamp_at "$stamp"; rm -f "$RCALLS"
@@ -3050,11 +3050,13 @@ else
 fi
 st=$(run_hook "${HOOKS_DIR}/preflight.sh" "${RESOLVED}/sessionstart-startup.json" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=problems)
 ctx=$(session_context)
-if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -qF -- "- Actual AI didn't answer within 1000 ms" \
-   && printf '%s' "$ctx" | grep -qF -- "- Your sign-in is being renewed in the background"; then
-  pass "session start relays the refresh's problems"
+if [ "$st" = 0 ] && printf '%s' "$ctx" | grep -qF -- "- Actual AI turned down your sign-in's renewal" \
+   && printf '%s' "$ctx" | grep -qF -- 'Sign in again with `actual login`.' \
+   && ! printf '%s' "$ctx" | grep -qF -- "didn't answer within" \
+   && ! printf '%s' "$ctx" | grep -qF -- "being renewed in the background"; then
+  pass "session start relays the refresh's problems a person can act on, and only those"
 else
-  fail "session start dropped the refresh's problems" "status=$st ctx=$ctx"
+  fail "session start must relay only the problems a person can act on" "status=$st ctx=$ctx"
 fi
 run_hook "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=problems >/dev/null
 if [ ! -s "${WORK}/out" ]; then

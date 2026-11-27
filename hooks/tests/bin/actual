@@ -273,7 +273,7 @@ if [ "$subcommand" = "adr" ] && [ "${2:-}" = "refresh" ]; then
         '"1 file under docs/adr/ isn'"'"'t normalized, so it gets no rule file:\n  docs/adr/0002 \"draft\".md: It has no ADR header.\nNormalize each one: a version 2 ADR header naming its id, and a body that passes `actual adr check`, as `actual adr create` writes."' '' ;;
     problems)
       report '' false '' null \
-        "${nl}    \"Actual AI didn't answer within ${ms} ms, so the rule files were left as they are.\",${nl}    \"Your sign-in is being renewed in the background, so the rule files were left as they are until the next refresh.\"${nl}  " ;;
+        "${nl}    \"Actual AI didn't answer within ${ms} ms, so the rule files were left as they are.\",${nl}    \"Your sign-in is being renewed in the background, so the rule files were left as they are until the next refresh.\",${nl}    \"Actual AI turned down your sign-in's renewal, so the rule files were left as they are. Sign in again with \`actual login\`.\"${nl}  " ;;
     old)
       printf "error: unrecognized subcommand 'refresh'\n\n  tip: a similar subcommand exists: 'restore'\n\nUsage: actual adr <COMMAND>\n\nFor more information, try '--help'.\n" >&2
       exit 2 ;;

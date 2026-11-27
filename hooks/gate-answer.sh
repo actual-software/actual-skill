@@ -37,7 +37,8 @@ fi
 adr_refresh_first tool
 
 # A picker the agent showed for some other reason is not ours, and costs no
-# CLI spawn: only the gates' question ids are answered.
+# CLI spawn beyond the throttled refresh: only the gates' question ids are
+# answered.
 case "$payload" in
   *actual_choice_*|*actual_reason_*) ;;
   *) exit 0 ;;
