@@ -80,6 +80,7 @@ run_hook() {
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
+        ACTUAL_ADR_REFRESH_EVERY=0 \
         "$@" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
@@ -119,6 +120,7 @@ run_hook_cwd() {
         PATH="${TESTS_DIR}/bin:${PATH}" \
         CLAUDE_PROJECT_DIR="$project_dir" \
         ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
+        ACTUAL_ADR_REFRESH_EVERY=0 \
         "$@" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
@@ -2923,6 +2925,65 @@ if [ "$(refreshes)" = 1 ] && ! ls "${WORK}"/cache/adr-refresh-* >/dev/null 2>&1;
   pass "a prompt's recheck that finds the command drops the cached answer, so tool calls refresh again"
 else
   fail "a CLI upgraded in place kept its cached 'no refresh'" "refreshes=$(refreshes)"
+fi
+
+# The throttle: a tool call's hook refreshes at most once a window per
+# checkout (300 s by default), counted from the last refresh any hook started
+# there; a prompt, session start, plan exit and Stop refresh every time.
+READ_PAYLOAD="${RESOLVED}/posttooluse-read-governed.json"
+throttled() {
+  local script="$1" payload="$2" dir="$3"
+  shift 3
+  KEEP_CACHE=1 run_hook "$script" "$payload" "$dir" ACTUAL_ADR_REFRESH_EVERY= ACTUAL_TEST_CALLS="$RCALLS" "$@" >/dev/null
+}
+stamp_at() { printf '%s\n' "$1" > "$(ls "${WORK}"/cache/refreshed-at-*)"; }
+rm -rf "${WORK}/cache"; rm -f "$RCALLS"
+throttled "${HOOKS_DIR}/rules-brief.sh" "$READ_PAYLOAD" "$REPO_WITH_RULES"
+throttled "${HOOKS_DIR}/rules-brief.sh" "${RESOLVED}/pretooluse-edit-governed.json" "$REPO_WITH_RULES"
+throttled "${HOOKS_DIR}/report-use-allow.sh" "${WORK}/refresh-bash.json" "$REPO_WITH_RULES"
+after_tools=$(refreshes)
+throttled "${HOOKS_DIR}/turn-start.sh" "$TS_PAYLOAD" "$REPO_WITH_RULES"
+throttled "${HOOKS_DIR}/impl-gate.sh" "${RESOLVED}/stop-turn.json" "$REPO_WITH_RULES"
+after_turns=$(refreshes)
+throttled "${HOOKS_DIR}/rules-brief.sh" "$READ_PAYLOAD" "$REPO_WITH_RULES"
+if [ "$after_tools" = 1 ] && [ "$after_turns" = 3 ] && [ "$(refreshes)" = 3 ]; then
+  pass "one refresh across a Read, an Edit and a Bash call; a prompt and a Stop refresh anyway, and the Read after them doesn't"
+else
+  fail "the tool-call hooks must share one window that turn hooks ignore and restart" "after_tools=${after_tools} after_turns=${after_turns} refreshes=$(refreshes)"
+fi
+# Both sides of the window's edge, and stamps that must never stop a refresh.
+now=$(date +%s)
+for case in "$((now - 290)):0:ten seconds inside the window" "$((now - 310)):1:ten seconds past the window" \
+            "garbage:1:a stamp that isn't a time" "$((now + 3600)):1:a stamp in the future (a clock set back)"; do
+  stamp=${case%%:*} rest=${case#*:}
+  want=${rest%%:*} label=${rest#*:}
+  stamp_at "$stamp"; rm -f "$RCALLS"
+  throttled "${HOOKS_DIR}/rules-brief.sh" "$READ_PAYLOAD" "$REPO_WITH_RULES"
+  if [ "$(refreshes)" = "$want" ]; then
+    pass "throttle, ${label}: ${want} refresh"
+  else
+    fail "throttle, ${label}: expected ${want} refresh" "refreshes=$(refreshes)"
+  fi
+done
+# A window counts from the start of a refresh that failed, so a hung CLI or an
+# unreachable Actual AI isn't waited on again at the next tool call.
+rm -rf "${WORK}/cache"; rm -f "$RCALLS"
+throttled "${HOOKS_DIR}/rules-brief.sh" "$READ_PAYLOAD" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=hang
+throttled "${HOOKS_DIR}/rules-brief.sh" "$READ_PAYLOAD" "$REPO_WITH_RULES" ACTUAL_TEST_REFRESH=hang ACTUAL_TEST_MODE=brief
+briefed=$(rb_ctx)
+if [ "$(refreshes)" = 1 ] && [ -n "$briefed" ]; then
+  pass "a refresh that hung starts the window too, and the Reads still brief"
+else
+  fail "a hung refresh must start the window" "refreshes=$(refreshes) briefed=${briefed}"
+fi
+# Another checkout keeps a window of its own, and 0 refreshes on every call.
+rm -f "$RCALLS"
+throttled "${HOOKS_DIR}/report-use-allow.sh" "${WORK}/refresh-bash.json" "$RREPO"
+throttled "${HOOKS_DIR}/rules-brief.sh" "$READ_PAYLOAD" "$REPO_WITH_RULES" ACTUAL_ADR_REFRESH_EVERY=0
+if [ "$(refreshes)" = 2 ]; then
+  pass "a checkout's window doesn't hold back another's, and ACTUAL_ADR_REFRESH_EVERY=0 refreshes every call"
+else
+  fail "the window must be per checkout, and 0 must turn it off" "refreshes=$(refreshes)"
 fi
 
 # News: handed to the agent at a session start or a prompt, kept until then

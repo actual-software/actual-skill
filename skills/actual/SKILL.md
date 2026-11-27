@@ -271,6 +271,12 @@ run from a terminal, as a review does, judges the rule files as they are.
   "unrecognized subcommand", cached per binary: one call, then none until the binary
   changes or a session start or prompt asks again. The hooks then behave as they did
   before the step existed.
+- **Throttle.** A tool call's hook (`rules-brief.sh`, `report-use-allow.sh`, Codex's
+  `gate-answer.sh`) refreshes at most once every `ACTUAL_ADR_REFRESH_EVERY` seconds
+  (300 by default, 0 for every call) per checkout, counted from the last refresh any
+  hook started there, in a stamp under `~/.cache/actual-skill` written before the CLI
+  runs, so a slow or unreachable Actual AI is waited on once per window. Session
+  start, prompts, plan exit and Stop refresh every time and restart the window.
 - `ACTUAL_ADR_REFRESH=off` turns the step off on its own.
 
 ### Codex hooks
@@ -525,6 +531,7 @@ place that distinction is applied.
 | `ACTUAL_CODEX_PICKER=off` | Codex only: keep the gates from passing `--codex-picker`, so a conflict always ends the turn with the typed choices, even where the agent could show a picker |
 | `ACTUAL_UNATTENDED=on` | Unattended mode, for an agent nobody is watching: `plan-approval.sh` approves every plan that reaches Claude Code's plan dialog, which is a plan `plan-gate.sh` passed or could not check, in any repository; the mod's denial dialog is off whatever `ACTUAL_OVERRIDE_DIALOG` says. In Codex it leaves out `--codex-ask` the same way, so a conflict sends the agent back rather than waiting for someone. Off by default; `=off` forces it off over the `unattended` row. Never set it where a person reviews plans |
 | `ACTUAL_ADR_REFRESH=off` | Turn off the ADR refresh step alone: no hook runs `actual adr refresh`, so the checks and briefing read `.actual/rules/` as it stands, as a run of the checks from a terminal does. On by default |
+| `ACTUAL_ADR_REFRESH_EVERY=<seconds>` | How far apart a tool call's hook (Read, Edit, Write, Bash) refreshes per checkout. Session start, prompts, plan exit and Stop refresh every time. Default 300; 0 refreshes on every call |
 | `ACTUAL_RULES_BRIEF=off` | Disable briefing alone — both the `Read` hook and the mod, and in Codex the briefing hook and the summary line — while `plan-gate.sh` and `impl-gate.sh` keep running. Briefing is the only path that fires on every read, so it is the only one whose cost is worth dropping on its own |
 | `ACTUAL_CLI_SUBPROCESS=1` | Set by actual-cli on the nested `claude -p` it runs as its conformance judge. Every hook and the mod exit silently when it is set: without it the judge's own `Stop` hook reruns `impl-check` and recurses, and briefing would inject rules into the judge's prompt that it was never asked to weigh |
 | `ACTUAL_HOOK_DEBUG=1` | Report the ADR refresh step's outcome each time `rules-brief.sh` runs (`actual-rules-brief: refresh state=… exit=… root=…`), and what briefing did, on stderr for the hook and in the transcript plus the model's context for the mod, which also adds a note when it does not brief: the resolved rules directory, the CLI's exit status and stderr, the reason a reply was dropped, and the characters injected so far against the session cap. Diagnostic only — it never changes a forwarding decision |

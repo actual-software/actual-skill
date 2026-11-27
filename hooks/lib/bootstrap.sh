@@ -541,8 +541,18 @@ ADR_REFRESH_TOOL_LIMIT=1
 ADR_REFRESH_TURN_MS=1000
 ADR_REFRESH_TURN_LIMIT=2
 
+# A tool call's hook refreshes at most once every ACTUAL_ADR_REFRESH_EVERY seconds
+# (300 by default; 0 is every call) per checkout, counted from the last refresh
+# any hook started there, so an agent's few hundred tool calls a session cost a
+# handful of refreshes. A session start, prompt, plan exit and Stop refresh every
+# time, so the checks always read rule files as fresh as Actual AI's answer. The
+# stamp is written before the CLI runs: a slow or unreachable Actual AI is waited
+# on once per window, and hooks running at once don't all refresh.
+ADR_REFRESH_TOOL_EVERY_DEFAULT=300
+
 # What the last adr_refresh_step did: ran, off (a switch, or ACTUAL_RULES_DIR
-# outside a .actual/rules/ the refresh writes), no-cli, unsupported or failed.
+# outside a .actual/rules/ the refresh writes), no-cli, unsupported, recent (a
+# tool call's hook within the window above) or failed.
 ADR_REFRESH_STATE=""
 # The CLI's JSON report when it ran, trimmed.
 ADR_REFRESH_REPORT=""
@@ -601,6 +611,9 @@ adr_refresh_step() {
     [ "$verdict" = unsupported ] && return 1
   fi
 
+  ADR_REFRESH_STATE=recent
+  adr_refresh_stamp "$tier" || return 1
+
   ADR_REFRESH_STATE=failed
   ms=$ADR_REFRESH_TURN_MS limit=$ADR_REFRESH_TURN_LIMIT
   if [ "$tier" = tool ]; then
@@ -627,6 +640,32 @@ adr_refresh_step() {
   ADR_REFRESH_STATE=ran
   # A cached "no refresh" this run disproves goes, so no later hook skips it.
   [ -n "$file" ] && [ -f "$file" ] && rm -f "$file" 2>/dev/null
+  return 0
+}
+
+# Fails when tier $1 is tool and a hook started a refresh of this checkout less
+# than the window above ago; otherwise records that one starts now. The stamp
+# holds the start in epoch seconds, read with a builtin; bash 3.2 (macOS) has no
+# clock builtin, so there it costs one `date`. A stamp that can't be read or
+# written never stops a refresh. A clock set back past the stamp starts over.
+adr_refresh_stamp() {
+  local every="${ACTUAL_ADR_REFRESH_EVERY:-$ADR_REFRESH_TOOL_EVERY_DEFAULT}" file now last="" dir tmp
+  case "$every" in ''|*[!0-9]*) every=$ADR_REFRESH_TOOL_EVERY_DEFAULT ;; esac
+  file=$(cache_path refreshed-at "$ADR_REFRESH_ROOT") || return 0
+  printf -v now '%(%s)T' -1 2>/dev/null || now=$(date +%s 2>/dev/null) || return 0
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac
+  if [ "$1" = tool ] && [ "$every" -gt 0 ] && [ -f "$file" ]; then
+    IFS= read -r last <"$file" 2>/dev/null || true
+    case "$last" in
+      ''|*[!0-9]*) ;;
+      *) [ "$last" -le "$now" ] && [ $((now - last)) -lt "$every" ] && return 1 ;;
+    esac
+  fi
+  dir=${file%/*}
+  { mkdir -p "$dir" && chmod 700 "$dir"; } 2>/dev/null
+  [ -O "$dir" ] || return 0
+  tmp="$file.$$"
+  { printf '%s\n' "$now" >"$tmp" && mv -f "$tmp" "$file"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null
   return 0
 }
 

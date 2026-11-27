@@ -25,6 +25,7 @@ run_codex() {
         PATH="${TESTS_DIR}/bin:${PATH}" \
         ACTUAL_HOOK_CACHE_DIR="${WORK}/cache" \
         ACTUAL_HOOK_HOST=codex \
+        ACTUAL_ADR_REFRESH_EVERY=0 \
         "$@" \
         bash "$script" < "$payload" > "${WORK}/out" 2> "${WORK}/err" )
   status=$?
