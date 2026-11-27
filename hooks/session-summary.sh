@@ -26,9 +26,15 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
 
+is_codex_host || exit 0
+
+# The CLI's ADR refresh runs first, as in every Codex hook (lib/bootstrap.sh).
+# Its news waits for the next prompt, since this reply takes only its line.
+adr_refresh_first turn
+
 # The line reports briefing, so briefing's own switch silences it as well as
 # the master one.
-if ! is_codex_host || [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] \
+if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] \
    || [ "${ACTUAL_RULES_BRIEF:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi

@@ -218,6 +218,80 @@ for arg in "$@"; do
 done
 
 subcommand="${1:-}"
+# `actual adr refresh`, which every hook but session-end.sh runs first. Like the
+# real CLI it prints a pretty-printed JSON report under --json, with `message`
+# null when nothing is news, and exits 0 whatever happened. ACTUAL_TEST_REFRESH
+# picks the report or the failure:
+#   quiet (unset)  the steady state: nothing changed, message null
+#   news           a rule file written, said once
+#   write          news, and the rule file really written under --root, so a
+#                  hook can be seen governing from the call that wrote it
+#   bootstrap      no decision governs: the adr-bootstrap recommendation
+#   quoted         an unnormalized list whose message holds quotes, backticks
+#                  and newlines, escaped as JSON escapes them
+#   problems       message null, and two problems, as a slow API leaves
+#   old            0.14.0 to 0.16.0: clap's "unrecognized subcommand 'refresh'"
+#   no-adr         older still: no `adr` at all
+#   usage          a flag this CLI refuses, an exit 2 that is not the command
+#   hang           answers after ACTUAL_TEST_HANG_SECONDS (default 10)
+#   crash / garbage  a panic / non-JSON on stdout at exit 0
+if [ "$subcommand" = "adr" ] && [ "${2:-}" = "refresh" ]; then
+  shift 2
+  root="" ms=1000
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --root) root="${2:-}"; shift ;;
+      --timeout-ms) ms="${2:-}"; shift ;;
+    esac
+    shift
+  done
+  if [ -n "${ACTUAL_TEST_CAPTURE:-}" ]; then
+    printf '%s\n' "$root" > "${ACTUAL_TEST_CAPTURE}.refresh-root"
+  fi
+  # $1 the written list, $2 unnormalized_changed, $3 extra lines before the
+  # message (the recommendation), $4 the message as JSON, $5 the problems list.
+  nl=$'\n'
+  report() {
+    printf '{\n  "mode": "signed-out",\n  "written": [%s],\n  "rewritten": [],\n  "removed": [],\n  "kept": false,\n  "unnormalized": [],\n  "unnormalized_changed": %s,\n%s  "message": %s,\n  "problems": [%s]\n}\n' \
+      "$1" "$2" "$3" "$4" "$5"
+  }
+  wrote='Updated .actual/rules/ from docs/adr/: wrote 1 rule file.'
+  written="${nl}    \".actual/rules/fake-adr-0001.md\"${nl}  "
+  case "${ACTUAL_TEST_REFRESH:-quiet}" in
+    quiet) report '' false '' null '' ;;
+    news) report "$written" false '' "\"${wrote}\"" '' ;;
+    write)
+      mkdir -p "${root}/.actual/rules"
+      printf '# Fake ADR 0001\n\n### Rules\n**R-001** MUST: all persistence goes through the repository layer.\n' \
+        > "${root}/.actual/rules/fake-adr-0001.md"
+      report "$written" false '' "\"${wrote}\"" '' ;;
+    bootstrap)
+      report '' false "  \"recommendation\": \"adr-bootstrap\",${nl}" \
+        '"No decision under docs/adr/ governs yet. To draft this repository'"'"'s first ADRs, run the plugin'"'"'s `adr-bootstrap` skill: `actual adr create` writes each one you pick into docs/adr/."' '' ;;
+    quoted)
+      report '' true '' \
+        '"1 file under docs/adr/ isn'"'"'t normalized, so it gets no rule file:\n  docs/adr/0002 \"draft\".md: It has no ADR header.\nNormalize each one: a version 2 ADR header naming its id, and a body that passes `actual adr check`, as `actual adr create` writes."' '' ;;
+    problems)
+      report '' false '' null \
+        "${nl}    \"Actual AI didn't answer within ${ms} ms, so the rule files were left as they are.\",${nl}    \"Your sign-in is being renewed in the background, so the rule files were left as they are until the next refresh.\",${nl}    \"Actual AI turned down your sign-in's renewal, so the rule files were left as they are. Sign in again with \`actual login\`.\"${nl}  " ;;
+    old)
+      printf "error: unrecognized subcommand 'refresh'\n\n  tip: a similar subcommand exists: 'restore'\n\nUsage: actual adr <COMMAND>\n\nFor more information, try '--help'.\n" >&2
+      exit 2 ;;
+    no-adr)
+      printf "error: unrecognized subcommand 'adr'\n\nUsage: actual <COMMAND>\n\nFor more information, try '--help'.\n" >&2
+      exit 2 ;;
+    usage)
+      printf "error: unexpected argument '--root' found\n\nUsage: actual adr refresh [OPTIONS]\n" >&2
+      exit 2 ;;
+    hang)
+      sleep "${ACTUAL_TEST_HANG_SECONDS:-10}" &
+      wait
+      report '' false '' null '' ;;
+    crash) echo "thread 'main' panicked at src/cli/commands/adr/refresh.rs:1" >&2; exit 101 ;;
+    garbage) echo ".actual/rules/ already matches docs/adr/." ;;
+  esac
+  exit 0
+fi
 # `actual session summary`, Codex's Stop line.
 if [ "$subcommand" = "session" ] && [ "${2:-}" = "summary" ]; then
   shift 2

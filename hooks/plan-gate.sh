@@ -42,6 +42,12 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
+# The CLI's ADR refresh, so the plan is judged against rule files in step
+# (lib/bootstrap.sh). Its news waits for the next prompt: a PreToolUse answer's
+# context does not reach the model once the call goes on to the plan's approval,
+# and Codex's Stop reply takes nothing beside a verdict.
+adr_refresh_first turn
+
 # The Codex path: same checks, Stop-shaped output, and silent wherever
 # impl-gate.sh speaks for both gates.
 if is_codex_host; then

@@ -10,9 +10,14 @@
 # answer is cached per binary (have_adr_v2), preflight refreshes it each session,
 # and the other hooks only read it, probing just on a miss.
 #
-# Silent unless this repository actually has committed rules, so installing the
-# plugin is invisible in unrelated repositories: no output and no CLI call. With
-# rules, the version check is one `actual --version` compared with
+# In a repository with neither rules nor decision files under docs/adr/ its one
+# CLI call is the ADR refresh step, and it passes on only what that step
+# reports: the first session in a checkout no decision governs hears the CLI
+# recommend the adr-bootstrap skill once (lib/bootstrap.sh, adr_refresh_news).
+# A repository whose docs/adr/ holds decisions and whose .actual/rules/ holds
+# none gets an offer at a pause, since no check reads them
+# (docs_adr_without_rules_notice). With rules, the version check is one
+# `actual --version` compared with
 # MIN_CLI_VERSION (lib/bootstrap.sh), which catches skew whether or not a release
 # added a subcommand, and each CLI call is bounded by CLI_CALL_TIMEOUT. Below
 # GATES_MIN_CLI_VERSION some check is not running in full, so the upgrade offer
@@ -46,21 +51,41 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
+# The CLI's ADR refresh runs first, as in every hook but session-end.sh, so the
+# count below takes in any rule file it just wrote. `recheck` asks a CLI again
+# that the cache says has no refresh, once a session, as the probes below do.
+# Its news, any the turn's other hooks kept, and the problems it reported go to
+# the agent with whatever this hook says.
+adr_refresh_step turn recheck
+news=$(adr_refresh_news problems)
+
 dir=$(rules_dir)
 count=$(rules_count "$dir")
 
 if [ "$count" -eq 0 ]; then
+  notice=""
+  if [ -n "$ADR_REFRESH_ROOT" ]; then
+    files=$(docs_adr_decision_files "$ADR_REFRESH_ROOT")
+    if [ "$files" -gt 0 ]; then
+      installed=""
+      [ "$ADR_REFRESH_STATE" = unsupported ] && installed=$(cli_version)
+      notice=$(docs_adr_without_rules_notice "$files" "$ADR_REFRESH_STATE" "$installed")
+    fi
+  fi
+  if [ -n "$notice" ] || [ -n "$news" ]; then
+    emit_sessionstart_context "$notice" "$news"
+  fi
   exit 0
 fi
 
 if ! have_actual; then
-  emit_sessionstart_context "$(install_message)"
+  emit_sessionstart_context "$(install_message)" "$news"
   exit 0
 fi
 
 installed=$(cli_version)
 if [ $? -eq 2 ]; then
-  emit_sessionstart_context "$(reinstall_interrupt)"
+  emit_sessionstart_context "$(reinstall_interrupt)" "$news"
   exit 0
 fi
 
@@ -68,9 +93,9 @@ offer=""
 if is_codex_host; then
   if ! have_codex_hook refresh; then
     if is_session_startup "$envelope"; then
-      emit_sessionstart_context "$(codex_min_version_interrupt "$installed")"
+      emit_sessionstart_context "$(codex_min_version_interrupt "$installed")" "$news"
     else
-      emit_sessionstart_context "$(codex_min_version_reminder "$installed")"
+      emit_sessionstart_context "$(codex_min_version_reminder "$installed")" "$news"
     fi
     exit 0
   fi
@@ -78,9 +103,9 @@ if is_codex_host; then
 elif [ -n "$installed" ] && version_older_than "$installed" "$MIN_CLI_VERSION"; then
   if version_older_than "$installed" "$GATES_MIN_CLI_VERSION"; then
     if is_session_startup "$envelope"; then
-      emit_sessionstart_context "$(min_version_interrupt "$installed")"
+      emit_sessionstart_context "$(min_version_interrupt "$installed")" "$news"
     else
-      emit_sessionstart_context "$(min_version_reminder "$installed")"
+      emit_sessionstart_context "$(min_version_reminder "$installed")" "$news"
     fi
     exit 0
   fi
@@ -93,7 +118,7 @@ fi
 # them because an older CLI is missing plan-check or impl-check as well, and
 # that guidance comes first. v1 repositories and CLIs that read v2 pass through.
 if adr_v2_unsupported "$dir" refresh; then
-  emit_sessionstart_context "$(adr_v2_upgrade_message)"
+  emit_sessionstart_context "$(adr_v2_upgrade_message)" "$news"
   exit 0
 fi
 
@@ -117,4 +142,4 @@ if [ -n "$offer" ]; then
 
 ${offer}"
 fi
-emit_sessionstart_context "$msg"
+emit_sessionstart_context "$msg" "$news"

@@ -51,6 +51,18 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # Drain stdin before any early exit, so the caller never sees SIGPIPE.
 payload=$(cat)
 
+# The CLI's ADR refresh runs first (lib/bootstrap.sh), ahead of the stand-downs
+# below too: the mod briefs after this hook, so a Read it briefs still gets rule
+# files that are in step. A tool call's time box; its news waits for the next
+# prompt, since a brief's reply takes nothing beside it. This hook runs on every
+# read and never exits 2, so ACTUAL_HOOK_DEBUG (below) traces the step here,
+# where a refresh that keeps failing shows on every read.
+adr_refresh_first tool
+if [ -n "${ACTUAL_HOOK_DEBUG:-}" ]; then
+  printf 'actual-rules-brief: refresh state=%s exit=%s root=%s\n' \
+    "$ADR_REFRESH_STATE" "${ADR_REFRESH_EXIT:-none}" "${ADR_REFRESH_ROOT:-none}" >&2
+fi
+
 # Where the Claude Code mod (hooks/register.js) loads, it briefs Reads, Edits
 # and Writes itself, so this hook stands down rather than briefing first --
 # settings hooks run before the mod's own brief. The mod cannot simply skip this
@@ -118,7 +130,9 @@ fi
 # spawn measured ~12ms here against a warm checkout. Resolve before the cd, for
 # the reason plan-gate.sh gives: root resolution reads cwd, so moving first
 # would ask the question from a different place than rules_present answers it.
-repo_root=$(resolve_repo_root)
+# The refresh step asked the same question from the same place, unless
+# ACTUAL_RULES_DIR named its root, so its answer stands.
+repo_root=${ADR_REFRESH_REPO_ROOT:-$(resolve_repo_root)}
 dir=$(rules_dir "$repo_root")
 
 if ! rules_present "$dir" || ! have_actual; then

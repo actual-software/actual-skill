@@ -67,6 +67,11 @@ if [ "${ACTUAL_PLAN_GATE:-on}" = "off" ] || inside_actual_subprocess; then
   exit 0
 fi
 
+# The CLI's ADR refresh, so the turn's diff is judged against rule files in step
+# (lib/bootstrap.sh). Its news waits for the next prompt: Stop's channels to the
+# agent would keep the turn going.
+adr_refresh_first turn
+
 # 3. No committed rules means nothing to govern. Silent no-op -- no output at
 #    all -- so installing the plugin is invisible in unrelated repositories.
 #    Unconditional: this must fire and decide on its own regardless of

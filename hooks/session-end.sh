@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # SessionEnd has a short shutdown budget. The CLI only spools and starts its
 # detached uploader; no installation, version probe or network wait belongs here.
+# That is why this is the one hook that doesn't run the CLI's ADR refresh first
+# (lib/bootstrap.sh): signed in it waits on Actual AI, nothing reads the rule
+# files after it in this session, and the next session start refreshes before
+# anything else.
 set -uo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
