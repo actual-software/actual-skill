@@ -171,7 +171,7 @@ actual adr list --state draft --json
 actual adr show <id> --json
 ```
 
-Signed out, `list` lists the decision files under `docs/adr/` that carry an ADR header, leaving out `docs/adr/drafts/`, and says how many it left out for having none. `show` shows the file whose header names the id, and gives each policy the rule id its rule file prints (such as `R-0B6F-001`), which `update` takes.
+Signed out, `list` lists the decision files under `docs/adr/` that carry an ADR header, leaving out `docs/adr/drafts/`, and says how many it left out for having none. `show` shows the file whose header names the id, and gives each policy the rule id its rule file prints (such as `R-0B6F2A1E-001`), which `update` takes.
 
 Signed in, `list` covers the connected repository the checkout's `origin` remote names, or the whole organization when there is none; `--repo` picks one by name, `owner/name` or id, and `--state` matches a list on the web app's decisions page. `--json`: `decisions`, `total`, and `next_offset` for the next page. `show` prints one decision: `id`, `kind` (`group` for one Actual AI grouped from several policies), `title`, `state`, `status`, `context`, `policies` (each with the `id` that `update` takes), `scope` and `category`. `show` and the commands that change a decision take the id `list` prints; for a grouped decision, the id of any of its policies' rows works too.
 
