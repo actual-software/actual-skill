@@ -84,6 +84,7 @@
 // them are registered here.
 import {
   offersOverride,
+  isQuestionOnly,
   blockingCall,
   parseBlocking,
   denialQuestion,
@@ -96,6 +97,8 @@ import {
   overrideOutcome,
   isTypedOverride,
   typedOverrideLine,
+  deliveryOf,
+  deliveredCall,
 } from './override-dialog.js';
 
 // --- Path extraction ---------------------------------------------------
@@ -1434,12 +1437,15 @@ async function unattendedOn($, options) {
 // Asks the user about a gate's denial and records what they chose; see
 // override-dialog.js. Resolves to `{ pass, note }` or `{ text }`, and to the
 // denial untouched on any failure, either question dismissed, or the dialog
-// turned off.
+// turned off. Either carries `report`, what `reportDelivery` sends, except
+// where nothing is governed or nothing was denied.
 async function askAboutDenial($, gate, reason, options) {
-  if (!(await overrideDialogOn($, options))) return { text: reason };
-  if (!offersOverride(reason)) return { text: reason };
+  if (isQuestionOnly(reason)) return { text: reason };
   const ctx = await overrideContext($);
   if (!ctx) return { text: reason };
+  const untouched = (dialog, extra = {}) => ({ text: reason, report: { ctx, dialog, ...extra } });
+  if (!(await overrideDialogOn($, options))) return untouched('off');
+  if (!offersOverride(reason)) return untouched('cli-too-old');
   // The rules to list come from the CLI's session state, not the deny text.
   let keys = null;
   try {
@@ -1448,27 +1454,53 @@ async function askAboutDenial($, gate, reason, options) {
   } catch {
     keys = null;
   }
+  if (keys === null) return untouched('cli-too-old');
   const q = denialQuestion(gate, reason, keys);
-  if (!q) return { text: reason };
+  if (!q) return untouched('no-rules');
+  const shown = (answer) => ({ ctx, dialog: 'shown', answer, rulesListed: keys.length });
   let answer;
   try {
     answer = await $.ui.ask(q.question, { header: q.header, options: q.options });
   } catch {
-    return { text: reason };
+    // $.ui.ask rejects when dismissed and in a -p run, which draws nowhere.
+    return (await drawsNowhere($)) ? untouched('no-ui') : { text: reason, report: shown('dismissed') };
   }
   const read = readAnswer(q, answer);
-  if (!read.targets) return { text: read.text };
+  if (!read.targets) return { text: read.text, report: shown(read.answer) };
   let why;
   try {
     why = readReason(await $.ui.ask(REASON_QUESTION.question, { header: REASON_QUESTION.header, options: REASON_QUESTION.options }));
   } catch {
-    return { text: reason };
+    return { text: reason, report: shown('dismissed') };
   }
   const answers = [];
   for (const target of read.targets) {
     answers.push(await runOverride($, ctx, overridePrompt(target, why), 'dialog', gate));
   }
-  return overrideOutcome(q, read.targets, answers);
+  return { ...overrideOutcome(q, read.targets, answers), report: shown(read.answer) };
+}
+
+// Whether the session draws on no surface, as a -p run doesn't.
+async function drawsNowhere($) {
+  try {
+    return (await $.session.surfaces()).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+// Tells the CLI how a denial was handled, one `__gate-delivered` run that
+// nothing waits on: the hook answers without it, and a CLI too old for the
+// command exits non-zero unread.
+function reportDelivery($, gate, settled, original) {
+  if (!settled.report) return;
+  try {
+    const { ctx, ...report } = settled.report;
+    const { argv, init } = deliveredCall(ctx, gate, report, deliveryOf(settled, original));
+    $.process.run(argv, init).catch(() => {});
+  } catch {
+    // A report that can't start costs the report, never the denial.
+  }
 }
 
 export function register(on, options = {}) {
@@ -1480,6 +1512,7 @@ export function register(on, options = {}) {
     if (typeof r?.deny !== 'string') return r;
     try {
       const settled = await askAboutDenial($, 'plan', r.deny, options);
+      reportDelivery($, 'plan', settled, r.deny);
       if (settled.pass) {
         // Every blocking rule overridden: the call goes on to the plan's
         // approval. The agent is told by the tool.call hook below, since a
@@ -1521,6 +1554,7 @@ export function register(on, options = {}) {
     if (typeof r?.block !== 'string') return r;
     try {
       const settled = await askAboutDenial($, 'impl', r.block, options);
+      reportDelivery($, 'impl', settled, r.block);
       if (settled.pass) {
         // The turn ends with no tool result to carry a note, so only the user
         // is told, by the same transcript line the plan path writes.

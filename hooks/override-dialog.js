@@ -110,6 +110,19 @@ export function offersOverride(reason) {
   return typeof reason === 'string' && reason.includes(OVERRIDE_COMMAND);
 }
 
+// The opening sentence of the CLI's ADR-use question. On a blocked turn it
+// follows the judge's reason, so only a reason that starts with it is a pass.
+const ADR_QUESTION = 'Which of these ADRs did you use this turn?';
+
+/**
+ * Whether a deny is only the ADR-use question, which on a passing turn reaches
+ * Stop as a block meaning "continue once". Nothing was denied, so it raises no
+ * dialog and is not reported.
+ */
+export function isQuestionOnly(reason) {
+  return typeof reason === 'string' && reason.trimStart().startsWith(ADR_QUESTION) && !offersOverride(reason);
+}
+
 /**
  * The `check-override --claude-hook --list-blocking` call for `ctx`: the rules
  * `gate` is blocking now, recording nothing.
@@ -177,15 +190,17 @@ function withNote(reason, note) {
 
 /**
  * What the answer means: `{ targets }` to record, or `{ text }`, the denial
- * the agent should read.
+ * the agent should read, with `answer` naming which it was: `revise`,
+ * `override` or `other`.
  */
 export function readAnswer(q, answer) {
   const copy = GATE[q.gate];
-  if (answer === copy.revise) return { text: withNote(q.reason, copy.revised) };
+  if (answer === copy.revise) return { answer: 'revise', text: withNote(q.reason, copy.revised) };
   // `all` with the gate's --gate: the CLI resolves it to the keys listed.
-  if (answer === q.overrideAll) return { targets: ['all'] };
+  if (answer === q.overrideAll) return { answer: 'override', targets: ['all'] };
   // Typed under "Other": the user's own words, for the agent to act on.
   return {
+    answer: 'other',
     text: withNote(
       q.reason,
       `The user answered the override dialog: "${answer}". No rule was overridden. Act on their answer; do not suggest an override.`,
@@ -220,6 +235,29 @@ export function overrideCall(ctx, prompt, via, gate) {
       timeoutMs: 10000,
     },
   };
+}
+
+/**
+ * What reached the agent after the mod handled a denial: the call let
+ * through, the denial as the CLI wrote it, or a rewritten one.
+ */
+export function deliveryOf(settled, original) {
+  if (settled?.pass) return 'let-through';
+  return settled?.text === original ? 'as-written' : 'rewritten';
+}
+
+/**
+ * The `__gate-delivered` call reporting how the mod handled one denial from
+ * `gate`: `report` is `{ dialog, answer, rulesListed }`, with `answer` only
+ * when the dialog showed. Never the words typed under "Other": `answer` is
+ * `other` for those. A CLI without the command exits non-zero, and nothing
+ * reads the result.
+ */
+export function deliveredCall(ctx, gate, report, delivery) {
+  const argv = ['actual', '__gate-delivered', '--session', ctx.sessionId, '--rules-dir', ctx.rulesDir, '--gate', gate, '--dialog', report.dialog];
+  if (report.answer) argv.push('--answer', report.answer);
+  argv.push('--delivery', delivery, '--rules-listed', String(report.rulesListed ?? 0));
+  return { argv, init: { cwd: ctx.repoRoot ?? ctx.cwd, timeoutMs: 2000 } };
 }
 
 /** The CLI's JSON answer from a finished spawn, or null when it recorded nothing. */

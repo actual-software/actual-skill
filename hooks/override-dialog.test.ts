@@ -52,6 +52,10 @@ function world(
     blocking?: string[] | null
     rules?: string[]
     env?: Record<string, string>
+    // The surfaces the session draws on; none in a -p run.
+    surfaces?: string[]
+    // A `__gate-delivered` spawn that never finishes.
+    reportHangs?: boolean
   } = {},
 ) {
   mock.env(on, options.env ?? {})
@@ -59,6 +63,7 @@ function world(
   const submitted: any[] = []
   const overrides: { argv: readonly string[]; prompt: string; stdin: any }[] = []
   const listed: { argv: readonly string[]; stdin: any }[] = []
+  const reports: { argv: readonly string[]; init: any }[] = []
   const logs: string[] = []
   const answers = [...(options.answers ?? [])]
   on('ui.log', (_$: any, e: any) => {
@@ -68,11 +73,17 @@ function world(
   on('session.id', () => ({ value: SESSION }))
   on('session.root', () => ({ value: ROOT }))
   on('session.cwd', () => ({ value: ROOT }))
+  on('session.surfaces', () => ({ value: options.surfaces ?? ['terminal'] }))
   on('fs.list', () => {
     const names = options.rules ?? ['R-001.md']
     return { value: names.map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })) }
   })
-  on('process.run', ($, e) => {
+  on('process.run', async ($, e) => {
+    if (e.argv[1] === '__gate-delivered') {
+      reports.push({ argv: e.argv, init: e.init })
+      if (options.reportHangs) await new Promise(() => {})
+      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (e.argv[0] === 'git') return { value: { exitCode: 0, stdout: `${ROOT}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     if (e.argv[1] === 'check-override' && e.argv.includes('--list-blocking')) {
       listed.push({ argv: e.argv, stdin: JSON.parse(e.init?.stdin ?? '{}') })
@@ -116,7 +127,7 @@ function world(
     submitted.push(e)
     return { text: e.text }
   })
-  return { asked, overrides, listed, submitted, logs }
+  return { asked, overrides, listed, submitted, logs, reports }
 }
 
 const exitPlan = ($: any) => $.tool.call({ tool: 'ExitPlanMode', plan: 'p', tool_use_id: 'x1' })
@@ -460,13 +471,165 @@ test('a CLI that cannot record a typed override: the agent is told nothing was',
 
 // ── the pure parts, directly ─────────────────────────────────────────────────
 
+// ── reporting how a denial was handled ───────────────────────────────────────
+
+// The `__gate-delivered` flags after the session and rules directory, one list
+// per report.
+const reported = (w: any) => w.reports.map((r: any) => {
+  expect(r.argv.slice(0, 6)).toEqual(['actual', '__gate-delivered', '--session', SESSION, '--rules-dir', RULES])
+  return r.argv.slice(6)
+})
+const flags = (gate: string, dialog: string, answer: string | null, delivery: string, listed: number) =>
+  ['--gate', gate, '--dialog', dialog, ...(answer ? ['--answer', answer] : []), '--delivery', delivery, '--rules-listed', String(listed)]
+
+test('revise: reported as shown, revise, rewritten, with the rules listed', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']), blocking: keys('R-AUTH-001', 'R-SRB-001'), answers: ['Revise the plan to conform (Recommended)'] })
+  await exitPlan($)
+  expect(reported(w)).toEqual([flags('plan', 'shown', 'revise', 'rewritten', 2)])
+  // Capped at two seconds, from the repository the gates checked.
+  expect(w.reports[0].init).toEqual({ cwd: ROOT, timeoutMs: 2000 })
+})
+
+test('override all: reported as override, let through', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']), blocking: keys('R-AUTH-001', 'R-SRB-001'), answers: ['Override all 2 rules', 'This ADR is wrong'] })
+  await exitPlan($)
+  expect(reported(w)).toEqual([flags('plan', 'shown', 'override', 'let-through', 2)])
+})
+
+test('an override that leaves a listed rule unrecorded is reported as rewritten', async ($, on) => {
+  const w = world(on, {
+    planDeny: () => denyText(['R-AUTH-001', 'R-SRB-001']),
+    blocking: keys('R-AUTH-001', 'R-SRB-001'),
+    answers: ['Override all 2 rules', 'This ADR is out of date'],
+    cli: () => ({ exitCode: 0, stdout: recorded(keys('R-AUTH-001')) }),
+  })
+  await exitPlan($)
+  expect(reported(w)).toEqual([flags('plan', 'shown', 'override', 'rewritten', 2)])
+})
+
+test('words typed under Other are reported as other and never sent', async ($, on) => {
+  const words = 'keep apiAuth but skip the header check'
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: [words] })
+  await exitPlan($)
+  expect(reported(w)).toEqual([flags('plan', 'shown', 'other', 'rewritten', 1)])
+  expect(JSON.stringify(w.reports)).not.toContain('apiAuth')
+})
+
+for (const [which, answers] of [['the first question', [null]], ['why', ['Override R-AUTH-001', null]]] as const) {
+  test(`${which} dismissed: reported as dismissed, the denial as written`, async ($, on) => {
+    const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: [...answers] })
+    await exitPlan($)
+    expect(reported(w)).toEqual([flags('plan', 'shown', 'dismissed', 'as-written', 1)])
+  })
+}
+
+test('a -p run, where the dialog draws nowhere: reported as no-ui, with no answer', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), answers: [null], surfaces: [] })
+  await exitPlan($)
+  expect(reported(w)).toEqual([flags('plan', 'no-ui', null, 'as-written', 0)])
+})
+
+for (const env of [{ ACTUAL_OVERRIDE_DIALOG: 'off' }, { ACTUAL_UNATTENDED: 'on' }]) {
+  test(`${Object.keys(env)[0]}=${Object.values(env)[0]}: reported as off at either gate`, async ($, on) => {
+    const w = world(on, {
+      planDeny: () => denyText(['R-AUTH-001']),
+      stopBlock: () => denyText(['R-HDR-001'], 'A revised change is re-checked automatically.'),
+      blocking: keys('R-AUTH-001'),
+      env,
+    })
+    await exitPlan($)
+    await $.classic.Stop({ stop_hook_active: false } as any)
+    expect(reported(w)).toEqual([flags('plan', 'off', null, 'as-written', 0), flags('impl', 'off', null, 'as-written', 0)])
+  })
+}
+
+test('a CLI that cannot list the blocking rules: reported as cli-too-old', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: null })
+  await exitPlan($)
+  expect(reported(w)).toEqual([flags('plan', 'cli-too-old', null, 'as-written', 0)])
+})
+
+test('a deny that offers no in-session override: reported as cli-too-old', async ($, on) => {
+  const old = 'DECISION R-AUTH-001 (MUST): x\nA revised plan is re-checked automatically. Session: s. Run `actual check-override` from a terminal.'
+  const w = world(on, { planDeny: () => old })
+  await exitPlan($)
+  expect(reported(w)).toEqual([flags('plan', 'cli-too-old', null, 'as-written', 0)])
+})
+
+test('nothing blocking by the CLI\'s count: reported as no-rules', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: [] })
+  await exitPlan($)
+  expect(reported(w)).toEqual([flags('plan', 'no-rules', null, 'as-written', 0)])
+})
+
+test('the implementation gate reports with --gate impl', async ($, on) => {
+  const w = world(on, {
+    stopBlock: () => denyText(['R-HDR-001'], 'A revised change is re-checked automatically.'),
+    blocking: keys('R-HDR-001'),
+    answers: ['Override R-HDR-001', "This ADR doesn't apply here"],
+  })
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(reported(w)).toEqual([flags('impl', 'shown', 'override', 'let-through', 1)])
+})
+
+test('nothing governed or governance off: nothing reported', async ($, on) => {
+  const w = world(on, { planDeny: () => denyText(['R-AUTH-001']), blocking: keys('R-AUTH-001'), env: { ACTUAL_PLAN_GATE: 'off' } })
+  await exitPlan($)
+  expect(w.reports).toEqual([])
+})
+
+test('a call that passes, or a gate that let it through with a notice, reports nothing', async ($, on) => {
+  const w = world(on, { planDeny: () => undefined, stopBlock: () => undefined })
+  await exitPlan($)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(w.reports).toEqual([])
+})
+
+// The CLI's ADR-use question, as impl-gate.sh carries it on a passing turn: a
+// Stop block whose whole reason is the question.
+const QUESTION =
+  'Which of these ADRs did you use this turn? An ADR counts only if it changed or decided what you wrote. ' +
+  'Leave out any your change merely complies with or happens to agree with.\n\n' +
+  '- `cross-cutting-persistence-abc123`: Persistence\n\n' +
+  'Answer with one command, then end your turn:\n' +
+  'actual rules report-use --claude-session session-1 --turn 1-0123abcd --repo /repo --claim <adr>=<repo-relative-path>:<line>'
+
+for (const env of [{}, { ACTUAL_OVERRIDE_DIALOG: 'off' }]) {
+  test(`a passing turn's ADR question is no denial: nothing asked or reported (${JSON.stringify(env)})`, async ($, on) => {
+    const w = world(on, { stopBlock: () => QUESTION, blocking: keys('R-HDR-001'), env })
+    const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
+    expect(out.block).toBe(QUESTION)
+    expect(w.asked).toEqual([])
+    expect(w.listed).toEqual([])
+    expect(w.reports).toEqual([])
+  })
+}
+
+test('the ADR question after a denial is still a denial: asked and reported', async ($, on) => {
+  const block = `${denyText(['R-HDR-001'], 'A revised change is re-checked automatically.')}\n\n${QUESTION.replace('Answer with', 'After fixing the above, answer with')}`
+  const w = world(on, { stopBlock: () => block, blocking: keys('R-HDR-001'), answers: [null] })
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(reported(w)).toEqual([flags('impl', 'shown', 'dismissed', 'as-written', 1)])
+})
+
+test('a report that never finishes holds up neither gate', async ($, on) => {
+  const deny = denyText(['R-AUTH-001'])
+  const block = denyText(['R-HDR-001'], 'A revised change is re-checked automatically.')
+  const w = world(on, { planDeny: () => deny, stopBlock: () => block, env: { ACTUAL_OVERRIDE_DIALOG: 'off' }, reportHangs: true })
+  const r: any = await exitPlan($)
+  expect(r.text).toBe(deny)
+  const out: any = await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(out.block).toBe(block)
+  expect(w.reports.length).toBe(2)
+})
+
 test('overrideOutcome: "all" that recorded the listed keys passes with a note', () => {
   const q = denialQuestion('plan', denyText(['R-A', 'R-B']), ['d::R-A', 'd::R-B'])!
   expect(overrideOutcome(q, ['all'], [JSON.parse(recorded(['d::R-A', 'd::R-B']))])).toEqual({
     pass: true,
     note: 'The user overrode d::R-A, d::R-B in the override dialog.',
   })
-  expect(readAnswer(q, 'Override all 2 rules')).toEqual({ targets: ['all'] })
+  expect(readAnswer(q, 'Override all 2 rules')).toEqual({ answer: 'override', targets: ['all'] })
   // There is no "choose rules" step: that label is just an answer typed under Other.
   expect(readAnswer(q, 'Choose rules to override').text).toContain('The user answered the override dialog')
   const failed = overrideOutcome(q, ['R-A'], [JSON.parse(nothing('no rule matching R-A'))])
