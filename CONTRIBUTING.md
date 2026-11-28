@@ -4,18 +4,14 @@
 
 The plugin ships to two agents, Claude Code and Codex, and each updates an installed copy only when the manifest's `version` changes. Claude Code compares `version` in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json) with the installed copy, for auto-update and for `claude plugin update`. Codex reads [`.codex-plugin/plugin.json`](.codex-plugin/plugin.json) and installs each version into a cache folder of its own, `~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`, so it keeps running the old folder until the version moves. A change merged without a new version reaches people who install afterwards, and nobody who already has the plugin gets it until a later pull request raises the version. Merging to `main` is the release.
 
-The hook scripts are shared, so the two manifests carry one version, and a pull request raises both together; the hook harness fails when they differ. A pull request that changes anything under these paths raises it, in the same pull request:
+The hook scripts are shared, so the two manifests carry one version, and a pull request raises both together. The marketplace installs the whole repository, so a pull request that changes any file raises the version in the same pull request, except one that changes only these paths, which no session reads:
 
-- `hooks/`, including `hooks/lib/`, `hooks/hooks.json`, `hooks/codex-hooks.json` and the mod, `hooks/register.js`
-- `skills/`
-- `commands/`
-- `.claude-plugin/`
-- `.codex-plugin/`
-- `assets/`, which the Codex manifest names for its logo
+- `docs/`, `README.md`, `CONTRIBUTING.md`, `CHANGELOG.md` and `LICENSE`
+- `.github/` and `.actual/`
+- the tests under `hooks/`: `hooks/tests/` and the `*.test.ts` files
+- `tsconfig.json`
 
-When the plugin gains another component either agent loads, such as an `agents/` directory or a `.mcp.json`, add its path to this list.
-
-Everything else can merge without a bump, because none of it changes what runs in a session. That covers the tests that sit under `hooks/` (`hooks/tests/` and the `*.test.ts` files) and the docs.
+The **Plugin version** check enforces this on every pull request to `main`. When the pull request changes a path outside this list, the check fails unless `version` in `.claude-plugin/plugin.json` is above the one on `main`, compared as numbers (1.10.0 is above 1.9.9), and `.codex-plugin/plugin.json` carries the same number (the hook harness checks that too). The list lives in `is_shipped` in [`.github/scripts/check-version-bump.sh`](.github/scripts/check-version-bump.sh); change both together.
 
 A pull request that raises the version needs an approving review from a teammate, because [`.github/CODEOWNERS`](.github/CODEOWNERS) owns `.claude-plugin/` and `.codex-plugin/`. A pull request that leaves them alone can merge without one.
 
@@ -29,7 +25,7 @@ Raise the minor number for something new, such as a hook, a mod feature or a ski
 
 ### Check the number again before you merge
 
-Two pull requests that raise the version to the same number merge without a conflict, because git sees the same edit on both sides. The second to merge ships under a version people may already have. Anyone who updated between the two merges doesn't get it until the version moves again. So before you merge, compare your `version` with the one on `main`, and raise it again if `main` already has it.
+Two pull requests that raise the version to the same number merge without a conflict, because git sees the same edit on both sides. The second to merge ships under a version people may already have. Anyone who updated between the two merges doesn't get it until the version moves again. The Plugin version check reads `main` each time it runs, but a check that passed before the other pull request merged stays green. So before you merge, update your branch from `main` or re-run the check, and raise the version again if it fails.
 
 ## Record each user-facing change in CHANGELOG.md
 
